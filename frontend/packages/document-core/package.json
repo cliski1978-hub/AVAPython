@@ -1,0 +1,20 @@
+{
+  "name": "@ava/document-core",
+  "version": "0.1.0",
+  "description": "Reserved for future document abstractions and the document-editor interface",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
