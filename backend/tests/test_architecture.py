@@ -19,6 +19,9 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src" / "ava"
 CORE_DIR = SRC_DIR / "core"
 CONTRACTS_DIR = SRC_DIR / "contracts"
 SERVICES_DIR = SRC_DIR / "services"
+API_DIR = SRC_DIR / "api"
+AGENT_ADAPTERS_DIR = SRC_DIR / "agents" / "adapters"
+MOCK_ADAPTER_DIR = AGENT_ADAPTERS_DIR / "mock"
 
 # Vendor/provider modules that must never appear in AVA core or contracts.
 FORBIDDEN_IMPORTS = {
@@ -140,6 +143,48 @@ def test_contracts_must_not_import_transport_or_ai_frameworks() -> None:
 
 
 # ============================================================
+# BEGIN: Agent Adapter Independence Tests
+# ============================================================
+
+
+def test_mock_adapter_must_not_import_forbidden_modules() -> None:
+    """The mock adapter must be free of AI/provider and transport libraries.
+
+    This adapter exists specifically to validate AVA's execution flow
+    without binding AVA to an AI framework, so any such import is a
+    regression.
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(MOCK_ADAPTER_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in FORBIDDEN_IMPORTS:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Forbidden imports in mock adapter:\n" + "\n".join(violations)
+
+
+def test_mock_adapter_depends_only_on_ports_and_contracts() -> None:
+    """The mock adapter must depend inward on AVA ports/contracts only.
+
+    It may never reach outward into AVA services, core behavior, API layer,
+    or infrastructure.
+    """
+    allowed = {"agents", "contracts"}
+    violations: list[str] = []
+    for path in _iter_python_files(MOCK_ADAPTER_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for sibling in _ava_sibling_imports(tree):
+            if sibling not in allowed:
+                violations.append(f"{path}: imports 'ava.{sibling}'")
+    assert not violations, "Outward imports in mock adapter:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Agent Adapter Independence Tests
+# ============================================================
+
+
+# ============================================================
 # BEGIN: Internal Dependency Direction Tests
 # ============================================================
 
@@ -158,6 +203,42 @@ def test_internal_dependency_direction_is_respected() -> None:
                 if name in forbidden:
                     violations.append(f"{path}: imports 'ava.{name}'")
     assert not violations, "Internal boundary violations:\n" + "\n".join(violations)
+
+
+def test_api_must_not_import_concrete_adapters() -> None:
+    """The API layer must reach agents/models only through services/ports.
+
+    Route and factory modules must never import concrete adapter
+    implementations such as ``ava.agents.adapters.mock`` or
+    ``ava.models.providers``.
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(API_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if import_path.startswith("ava.agents.adapters") or import_path.startswith(
+                "ava.models.providers"
+            ):
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Adapter imports in the API layer:\n" + "\n".join(violations)
+
+
+def test_services_must_not_import_concrete_adapters() -> None:
+    """The services layer must reach agents/models only through their ports.
+
+    Services orchestrate agent adapters via ``AgentPort``; importing a
+    concrete ``ava.agents.adapters.*`` implementation here would couple the
+    core to a provider.
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(SERVICES_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if import_path.startswith("ava.agents.adapters") or import_path.startswith(
+                "ava.models.providers"
+            ):
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Adapter imports in the services layer:\n" + "\n".join(violations)
 
 
 def test_core_may_import_agents_and_models_only_through_their_ports() -> None:

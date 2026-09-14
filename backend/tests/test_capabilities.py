@@ -1,8 +1,9 @@
 """Capabilities endpoint tests.
 
 Verify that /capabilities returns a versioned, JSON-compatible capability
-snapshot, reports only capabilities that currently exist, and reflects the
-configurable application identity.
+snapshot that reflects the configured agent adapter truthfully (technical
+health plus what the agent actually supports), reports only implemented
+capabilities as true, and reflects the configurable application identity.
 """
 
 from fastapi.testclient import TestClient
@@ -44,20 +45,31 @@ def test_capabilities_report_application() -> None:
 
 
 def test_capabilities_health_is_true() -> None:
-    """The health capability should be the only enabled capability."""
+    """Health is always reported as supported."""
     with make_client() as client:
         response = client.get("/capabilities")
     assert response.json()["capabilities"]["health"] is True
 
 
-def test_capabilities_placeholder_features_are_false() -> None:
+def test_capabilities_runs_and_cancellation_are_true() -> None:
+    """The mock agent supports runs and cancellation, so they must be true."""
+    with make_client() as client:
+        response = client.get("/capabilities")
+    capabilities = response.json()["capabilities"]
+    assert capabilities["runs"] is True
+    assert capabilities["cancellation"] is True
+
+
+def test_capabilities_unsupported_features_are_false() -> None:
     """Not-yet-implemented capabilities should report false."""
     with make_client() as client:
         response = client.get("/capabilities")
     capabilities = response.json()["capabilities"]
-    assert capabilities["runs"] is False
     assert capabilities["streaming"] is False
     assert capabilities["tool_calling"] is False
+    assert capabilities["structured_output"] is False
+    assert capabilities["document_operations"] is False
+    assert capabilities["approvals"] is False
     assert capabilities["local_model"] is False
 
 

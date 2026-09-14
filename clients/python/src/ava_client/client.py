@@ -1,5 +1,7 @@
 """HTTP client for the AVA backend."""
 
+from typing import Self
+
 from httpx import Client, Response
 
 from ava_client.models import CapabilitiesResponse, HealthResponse
@@ -24,7 +26,7 @@ class AvaClient:
         """Close the underlying HTTP client."""
         self._client.close()
 
-    def __enter__(self) -> "AvaClient":
+    def __enter__(self) -> Self:
         """Support use as a context manager."""
         return self
 

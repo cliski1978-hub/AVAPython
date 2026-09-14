@@ -3,7 +3,7 @@
 Framework-neutral request DTOs. Vendor SDK objects must never appear here.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ava.contracts.version import CONTRACT_VERSION
 
@@ -25,6 +25,18 @@ class RunRequest(BaseModel):
 
     prompt: str = Field(min_length=1)
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_must_not_be_blank(cls, value: str) -> str:
+        """Reject prompts that are empty or contain only whitespace.
+
+        Validation lives in the contract so routes and services never
+        duplicate prompt rules.
+        """
+        if not value.strip():
+            raise ValueError("prompt must not be blank")
+        return value
 
 
 # ============================================================

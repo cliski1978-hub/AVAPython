@@ -1,5 +1,7 @@
 """AVA agents package.
 
-Future agent frameworks must implement an AVA-owned adapter contract.
-No real agent functionality is implemented in this stage.
+Agent frameworks must implement an AVA-owned adapter contract
+(``ava.agents.contracts.AgentPort``). The first concrete implementation is
+the provider-neutral ``MockAgentAdapter``; no real agent functionality or
+provider SDK is used in this stage.
 """

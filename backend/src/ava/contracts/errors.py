@@ -22,6 +22,7 @@ class ErrorCategory(StrEnum):
 
     VALIDATION = "validation"
     CONFIGURATION = "configuration"
+    NOT_FOUND = "not_found"
     UNAVAILABLE = "unavailable"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"

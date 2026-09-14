@@ -21,6 +21,12 @@ detect_python() {
 }
 
 PYTHON_BIN="$(detect_python)"
+CLIENT_PYTHON="$ROOT/clients/python/.venv/bin/python"
+
+if [ ! -x "$CLIENT_PYTHON" ]; then
+  echo "Python client venv not found. Create it with: cd clients/python && python -m venv .venv && .venv/bin/pip install -e '.[dev]'" >&2
+  exit 1
+fi
 
 echo "==> Backend tests"
 (cd "$ROOT/backend" && "$PYTHON_BIN" -m pytest)
@@ -38,4 +44,6 @@ echo "==> Lint (frontend)"
 (cd "$ROOT/frontend" && pnpm -r --if-present lint)
 
 echo "==> Python client checks"
-(cd "$ROOT/clients/python" && "$PYTHON_BIN" -m compileall -q src)
+(cd "$ROOT/clients/python" && "$CLIENT_PYTHON" -m pytest)
+(cd "$ROOT/clients/python" && "$CLIENT_PYTHON" -m ruff check src tests)
+(cd "$ROOT/clients/python" && "$CLIENT_PYTHON" -m mypy src)

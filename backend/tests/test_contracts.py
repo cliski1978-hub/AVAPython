@@ -99,6 +99,12 @@ def test_run_request_rejects_empty_prompt() -> None:
         RunRequest(prompt="")
 
 
+def test_run_request_rejects_whitespace_only_prompt() -> None:
+    """RunRequest should reject prompts containing only whitespace."""
+    with pytest.raises(ValidationError):
+        RunRequest(prompt="   \n\t  ")
+
+
 def test_run_response_serializes_to_json() -> None:
     """RunResponse should serialize to JSON-compatible output."""
     response = RunResponse(run_id="run-1", status=RunStatus.COMPLETED)

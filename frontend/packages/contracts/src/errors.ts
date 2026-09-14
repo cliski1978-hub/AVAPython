@@ -6,6 +6,7 @@ import type { ContractVersion } from "./version";
 export type ErrorCategory =
   | "validation"
   | "configuration"
+  | "not_found"
   | "unavailable"
   | "timeout"
   | "cancelled"

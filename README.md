@@ -42,8 +42,9 @@ ava/
 │   │   ├── contracts/        # TS representations of API contracts
 │   │   ├── api-client/       # Single shared backend client
 │   │   ├── ui-core/          # Shared UI, hooks, state, theme
-│   │   ├── document-core/    # Reserved for document abstractions
-│   │   └── agent-ui/         # Reserved for agent interaction UI
+│   │   ├── document-core/    # Shared Tiptap editor integration
+│   │   ├── agent-ui/         # Shared agent interaction UI
+│   │   └── workspace/        # Shared Chat / Documents workspace composition
 │   └── apps/                 # Thin application shells
 │       ├── web/              # Priority 1
 │       ├── desktop/          # Priority 2 (Tauri)

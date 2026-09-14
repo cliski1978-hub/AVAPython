@@ -9,13 +9,29 @@ adapters; inputs and outputs use AVA contracts.
 
 from abc import ABC, abstractmethod
 
+from pydantic import BaseModel
+
 from ava.contracts.capabilities import CapabilityName
 from ava.contracts.requests import RunRequest
-from ava.contracts.responses import RunResponse
+from ava.contracts.responses import RunResponse, RunStatus
 
 # ============================================================
 # BEGIN: Agent Port
 # ============================================================
+
+
+class AgentRunResult(BaseModel):
+    """AVA-owned result of an agent execution.
+
+    This is an internal port-boundary DTO, not a wire contract: the public
+    HTTP API continues to use ``RunResponse``. ``content`` carries generic
+    assistant text that the run service normalizes into AVA
+    ``message_content`` events. Future real providers may expose many content
+    events; this minimal shape keeps Step 8 provider-neutral.
+    """
+
+    status: RunStatus
+    content: str | None = None
 
 
 class AgentPort(ABC):
@@ -31,7 +47,7 @@ class AgentPort(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def start_run(self, run_id: str, request: RunRequest) -> RunResponse:
+    async def start_run(self, run_id: str, request: RunRequest) -> AgentRunResult:
         """Start an agent run under an AVA-generated run identifier.
 
         Args:
@@ -39,7 +55,8 @@ class AgentPort(ABC):
             request: An AVA-owned RunRequest contract.
 
         Returns:
-            An AVA-owned RunResponse describing the new run.
+            An AVA-owned AgentRunResult describing the run outcome and any
+            generic assistant content produced for the lifecycle.
         """
         raise NotImplementedError
 
