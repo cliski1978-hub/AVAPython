@@ -38,4 +38,45 @@ describe("ConversationView", () => {
     expect(html).toContain("Hi");
     expect(html).not.toContain("How can I help?");
   });
+
+  it("renders only the active regenerated assistant response for a turn", () => {
+    const html = renderToStaticMarkup(
+      <ConversationView
+        conversation={{
+          id: "c",
+          title: "Regenerated Chat",
+          messages: [
+            { id: "u1", role: "user", content: "Hello" },
+            { id: "a1", role: "assistant", status: "complete", content: "AVA First" },
+            { id: "a2", role: "assistant", status: "complete", content: "AVA Second" },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("AVA Second");
+    expect(html).not.toContain("AVA First");
+    expect(html).toContain("Hello");
+  });
+
+  it("renders the active response per turn, keeping both turns when two exist", () => {
+    const html = renderToStaticMarkup(
+      <ConversationView
+        conversation={{
+          id: "c",
+          title: "Two Turns",
+          messages: [
+            { id: "u1", role: "user", content: "Hello" },
+            { id: "a1", role: "assistant", status: "complete", content: "First A" },
+            { id: "a2", role: "assistant", status: "complete", content: "First B" },
+            { id: "u2", role: "user", content: "Again" },
+            { id: "b1", role: "assistant", status: "complete", content: "Second A" },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("First B");
+    expect(html).not.toContain("First A");
+    expect(html).toContain("Second A");
+    expect(html).toContain("Again");
+  });
 });

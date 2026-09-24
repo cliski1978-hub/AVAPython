@@ -1,0 +1,128 @@
+"""Relational conversation repository tests (Step 4.6).
+
+Mirror the in-memory ``ConversationStore`` semantics against the SQLite-backed
+``RelationalConversationRepository``: stable insertion-order listing, duplicate
+rejection via ``ValueError``, title updates that refresh ``updated_at``, and
+unknown-conversation ``None`` results.
+"""
+
+from datetime import UTC, datetime
+
+import pytest
+
+from ava.infrastructure.persistence import SqliteDatabase
+from ava.infrastructure.persistence.repositories import RelationalConversationRepository
+
+
+@pytest.fixture()
+def repository() -> tuple[RelationalConversationRepository, SqliteDatabase]:
+    database = SqliteDatabase(":memory:")
+    yield RelationalConversationRepository(database=database), database
+    database.dispose()
+
+
+# ============================================================
+# BEGIN: Create / get / list semantics
+# ============================================================
+
+
+def test_create_produces_record(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+    conversation_repository, _ = repository
+    record = conversation_repository.create("c1", title="Hello")
+    assert record.conversation_id == "c1"
+    assert record.title == "Hello"
+    assert record.created_at.tzinfo is not None
+    assert record.updated_at.tzinfo is not None
+
+
+def test_get_returns_created_record(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+    conversation_repository, _ = repository
+    created = conversation_repository.create("c1", title="Hello")
+    stored = conversation_repository.get("c1")
+    assert stored is not None
+    assert stored == created
+
+
+def test_get_unknown_conversation_is_none(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+    conversation_repository, _ = repository
+    assert conversation_repository.get("ghost") is None
+
+
+def test_list_reflects_insertion_order(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+    conversation_repository, _ = repository
+    for conversation_id in ("a", "b", "c"):
+        conversation_repository.create(conversation_id, title=f"T-{conversation_id}")
+    assert [r.conversation_id for r in conversation_repository.list()] == ["a", "b", "c"]
+
+
+def test_list_is_empty_when_no_conversations(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
+    conversation_repository, _ = repository
+    assert conversation_repository.list() == []
+
+
+def test_duplicate_create_raises_value_error(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
+    conversation_repository, _ = repository
+    conversation_repository.create("c1", title="Hello")
+    with pytest.raises(ValueError, match="Conversation already exists: c1"):
+        conversation_repository.create("c1", title="Duplicate")
+
+
+# ============================================================
+# END: Create / get / list semantics
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Update semantics
+# ============================================================
+
+
+def test_update_title_refreshes_record(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+    conversation_repository, _ = repository
+    conversation_repository.create("c1", title="Hello")
+    updated = conversation_repository.update_title("c1", "Renamed")
+    assert updated is not None
+    assert updated.title == "Renamed"
+    assert updated.updated_at >= updated.created_at
+    assert conversation_repository.get("c1") == updated
+
+
+def test_update_title_unknown_conversation_is_none(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
+    conversation_repository, _ = repository
+    assert conversation_repository.update_title("ghost", "Renamed") is None
+
+
+# ============================================================
+# END: Update semantics
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Timestamps
+# ============================================================
+
+
+def test_timestamps_round_trip_as_aware_utc(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
+    conversation_repository, _ = repository
+    before = datetime.now(UTC)
+    conversation_repository.create("c1", title="Hello")
+    stored = conversation_repository.get("c1")
+    assert stored is not None
+    after = datetime.now(UTC)
+    assert before <= stored.created_at <= after
+    assert stored.created_at.tzinfo is not None
+    assert stored.created_at.utcoffset().total_seconds() == 0
+    assert stored.updated_at.tzinfo is not None
+
+
+# ============================================================
+# END: Timestamps
+# ============================================================

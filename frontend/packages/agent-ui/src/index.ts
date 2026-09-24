@@ -17,6 +17,7 @@ export {
   type ConversationListProps,
 } from "./components/ConversationList";
 export { PromptComposer, type PromptComposerProps } from "./components/PromptComposer";
+export { ExecutionControls, type ExecutionControlsProps } from "./components/ExecutionControls";
 export {
   ConversationProvider,
   useConversationState,
@@ -29,3 +30,6 @@ export {
   type AgentRunApi,
 } from "./run/ConversationRunProvider";
 export type { RunAgent, RunCommands } from "./run/conversationRun";
+export type { RuntimeDiscoveryItem, ModelProviderDiscoveryItem } from "@ava/contracts";
+export type { ExecutionProfile } from "@ava/contracts";
+export type { WorkspaceInfo } from "@ava/contracts";

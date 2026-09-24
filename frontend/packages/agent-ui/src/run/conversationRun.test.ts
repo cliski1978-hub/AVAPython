@@ -4,6 +4,7 @@ import type { RunEvent, RunResponse } from "@ava/contracts";
 import { ApiError } from "@ava/api-client";
 
 import type { ConversationRunState } from "../types";
+import { EMPTY_CONVERSATION_RUN } from "../types";
 import type { MessagePatch } from "../state/conversationReducer";
 import {
   applyRunEvents,
@@ -74,6 +75,7 @@ interface CommandEntry {
 
 function makeCommands() {
   const log: CommandEntry[] = [];
+  const runStateRecord: Record<string, ConversationRunState> = {};
   const addUserMessage = vi.fn(
     (conversationId: string | null, content: string) => {
       const conversationIdResolved = conversationId ?? "created-conv";
@@ -88,6 +90,16 @@ function makeCommands() {
       return { conversationId: conversationIdResolved, messageId };
     },
   );
+  const setRunState = vi.fn(
+    (conversationId: string, update: Partial<ConversationRunState>) => {
+      runStateRecord[conversationId] = {
+        ...EMPTY_CONVERSATION_RUN,
+        ...(runStateRecord[conversationId] ?? {}),
+        ...update,
+      };
+      log.push({ op: "setRunState", conversationId, update });
+    },
+  );
   const commands: RunCommands = {
     addUserMessage,
     addAssistantMessage: vi.fn(
@@ -100,14 +112,30 @@ function makeCommands() {
         });
       },
     ),
-    setRunState: vi.fn((conversationId, update) => {
-      log.push({ op: "setRunState", conversationId, update });
+    setRunState,
+    getRunState: vi.fn((conversationId: string) => {
+      return runStateRecord[conversationId] ?? null;
     }),
     updateMessage: vi.fn((conversationId, messageId, patch) => {
       log.push({ op: "updateMessage", conversationId, messageId, patch });
     }),
+    persistAssistantMessage: vi.fn(
+      async (
+        conversationId,
+        messageId,
+        message: { content: string; sourceUserMessageId?: string | null },
+      ) => {
+        log.push({
+          op: "persistAssistantMessage",
+          conversationId,
+          messageId,
+          content: message.content,
+          sourceUserMessageId: message.sourceUserMessageId ?? null,
+        });
+      },
+    ),
   };
-  return { commands, log };
+  return { commands, log, runStateRecord };
 }
 
 function entries(log: CommandEntry[], op: string): CommandEntry[] {
@@ -167,6 +195,30 @@ describe("submitPrompt", () => {
       (e) => e.patch?.status === "complete",
     );
     expect(completePatch).toBeTruthy();
+  });
+
+  it("threads the selected workspace into the backend run request", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await submitPrompt("Hello AVA", null, agent, commands, undefined, "workspace-a");
+
+    expect(agent.startRun).toHaveBeenCalledWith({
+      prompt: "Hello AVA",
+      workspace_id: "workspace-a",
+    });
+  });
+
+  it("omits the workspace from the run request when selection is null", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await submitPrompt("Hello AVA", null, agent, commands, undefined, null);
+
+    expect(agent.startRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: expect.anything() }),
+    );
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "Hello AVA" });
   });
 
   it("sets starting state before the backend call", async () => {
@@ -320,6 +372,84 @@ describe("startRunForPrompt", () => {
     expect(backendStatusSet).toMatchObject({
       conversationId: "conv-x",
       update: { backendStatus: "completed" },
+    });
+  });
+
+  it("includes workspace_id when a workspace is selected", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await startRunForPrompt({
+      conversationId: "conv-x",
+      assistantMessageId: "asm-1",
+      sourceUserMessageId: "user-1",
+      prompt: "explain",
+      workspaceId: "approved-workspace",
+      agent,
+      commands,
+    });
+
+    expect(agent.startRun).toHaveBeenCalledWith({
+      prompt: "explain",
+      workspace_id: "approved-workspace",
+    });
+  });
+
+  it("omits workspace_id from the run request when not provided", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await startRunForPrompt({
+      conversationId: "conv-x",
+      assistantMessageId: "asm-1",
+      sourceUserMessageId: "user-1",
+      prompt: "explain",
+      agent,
+      commands,
+    });
+
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain" });
+  });
+
+  it("omits workspace_id from the run request when it is null", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await startRunForPrompt({
+      conversationId: "conv-x",
+      assistantMessageId: "asm-1",
+      sourceUserMessageId: "user-1",
+      prompt: "explain",
+      workspaceId: null,
+      agent,
+      commands,
+    });
+
+    expect(agent.startRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: "" }),
+    );
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain" });
+  });
+
+  it("combines execution and workspace in the run request", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+
+    await startRunForPrompt({
+      conversationId: "conv-x",
+      assistantMessageId: "asm-1",
+      sourceUserMessageId: "user-1",
+      prompt: "explain",
+      execution: { mode: "auto" },
+      workspaceId: "approved-workspace",
+      agent,
+      commands,
+    });
+
+    expect(agent.startRun).toHaveBeenCalledWith({
+      prompt: "explain",
+      execution: { mode: "auto" },
+      workspace_id: "approved-workspace",
     });
   });
 });
@@ -549,5 +679,211 @@ describe("runErrorMessage", () => {
     expect(runErrorMessage(new Error("boom"))).toBe(
       "AVA is unavailable. Please try again.",
     );
+  });
+});
+
+describe("completed assistant persistence", () => {
+  it("persists the originating placeholder exactly once after completion", async () => {
+    const { commands, log } = makeCommands();
+    await applyRunEvents(successfulEvents, "conversation-a", "local-assistant", commands);
+    const persisted = entries(log, "persistAssistantMessage");
+    expect(persisted).toEqual([
+      {
+        op: "persistAssistantMessage",
+        conversationId: "conversation-a",
+        messageId: "local-assistant",
+        // Handed directly from the applied events, never read back from state.
+        content: "Hello AVA",
+        sourceUserMessageId: null,
+      },
+    ]);
+  });
+
+  it("passes through the source user message when known", async () => {
+    const { commands, log } = makeCommands();
+    await applyRunEvents(
+      successfulEvents,
+      "conversation-a",
+      "local-assistant",
+      commands,
+      { sourceUserMessageId: "user-local-1" },
+    );
+    expect(entries(log, "persistAssistantMessage")).toEqual([
+      expect.objectContaining({
+        conversationId: "conversation-a",
+        messageId: "local-assistant",
+        content: "Hello AVA",
+        sourceUserMessageId: "user-local-1",
+      }),
+    ]);
+  });
+
+  it("does not persist assistant output for failed or cancelled runs", async () => {
+    for (const events of [
+      [evt("run_failed", "failed")],
+      [evt("run_cancelled", "cancelled")],
+    ]) {
+      const { commands, log } = makeCommands();
+      await applyRunEvents(events, "conversation-a", "local-assistant", commands);
+      expect(entries(log, "persistAssistantMessage")).toHaveLength(0);
+    }
+  });
+
+  it("keeps a completed run successful when assistant persistence rejects", async () => {
+    const { commands, log } = makeCommands();
+    commands.persistAssistantMessage = vi.fn(async () => { throw new Error("storage down"); });
+    await applyRunEvents(successfulEvents, "conversation-a", "local-assistant", commands);
+    expect(entries(log, "setRunState").some((entry) => entry.update?.uiPhase === "failed")).toBe(false);
+    expect(entries(log, "setRunState").some((entry) => entry.update?.runError != null)).toBe(true);
+  });
+});
+
+describe("regenerate reconciliation and stale-run protection", () => {
+  it("a regenerate run reuses the original assistant slot without creating a second assistant message", async () => {
+    const agent = makeAgent();
+    const { commands, log } = makeCommands();
+
+    // A completed A1 in the conversation, then the user regenerates it.
+    await startRunForPrompt({
+      conversationId: "conv-reg",
+      assistantMessageId: "assistant-a1",
+      sourceUserMessageId: "user-u1",
+      prompt: "hi",
+      agent,
+      commands,
+    });
+
+    expect(entries(log, "addAssistantMessage")).toHaveLength(0);
+    const persisted = entries(log, "persistAssistantMessage");
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].messageId).toBe("assistant-a1");
+    expect(persisted[0].sourceUserMessageId).toBe("user-u1");
+  });
+
+  it("persists a completed run when it is still the current run", async () => {
+    const { commands, log } = makeCommands();
+    commands.getRunState = vi.fn(() => ({
+      ...EMPTY_CONVERSATION_RUN,
+      runEpoch: "epoch-current",
+    }));
+    await applyRunEvents(successfulEvents, "conv", "asm", commands, {
+      sourceUserMessageId: "user-u1",
+      runEpoch: "epoch-current",
+    });
+    const persisted = entries(log, "persistAssistantMessage");
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].messageId).toBe("asm");
+    expect(persisted[0].sourceUserMessageId).toBe("user-u1");
+  });
+
+  it("a stale run that completes last never persists or paints its older response", async () => {
+    const { commands, log } = makeCommands();
+    commands.getRunState = vi.fn(() => ({
+      ...EMPTY_CONVERSATION_RUN,
+      runEpoch: "epoch-newer",
+    }));
+
+    await applyRunEvents(successfulEvents, "conv", "asm", commands, {
+      sourceUserMessageId: "user-u1",
+      runEpoch: "epoch-stale",
+    });
+
+    expect(entries(log, "persistAssistantMessage")).toHaveLength(0);
+    expect(entries(log, "updateMessage")).toHaveLength(0);
+    expect(entries(log, "setRunState")).toHaveLength(0);
+  });
+
+  it("a stale run must not flip the conversation phase to a terminal state", async () => {
+    const { commands, log } = makeCommands();
+    commands.getRunState = vi.fn(() => ({
+      ...EMPTY_CONVERSATION_RUN,
+      runEpoch: "epoch-newer",
+    }));
+    await applyRunEvents(successfulEvents, "conv", "asm", commands, {
+      runEpoch: "epoch-stale",
+    });
+    expect(
+      entries(log, "setRunState").some(
+        (entry) => entry.update?.uiPhase === "completed",
+      ),
+    ).toBe(false);
+  });
+
+  it("abandons a run whose backend start resolves after a newer run superseded it", async () => {
+    const { commands, log } = makeCommands();
+    let startSlowResolve!: (run: RunResponse) => void;
+    const startSlowGate = new Promise<RunResponse>((resolve) => {
+      startSlowResolve = resolve;
+    });
+    const slowAgent = makeAgent({
+      startRun: vi.fn(() => startSlowGate),
+    });
+
+    const slowRun = startRunForPrompt({
+      conversationId: "conv",
+      assistantMessageId: "asm",
+      sourceUserMessageId: "user-u1",
+      prompt: "A",
+      agent: slowAgent,
+      commands,
+    });
+
+    await startRunForPrompt({
+      conversationId: "conv",
+      assistantMessageId: "asm",
+      sourceUserMessageId: "user-u1",
+      prompt: "B",
+      agent: makeAgent(),
+      commands,
+    });
+
+    startSlowResolve({
+      run_id: "run-slow",
+      status: "completed",
+      contract_version: "v1",
+    });
+    await slowRun;
+
+    expect(slowAgent.getRunEvents).not.toHaveBeenCalled();
+    expect(
+      entries(log, "setRunState").some(
+        (entry) => entry.update?.runId === "run-slow",
+      ),
+    ).toBe(false);
+    const persisted = entries(log, "persistAssistantMessage");
+    expect(persisted).toHaveLength(1);
+  });
+
+  it("rejects the first run without marking it failed when a newer run superseded it", async () => {
+    const { commands, log } = makeCommands();
+    commands.getRunState = vi.fn(() => ({
+      ...EMPTY_CONVERSATION_RUN,
+      runEpoch: "epoch-newer",
+    }));
+    const failingAgent = makeAgent({
+      startRun: vi.fn(async () => {
+        throw new Error("backend down");
+      }),
+    });
+
+    await startRunForPrompt({
+      conversationId: "conv",
+      assistantMessageId: "asm",
+      sourceUserMessageId: "user-u1",
+      prompt: "A",
+      agent: failingAgent,
+      commands,
+    });
+
+    expect(
+      entries(log, "setRunState").some(
+        (entry) => entry.update?.uiPhase === "failed" || entry.update?.backendStatus === "failed",
+      ),
+    ).toBe(false);
+    expect(
+      entries(log, "updateMessage").some(
+        (entry) => entry.patch?.status === "failed",
+      ),
+    ).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ export interface ButtonProps {
   title?: string;
   /** Communicates pressed (active) state for toggle-style buttons. */
   ariaPressed?: boolean;
+  style?: CSSProperties;
 }
 
 const t = defaultTheme;
@@ -83,6 +84,7 @@ export function Button({
   ariaLabel,
   title,
   ariaPressed,
+  style: customStyle,
 }: ButtonProps) {
   const interactive = !disabled && !loading;
   const interaction = useInteraction(interactive);
@@ -118,7 +120,8 @@ export function Button({
           background: t.colors.disabledBg,
           color: t.colors.disabledText,
           borderColor: t.colors.border,
-        }),
+      }),
+    ...customStyle,
   };
 
   return (

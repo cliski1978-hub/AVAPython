@@ -9,9 +9,12 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.10.0",
     "httpx>=0.28.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
+openhands = ["openhands-sdk==1.47.0"]
+openhands-tools = ["openhands-sdk==1.47.0", "openhands-tools==1.47.0"]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.8.0",

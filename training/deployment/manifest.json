@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "step": "AVA Phase 3 — Step 35D.2",
+  "base_model": {
+    "id": "ibm-granite/granite-4.2-8b",
+    "revision": "7fce579a7fbbad4b1e7703b6850cefd517a4002b"
+  },
+  "converter": {
+    "repository": "llama.cpp",
+    "commit": "fb27a525d28381a16a4bb038858a10e4927381ca",
+    "f16_conversion": "convert_hf_to_gguf.py --outtype f16",
+    "quantizer": "llama-quantize",
+    "quantization": "Q4_K_M"
+  },
+  "forensics_report": "reports/paired-gguf-forensics.json",
+  "artifacts": {
+    "control": {
+      "adapter": null,
+      "dataset": null,
+      "f16": {
+        "path": "granite-base-control-f16.gguf",
+        "bytes": 17587420736,
+        "sha256": "9eb618663e251387f6677904b42db5b5f4ce5e70d433d37d77e7596a3f71d28b"
+      },
+      "q4_k_m": {
+        "path": "granite-base-control-q4_k_m.gguf",
+        "bytes": 5347917376,
+        "sha256": "1312733686d7288a1fea816ec6c24200187473baa8fc057aa70edaa9daa0aee7"
+      },
+      "ollama_model": "ava-granite4.2-base-control:8b-q4km",
+      "modelfile": {
+        "path": "Modelfile.base-control",
+        "sha256": "f17a514ec6f29608e91ef1dafa6491d0a6fcf109a83229746d4237dd6e4ef187"
+      }
+    },
+    "adapter": {
+      "adapter": "granite-4.2-8b-ava-agent-sft-v1",
+      "dataset": "ava-agent-sft-v1",
+      "f16": {
+        "path": "granite-agent-f16.gguf",
+        "bytes": 17587420736,
+        "sha256": "3f0a651f719672d61d323ca2f68edb72820ad279417a1b70e578b03f02ec23c0"
+      },
+      "q4_k_m": {
+        "path": "granite-agent-sft-v1-q4_k_m.gguf",
+        "bytes": 5347917376,
+        "sha256": "0685579558fa47b7d4ad1f17a7bdce111458015e831f883176022f86fd6fb3cb"
+      },
+      "ollama_model": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "modelfile": {
+        "path": "Modelfile.agent-sft-v1",
+        "sha256": "582f8180187a261a0a18dd56840bf3f30d7679807f0387c31d2c7660fe9fe7ae"
+      }
+    }
+  },
+  "runtime": {
+    "ollama_version": "0.33.3",
+    "template_source": "ibm/granite4.2:8b official Modelfile",
+    "template": "{{ .Prompt }}",
+    "parameters": {
+      "num_ctx": 8192,
+      "temperature": 1,
+      "top_p": 0.95
+    },
+    "metadata": {
+      "architecture": "granite",
+      "parameters": "8.8B",
+      "quantization": "Q4_K_M",
+      "capabilities": ["completion", "thinking", "tools"]
+    }
+  },
+  "validation": {
+    "paired_forensics": "pass",
+    "basic_generation": {
+      "control": "pass",
+      "adapter": "pass",
+      "expected_response": "AVA OLLAMA DEPLOYMENT OK"
+    },
+    "native_tool_qualification": {
+      "harness": "backend/tests/test_openhands_native_tool_qualification_live.py::test_local_model_native_ava_terminal_qualification",
+      "control": {
+        "passed": true,
+        "trials": 3,
+        "native_tool_calls": 3,
+        "textual_pseudo_tool_calls": 0,
+        "malformed_tool_calls": 0,
+        "successful_executions": 3,
+        "successful_tool_result_consumption": 3,
+        "final_responses": 3
+      },
+      "adapter": {
+        "passed": true,
+        "trials": 3,
+        "native_tool_calls": 3,
+        "textual_pseudo_tool_calls": 0,
+        "malformed_tool_calls": 0,
+        "successful_executions": 3,
+        "successful_tool_result_consumption": 3,
+        "final_responses": 3
+      }
+    },
+    "resource_observations": {
+      "control_basic_generation": "6,653 MiB VRAM; 94% GPU / 6% CPU placement",
+      "adapter_basic_generation": "6,670 MiB VRAM; 94% GPU / 6% CPU placement"
+    },
+    "step35d3_qualification": {
+      "report": "reports/step35d3-base-vs-adapter.json",
+      "status": "complete",
+      "step35_status": "partial",
+      "trial_count": 16
+    }
+  }
+}

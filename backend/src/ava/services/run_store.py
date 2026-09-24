@@ -5,38 +5,27 @@ current status of a run. This is Sprint 2 in-memory state only: no database,
 cache, or queue. Assistant content intentionally lives in events, never here.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 
+from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.responses import RunStatus
-
-# ============================================================
-# BEGIN: Run Record
-# ============================================================
-
-
-@dataclass(frozen=True)
-class RunRecord:
-    """AVA-owned snapshot of a run's current state."""
-
-    run_id: str
-    status: RunStatus
-    created_at: datetime
-    updated_at: datetime
-
-
-# ============================================================
-# END: Run Record
-# ============================================================
-
+from ava.repositories.run_repository import (
+    RunRecord,
+    RunRepository,
+)
 
 # ============================================================
 # BEGIN: Run Store
 # ============================================================
 
 
-class RunStore:
-    """In-memory, AVA-owned store of run records keyed by run id."""
+class RunStore(RunRepository):
+    """In-memory, AVA-owned store of run records keyed by run id.
+
+    This is the in-memory ``RunRepository`` implementation used by the
+    current composition. Sprint 2 state only: no database, cache, or queue.
+    """
 
     def __init__(self) -> None:
         self._runs: dict[str, RunRecord] = {}
@@ -79,6 +68,16 @@ class RunStore:
         if record is None:
             return None
         updated = replace(record, status=status, updated_at=datetime.now(UTC))
+        self._runs[run_id] = updated
+        return updated
+
+    def set_execution_selection(
+        self, run_id: str, selection: RunExecutionSelection | None
+    ) -> RunRecord | None:
+        record = self._runs.get(run_id)
+        if record is None:
+            return None
+        updated = replace(record, execution_selection=selection, updated_at=datetime.now(UTC))
         self._runs[run_id] = updated
         return updated
 

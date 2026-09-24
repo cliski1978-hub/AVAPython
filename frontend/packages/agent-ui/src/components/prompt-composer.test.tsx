@@ -28,7 +28,7 @@ describe("PromptComposer", () => {
       <PromptComposer onSubmit={noop} onStop={noop} />,
     );
     expect(html).toContain('aria-label="Send"');
-    expect(html).toContain(">Send</span>");
+    expect(html).toContain(">↑</span>");
     expect(html).not.toContain('aria-label="Stop"');
   });
 
@@ -78,7 +78,7 @@ describe("PromptComposer", () => {
     const html = renderToStaticMarkup(
       <PromptComposer value="hello" onSubmit={noop} onStop={noop} />,
     );
-    expect(html).toContain(">Send</span>");
+    expect(html).toContain(">↑</span>");
     expect(countDisabled(html)).toBe(1);
   });
 

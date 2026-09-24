@@ -72,7 +72,7 @@ export const defaultTheme: ThemeTokens = {
     dangerText: "#dc2626",
     ghostHover: "#f3f4f6",
     disabledBg: "#f3f4f6",
-    disabledText: "#9ca3af",
+    disabledText: "#4b5563",
     focusRing: "#2563eb",
     success: "#16a34a",
     warning: "#f59e0b",

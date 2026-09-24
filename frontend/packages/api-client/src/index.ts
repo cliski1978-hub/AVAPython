@@ -1,5 +1,13 @@
-export { ApiClient, ApiError } from "./client";
-export type { ApiClientConfig } from "./client";
+export { ApiClient, ApiError, subscribeConnectivity } from "./client";
+export type { ApiClientConfig, ConnectivityStatus } from "./client";
+export * from "./attachments";
 export * from "./capabilities";
+export * from "./conversations";
+export * from "./documents";
 export * from "./health";
+export * from "./model_providers";
+export * from "./models";
 export * from "./runs";
+export * from "./runtimes";
+export * from "./execution-profiles";
+export * from "./workspaces";

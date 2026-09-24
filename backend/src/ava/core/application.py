@@ -29,7 +29,9 @@ class ApplicationConfig:
     application_name: str = "AVA"
     environment: str = "development"
     agent_provider: str = "mock"
+    agent_runtime: str = "native"
     model_provider: str = "local"
+    model_name: str = "local-model"
 
     @property
     def app_name(self) -> str:

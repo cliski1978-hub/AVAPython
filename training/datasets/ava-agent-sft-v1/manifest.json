@@ -1,0 +1,23 @@
+{
+  "category_counts": {
+    "edit": 108,
+    "read": 108,
+    "stop": 120,
+    "terminal-arguments": 12,
+    "test": 108
+  },
+  "completion_examples": 120,
+  "dataset_version": "ava-agent-sft-v1",
+  "holdout_exclusions": [
+    "label_normalizer",
+    "normalize_labels",
+    "test_label_normalizer",
+    "integer zero preservation"
+  ],
+  "lineage": "ava-agent-sft-v0 -> ava-agent-sft-v1",
+  "recovery_examples": 65,
+  "source": "synthetic-standard-library",
+  "train_examples": 120,
+  "validation_examples": 25,
+  "validator": "ava_agent_training.dataset.validate_example"
+}

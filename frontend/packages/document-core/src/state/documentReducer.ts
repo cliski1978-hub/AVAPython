@@ -3,10 +3,23 @@ import type { AvaDocument, DocumentContent } from "../model";
 export interface DocumentState {
   documents: AvaDocument[];
   activeDocumentId: string | null;
+  loading?: boolean;
+  isCreating?: boolean;
+  isSaving?: boolean;
+  error?: Error | null;
 }
 
 export type DocumentAction =
+  | { type: "hydrate"; documents: AvaDocument[] }
+  | { type: "hydrateFailure"; error: Error }
+  | { type: "createStart" }
+  | { type: "createFailure"; error: Error }
+  | { type: "saveStart" }
+  | { type: "saveComplete" }
+  | { type: "saveFailure"; error: Error }
+  | { type: "operationFailure"; error: Error }
   | { type: "create"; document: AvaDocument }
+  | { type: "reconcile"; documentId: string; document: AvaDocument }
   | { type: "setActiveDocument"; documentId: string }
   | { type: "updateContent"; documentId: string; content: DocumentContent; updatedAt: string }
   | { type: "rename"; documentId: string; title: string; updatedAt: string }
@@ -22,8 +35,53 @@ export function getActiveDocument(state: DocumentState): AvaDocument | null {
 }
 
 export function documentReducer(state: DocumentState, action: DocumentAction): DocumentState {
+  if (action.type === "hydrate") {
+    return {
+      ...state,
+      documents: action.documents,
+      activeDocumentId: action.documents[0]?.id ?? null,
+      loading: false,
+      error: null,
+    };
+  }
+  if (action.type === "hydrateFailure") {
+    return { ...state, documents: [], activeDocumentId: null, loading: false, error: action.error };
+  }
+  if (action.type === "createStart") {
+    return { ...state, isCreating: true };
+  }
+  if (action.type === "createFailure") {
+    return { ...state, isCreating: false, error: action.error };
+  }
+  if (action.type === "saveStart") {
+    return { ...state, isSaving: true };
+  }
+  if (action.type === "saveComplete") {
+    return { ...state, isSaving: false, error: null };
+  }
+  if (action.type === "saveFailure") {
+    return { ...state, isSaving: false, error: action.error };
+  }
+  if (action.type === "operationFailure") {
+    return { ...state, error: action.error };
+  }
   if (action.type === "create") {
-    return { documents: [...state.documents, action.document], activeDocumentId: action.document.id };
+    return {
+      ...state,
+      documents: [...state.documents, action.document],
+      activeDocumentId: action.document.id,
+      isCreating: false,
+      error: null,
+    };
+  }
+  if (action.type === "reconcile") {
+    return {
+      ...state,
+      documents: state.documents.map((item) => item.id === action.documentId ? action.document : item),
+      activeDocumentId: state.activeDocumentId === action.documentId ? action.document.id : state.activeDocumentId,
+      isSaving: false,
+      error: null,
+    };
   }
   if (action.type === "setActiveDocument") {
     return getDocumentById(state, action.documentId) == null ? state : { ...state, activeDocumentId: action.documentId };
@@ -31,12 +89,8 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
   const existing = getDocumentById(state, action.documentId);
   if (existing == null) return state;
   if (action.type === "close") {
-    const index = state.documents.findIndex((item) => item.id === action.documentId);
-    const documents = state.documents.filter((item) => item.id !== action.documentId);
-    const activeDocumentId = state.activeDocumentId === action.documentId
-      ? (documents[index]?.id ?? documents[index - 1]?.id ?? null)
-      : state.activeDocumentId;
-    return { documents, activeDocumentId };
+    if (state.activeDocumentId !== action.documentId) return state;
+    return { ...state, activeDocumentId: null };
   }
   const document = action.type === "updateContent"
     ? { ...existing, content: action.content, updatedAt: action.updatedAt, isDirty: true }

@@ -6,6 +6,6 @@
 
 export { DocumentWorkspace } from "./editor/DocumentWorkspace";
 export { type EditorAdapter } from "./editor/EditorAdapter";
-export { type AvaDocument, type DocumentContent, createAvaDocument, htmlContent } from "./model";
+export { type AvaDocument, type AvaDocumentRevision, type DocumentContent, createAvaDocument, htmlContent } from "./model";
 export { DocumentProvider, useDocuments } from "./state/DocumentProvider";
 export { getActiveDocument, getDocumentById, type DocumentState } from "./state/documentReducer";

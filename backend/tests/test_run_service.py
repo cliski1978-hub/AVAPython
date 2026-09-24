@@ -12,7 +12,9 @@ from ava.agents.contracts import AgentPort, AgentRunResult
 from ava.contracts.capabilities import CapabilityName
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
+from ava.services.run_store import RunStore
 
 # ============================================================
 # BEGIN: Stub Agent
@@ -70,7 +72,7 @@ def test_start_run_generates_ava_owned_run_id() -> None:
 
     async def scenario() -> None:
         agent = StubAgent()
-        service = RunService(agent)
+        service = RunService(agent, run_repository=RunStore(), run_event_repository=RunEventStore())
         request = RunRequest(prompt="Summarize the document")
 
         response = await service.start_run(request)
@@ -92,7 +94,7 @@ def test_cancel_run_delegates_to_agent() -> None:
 
     async def scenario() -> None:
         agent = StubAgent(block_start=True)
-        service = RunService(agent)
+        service = RunService(agent, run_repository=RunStore(), run_event_repository=RunEventStore())
         task = asyncio.create_task(service.start_run(RunRequest(prompt="Something")))
         await asyncio.sleep(0.01)
         assert agent.captured_run_id is not None
@@ -118,7 +120,7 @@ def test_cancel_unknown_run_is_service_level_noop() -> None:
 
     async def scenario() -> None:
         agent = StubAgent()
-        service = RunService(agent)
+        service = RunService(agent, run_repository=RunStore(), run_event_repository=RunEventStore())
 
         response = await service.cancel_run("never-created")
 
@@ -148,7 +150,7 @@ def test_run_service_generates_uuid_and_delivers_to_mock_agent() -> None:
 
     async def scenario() -> None:
         agent = MockAgentAdapter()
-        service = RunService(agent)
+        service = RunService(agent, run_repository=RunStore(), run_event_repository=RunEventStore())
         request = RunRequest(prompt="Hello AVA")
 
         response = await service.start_run(request)
@@ -166,7 +168,7 @@ def test_run_service_mock_cancellation_path() -> None:
 
     async def scenario() -> None:
         adapter = MockAgentAdapter(run_delay=0.1)
-        service = RunService(adapter)
+        service = RunService(adapter, run_repository=RunStore(), run_event_repository=RunEventStore())
 
         task = asyncio.create_task(service.start_run(RunRequest(prompt="Cancel me")))
         await asyncio.sleep(0.01)  # let the run enter its in-progress window

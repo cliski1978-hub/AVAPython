@@ -54,6 +54,13 @@ export interface ConversationRunState {
   runError: string | null;
   /** Stable id of the pending assistant message created for this run. */
   pendingMessageId: string | null;
+  /**
+   * Monotonic identity of the most recent run started in this conversation.
+   * Assigned synchronously when a run starts (before any await) so a stale
+   * run that completes late can detect it has been superseded and must not
+   * overwrite newer state or persist its (older) assistant response.
+   */
+  runEpoch: string | null;
 }
 
 export const EMPTY_CONVERSATION_RUN: ConversationRunState = {
@@ -62,6 +69,7 @@ export const EMPTY_CONVERSATION_RUN: ConversationRunState = {
   uiPhase: "idle",
   runError: null,
   pendingMessageId: null,
+  runEpoch: null,
 };
 
 export interface Conversation {

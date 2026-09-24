@@ -13,6 +13,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@ava/api-client": "workspace:*",
+    "@ava/contracts": "workspace:*",
     "@ava/ui-core": "workspace:*",
     "@tiptap/core": "3.31.3",
     "@tiptap/react": "3.31.3",

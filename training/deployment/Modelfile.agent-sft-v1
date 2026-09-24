@@ -1,0 +1,5 @@
+FROM /home/bizon/AvaUi/training/deployment/granite-agent-sft-v1-q4_k_m.gguf
+TEMPLATE {{ .Prompt }}
+PARAMETER num_ctx 8192
+PARAMETER temperature 1
+PARAMETER top_p 0.95

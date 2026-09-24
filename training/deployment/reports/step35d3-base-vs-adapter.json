@@ -1,0 +1,965 @@
+{
+  "schema_version": 1,
+  "step": "35D.3",
+  "frozen_configuration": {
+    "context_window": 8192,
+    "temperature": 1,
+    "top_p": 0.95,
+    "timeout_seconds": 60,
+    "max_iterations": 5,
+    "seed": null,
+    "seed_note": "The existing Ollama/OpenHands route has no explicit seeded evaluation path.",
+    "fixture": "label_normalizer integer-zero holdout",
+    "tool_surface": [
+      "file_editor",
+      "ava_terminal"
+    ]
+  },
+  "provenance": {
+    "base_model": "ibm-granite/granite-4.2-8b",
+    "base_revision": "7fce579a7fbbad4b1e7703b6850cefd517a4002b",
+    "adapter": "granite-4.2-8b-ava-agent-sft-v1",
+    "dataset": "ava-agent-sft-v1",
+    "control_model": "ava-granite4.2-base-control:8b-q4km",
+    "adapter_model": "ava-granite4.2-agent-sft-v1:8b-q4km",
+    "ollama_version": "0.33.3"
+  },
+  "results": [
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "A",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 1,
+      "terminal_calls": 0,
+      "sandbox_requests": 0,
+      "test_executions": 0,
+      "failed_test_executions": 0,
+      "final_response_emitted": true,
+      "run_completed": true,
+      "false_success_claimed": false,
+      "stall_reason": null,
+      "duration_ms": 24933,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          10
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          9486
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          9490
+        ],
+        [
+          "MessageEvent",
+          null,
+          24860
+        ]
+      ],
+      "first_action_ms": 9486,
+      "final_response_ms": null,
+      "result": "PASS"
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "A",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 1,
+      "terminal_calls": 4,
+      "sandbox_requests": 4,
+      "test_executions": 0,
+      "failed_test_executions": 4,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 15716,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          10
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          6976
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          6977
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          8982
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          8983
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          11194
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          11195
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          13173
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          13175
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          15638
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          15641
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          15642
+        ]
+      ],
+      "first_action_ms": 6976,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "B",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 2,
+      "terminal_calls": 0,
+      "sandbox_requests": 0,
+      "test_executions": 0,
+      "failed_test_executions": 0,
+      "final_response_emitted": true,
+      "run_completed": true,
+      "false_success_claimed": false,
+      "stall_reason": null,
+      "duration_ms": 51094,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          11
+        ],
+        [
+          "MessageEvent",
+          null,
+          12
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          9644
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          9644
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          9649
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          9649
+        ],
+        [
+          "MessageEvent",
+          null,
+          51020
+        ]
+      ],
+      "first_action_ms": 9644,
+      "final_response_ms": null,
+      "result": "PASS"
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "B",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 5,
+      "terminal_calls": 0,
+      "sandbox_requests": 0,
+      "test_executions": 0,
+      "failed_test_executions": 0,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 17543,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          10
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          8431
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          8432
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          8434
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          8434
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          11091
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          11092
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          13034
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          13037
+        ],
+        [
+          "MessageEvent",
+          null,
+          15154
+        ],
+        [
+          "MessageEvent",
+          null,
+          15155
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          17467
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          17469
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          17470
+        ]
+      ],
+      "first_action_ms": 8431,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "C",
+      "trial": 1,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70016,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "C",
+      "trial": 1,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70015,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "D",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 3,
+      "terminal_calls": 2,
+      "sandbox_requests": 0,
+      "test_executions": 1,
+      "failed_test_executions": 2,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 31630,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          10
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          9117
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          9118
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          12908
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          12909
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          15584
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          15587
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          18144
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          18146
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          31555
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          31556
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          31557
+        ]
+      ],
+      "first_action_ms": 9117,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "D",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 3,
+      "terminal_calls": 2,
+      "sandbox_requests": 0,
+      "test_executions": 1,
+      "failed_test_executions": 2,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 24075,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          9
+        ],
+        [
+          "MessageEvent",
+          null,
+          10
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          9027
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          9028
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          13546
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          13548
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          16112
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          16116
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          18752
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          18754
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          23999
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          24000
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          24001
+        ]
+      ],
+      "first_action_ms": 9027,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "E",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 3,
+      "terminal_calls": 2,
+      "sandbox_requests": 0,
+      "test_executions": 0,
+      "failed_test_executions": 1,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "tool_result_not_consumed",
+      "duration_ms": 60286,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          10
+        ],
+        [
+          "MessageEvent",
+          null,
+          10
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          8713
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          8715
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          11219
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          11222
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          15235
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          15237
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          57184
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          57185
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          60211
+        ],
+        [
+          "AgentErrorEvent",
+          "ava_terminal",
+          60212
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          60213
+        ]
+      ],
+      "first_action_ms": 8713,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "E",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": true,
+      "source_correct": true,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 4,
+      "terminal_calls": 1,
+      "sandbox_requests": 1,
+      "test_executions": 1,
+      "failed_test_executions": 0,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 39697,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          11
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          10059
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          10062
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          13895
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          13896
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          16458
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          16460
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          36322
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          36325
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          39573
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          39622
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          39624
+        ]
+      ],
+      "first_action_ms": 10059,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "E",
+      "trial": 2,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70018,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "E",
+      "trial": 2,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 3,
+      "terminal_calls": 1,
+      "sandbox_requests": 0,
+      "test_executions": 0,
+      "failed_test_executions": 1,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 20328,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          11
+        ],
+        [
+          "MessageEvent",
+          null,
+          11
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          9490
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          9492
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          12957
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          12958
+        ],
+        [
+          "MessageEvent",
+          null,
+          14847
+        ],
+        [
+          "MessageEvent",
+          null,
+          14848
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          17369
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          17370
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          20252
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          20254
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          20255
+        ]
+      ],
+      "first_action_ms": 9490,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "F",
+      "trial": 1,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70016,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "F",
+      "trial": 1,
+      "baseline_failed": true,
+      "tests_passed": false,
+      "tests_unchanged": true,
+      "source_changed": false,
+      "source_correct": false,
+      "no_unexpected_files": true,
+      "native_tools_only": true,
+      "file_editor_calls": 3,
+      "terminal_calls": 2,
+      "sandbox_requests": 0,
+      "test_executions": 1,
+      "failed_test_executions": 2,
+      "final_response_emitted": false,
+      "run_completed": false,
+      "false_success_claimed": false,
+      "stall_reason": "completion_not_emitted",
+      "duration_ms": 20493,
+      "event_trace": [
+        [
+          "SystemPromptEvent",
+          null,
+          11
+        ],
+        [
+          "MessageEvent",
+          null,
+          12
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          7028
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          7030
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          9374
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          9376
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          11806
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          11809
+        ],
+        [
+          "ActionEvent",
+          "file_editor",
+          13941
+        ],
+        [
+          "ObservationEvent",
+          "file_editor",
+          13943
+        ],
+        [
+          "ActionEvent",
+          "ava_terminal",
+          20418
+        ],
+        [
+          "ObservationEvent",
+          "ava_terminal",
+          20419
+        ],
+        [
+          "ConversationErrorEvent",
+          null,
+          20421
+        ]
+      ],
+      "first_action_ms": 7028,
+      "final_response_ms": null,
+      "result": "PARTIAL"
+    },
+    {
+      "candidate": "control",
+      "model_id": "ava-granite4.2-base-control:8b-q4km",
+      "scenario": "F",
+      "trial": 2,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70012,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    },
+    {
+      "candidate": "adapter",
+      "model_id": "ava-granite4.2-agent-sft-v1:8b-q4km",
+      "scenario": "F",
+      "trial": 2,
+      "result": "PARTIAL",
+      "baseline_failed": true,
+      "duration_ms": 70012,
+      "stall_reason": "evaluator_hard_timeout",
+      "harness_timeout": true
+    }
+  ]
+}

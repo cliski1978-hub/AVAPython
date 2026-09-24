@@ -177,7 +177,7 @@ def test_successful_run_emits_full_event_lifecycle() -> None:
 
     async def scenario() -> None:
         store = RunEventStore()
-        service = RunService(MockAgentAdapter(), event_store=store)
+        service = RunService(MockAgentAdapter(), run_repository=RunStore(), run_event_repository=store)
 
         response = await service.start_run(RunRequest(prompt="Hello AVA"))
 
@@ -199,7 +199,7 @@ def test_successful_run_carries_assistant_message_content() -> None:
 
     async def scenario() -> None:
         store = RunEventStore()
-        service = RunService(MockAgentAdapter(), event_store=store)
+        service = RunService(MockAgentAdapter(), run_repository=RunStore(), run_event_repository=store)
 
         response = await service.start_run(RunRequest(prompt="Hello AVA"))
         events = store.get_events(response.run_id)
@@ -220,7 +220,7 @@ def test_runs_are_sealed_after_completion() -> None:
 
     async def scenario() -> None:
         store = RunEventStore()
-        service = RunService(MockAgentAdapter(), event_store=store)
+        service = RunService(MockAgentAdapter(), run_repository=RunStore(), run_event_repository=store)
 
         response = await service.start_run(RunRequest(prompt="Done"))
         events = store.get_events(response.run_id)
@@ -250,7 +250,7 @@ def test_cancelled_run_emits_run_cancelled_only() -> None:
     async def scenario() -> None:
         store = RunEventStore()
         adapter = MockAgentAdapter(run_delay=0.1)
-        service = RunService(adapter, event_store=store)
+        service = RunService(adapter, run_repository=RunStore(), run_event_repository=store)
 
         task = asyncio.create_task(service.start_run(RunRequest(prompt="Cancel me")))
         await asyncio.sleep(0.01)
@@ -276,7 +276,7 @@ def test_cancellation_wins_over_completion() -> None:
     async def scenario() -> None:
         store = RunEventStore()
         adapter = MockAgentAdapter(run_delay=0.1)
-        service = RunService(adapter, event_store=store)
+        service = RunService(adapter, run_repository=RunStore(), run_event_repository=store)
 
         task = asyncio.create_task(service.start_run(RunRequest(prompt="Cancel me")))
         await asyncio.sleep(0.01)
@@ -315,7 +315,7 @@ def test_failed_run_emits_run_failed_with_payload() -> None:
     async def scenario() -> None:
         store = RunEventStore()
         adapter = MockAgentAdapter(fail_on_prompt="force failure")
-        service = RunService(adapter, event_store=store)
+        service = RunService(adapter, run_repository=RunStore(), run_event_repository=store)
 
         response = await service.start_run(RunRequest(prompt="force failure"))
 
@@ -347,7 +347,7 @@ def test_runs_events_remain_isolated() -> None:
 
     async def scenario() -> None:
         store = RunEventStore()
-        service = RunService(MockAgentAdapter(), event_store=store)
+        service = RunService(MockAgentAdapter(), run_repository=RunStore(), run_event_repository=store)
 
         first = await service.start_run(RunRequest(prompt="one"))
         second = await service.start_run(RunRequest(prompt="two"))
@@ -368,7 +368,7 @@ def test_get_run_returns_none_for_unknown() -> None:
     """Snapshot retrieval must signal unknown runs with None."""
 
     async def scenario() -> None:
-        service = RunService(MockAgentAdapter())
+        service = RunService(MockAgentAdapter(), run_repository=RunStore(), run_event_repository=RunEventStore())
 
         await service.start_run(RunRequest(prompt="known"))
 
@@ -384,7 +384,7 @@ def test_get_run_returns_live_snapshot() -> None:
     async def scenario() -> None:
         adapter = MockAgentAdapter()
         store = RunEventStore()
-        service = RunService(adapter, event_store=store)
+        service = RunService(adapter, run_repository=RunStore(), run_event_repository=store)
 
         response = await service.start_run(RunRequest(prompt="Snapshot"))
         run = service.get_run(response.run_id)
@@ -411,7 +411,7 @@ def test_run_store_and_event_store_are_independent_stores() -> None:
     run_store = RunStore()
     event_store = RunEventStore()
     agent = MockAgentAdapter()
-    service = RunService(agent, run_store=run_store, event_store=event_store)
+    service = RunService(agent, run_repository=run_store, run_event_repository=event_store)
 
     async def scenario() -> None:
         response = await service.start_run(RunRequest(prompt="Stores"))

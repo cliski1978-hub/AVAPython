@@ -11,6 +11,7 @@ AVA Core
    │
 Agent Adapter Port
    │
+   ├── Native Agent → ModelProviderPort
    ├── Mock Agent
    ├── LangGraph
    ├── AWS
@@ -28,7 +29,7 @@ class AgentPort(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    async def start_run(self, run_id: str, request: RunRequest) -> RunResponse: ...
+    async def start_run(self, run_id: str, request: RunRequest) -> AgentRunResult: ...
 
     @abstractmethod
     async def cancel_run(self, run_id: str) -> RunResponse: ...
@@ -51,7 +52,7 @@ class AgentPort(ABC):
 ### Event Boundary
 
 Event streaming and delivery are **not** part of the Sprint 1 port. When
-streaming is implemented (Sprint 2 with the mock agent and run lifecycle), it
+streaming is implemented in a future phase, it
 must be AVA-event-based — one normalized path using the AVA event contracts
 (`RunEvent`, `EventType`) — so clients never depend on LangGraph, AWS,
 Databricks, or provider-specific events. No status-only listener is
@@ -65,10 +66,19 @@ introduced alongside the event system.
 - No real agent is implemented in Sprint 1. A placeholder/mock may exist
   only where architecture testing requires it.
 
-## Future Adapters
+## Implemented Adapters
 
-- **Mock agent** — deterministic, offline; first Sprint 2 target.
+- **Mock agent** — deterministic, offline; default `AVA_AGENT_PROVIDER=mock`.
+- **Native agent** — `AVA_AGENT_PROVIDER=native`; receives a resolved
+  `ModelProviderPort` and translates a run prompt into one user message.
+  Complete response content becomes a completed `AgentRunResult`; sanitized
+  provider failures become failed results. Active provider tasks can be
+  cancelled and are removed on every exit. Only runs and cancellation are
+  advertised. `RunService` normalizes results into events without knowing
+  about models. Composition owns provider resolution and shutdown.
+
+## Future Adapters
 - **LangGraph** — general agent composition.
 - **AWS / Databricks** — hosted agent platforms.
 
-None are implemented yet.
+These external framework adapters are not implemented.

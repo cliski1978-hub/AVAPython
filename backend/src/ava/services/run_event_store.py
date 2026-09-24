@@ -9,11 +9,10 @@ already-terminal run refuses a second terminal event (``run_completed``,
 ``run_cancelled``, ``run_failed``). This keeps the lifecycle deterministic.
 """
 
-from ava.contracts.events import EventType, RunEvent
-
-#: Event types that terminate a run's event lifecycle.
-TERMINAL_EVENT_TYPES = frozenset(
-    {EventType.RUN_COMPLETED, EventType.RUN_CANCELLED, EventType.RUN_FAILED}
+from ava.contracts.events import RunEvent
+from ava.repositories.run_event_repository import (
+    TERMINAL_EVENT_TYPES,
+    RunEventRepository,
 )
 
 # ============================================================
@@ -21,8 +20,13 @@ TERMINAL_EVENT_TYPES = frozenset(
 # ============================================================
 
 
-class RunEventStore:
-    """In-memory, AVA-owned store of run events keyed by run id."""
+class RunEventStore(RunEventRepository):
+    """In-memory, AVA-owned store of run events keyed by run id.
+
+    This is the in-memory ``RunEventRepository`` implementation used by the
+    current composition. Sprint 2 state only: no database, Redis, Kafka,
+    queue, or event-bus framework.
+    """
 
     def __init__(self) -> None:
         self._events: dict[str, list[RunEvent]] = {}
