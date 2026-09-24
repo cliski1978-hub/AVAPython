@@ -9,8 +9,8 @@ AVA-owned contracts (see ava.contracts.models).
 
 from abc import ABC, abstractmethod
 
-from ava.contracts.capabilities import CapabilityName
 from ava.contracts.models import (
+    ModelCapabilities,
     ModelInfo,
     ModelProviderHealth,
     ModelRequest,
@@ -49,16 +49,28 @@ class ModelProviderPort(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_capabilities(self) -> set[CapabilityName]:
-        """Return the capabilities the provider actually supports."""
+    def get_capabilities(self) -> ModelCapabilities:
+        """Return the normalized capabilities the provider's model supports.
+
+        The result is an AVA-owned ``ModelCapabilities`` contract, not a set
+        of ``CapabilityName`` values: ``CapabilityName`` describes application
+        capabilities (health, runs, cancellations), while this method reports
+        the provider's model capabilities (chat, streaming, tool calling, ...).
+        """
         raise NotImplementedError
 
     @abstractmethod
-    async def generate(self, request: ModelRequest) -> ModelResponse:
+    async def generate(
+        self, request: ModelRequest, *, model_name: str | None = None
+    ) -> ModelResponse:
         """Generate a model response from an AVA-owned request.
 
         Args:
             request: An AVA-owned ModelRequest contract.
+            model_name: Optional provider-native model name to target. A provider
+                must not own a single model; it sends the request to exactly the
+                deployment named here. When omitted, the provider's configured
+                bootstrap model name is used. Providers never choose a model.
 
         Returns:
             An AVA-owned ModelResponse contract.

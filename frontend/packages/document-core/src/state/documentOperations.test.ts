@@ -23,10 +23,12 @@ describe("document operations", () => {
     expect(saved.documents[1]).toBe(b);
   });
 
-  it("reassigns active state and supports zero documents when closing", () => {
+  it("closes only the editor view, keeping closed documents in the durable list", () => {
     const state = { documents: [a, b], activeDocumentId: a.id };
     const next = documentReducer(state, { type: "close", documentId: a.id });
-    expect(next.activeDocumentId).toBe(b.id);
-    expect(documentReducer(next, { type: "close", documentId: b.id })).toEqual({ documents: [], activeDocumentId: null });
+    expect(next.activeDocumentId).toBeNull();
+    expect(next.documents).toEqual([a, b]);
+    expect(documentReducer(next, { type: "close", documentId: b.id })).toBe(next);
+    expect(documentReducer(next, { type: "setActiveDocument", documentId: a.id }).activeDocumentId).toBe(a.id);
   });
 });

@@ -5,14 +5,21 @@ the current contract version.
 """
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
 from ava.contracts.capabilities import CapabilityName
+from ava.contracts.documents import (
+    ContentFormat,
+    DocumentRevisionListResponse,
+    DocumentRevisionResponse,
+)
 from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.events import EventType, RunEvent
 from ava.contracts.models import (
+    ModelCapabilities,
     ModelInfo,
     ModelMessage,
     ModelProviderHealth,
@@ -25,9 +32,12 @@ from ava.contracts.responses import (
     CapabilitiesResponse,
     HealthResponse,
     HealthStatus,
+    ModelProviderDiscoveryItem,
+    ModelProviderDiscoveryResponse,
     RunResponse,
     RunStatus,
 )
+from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
 from ava.contracts.version import CONTRACT_VERSION
 
 # ============================================================
@@ -114,6 +124,7 @@ def test_run_response_serializes_to_json() -> None:
         "run_id": "run-1",
         "status": "completed",
         "contract_version": CONTRACT_VERSION,
+        "execution_selection": None,
     }
 
 
@@ -347,6 +358,114 @@ def test_model_provider_health_serializes_to_json() -> None:
     assert payload["message"] == "Model weights not loaded."
 
 
+def test_model_capabilities_default_to_conservative_false() -> None:
+    """ModelCapabilities defaults must be deterministic and conservative.
+
+    Unsupported capabilities must not accidentally default to enabled.
+    """
+    capabilities = ModelCapabilities()
+    payload = capabilities.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload["chat"] is False
+    assert payload["streaming"] is False
+    assert payload["tool_calling"] is False
+    assert payload["structured_output"] is False
+    assert payload["vision"] is False
+    assert payload["embeddings"] is False
+    assert payload["reasoning"] is False
+    assert payload["code_specialization"] is False
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_model_capabilities_can_enable_capabilities_independently() -> None:
+    """Multiple capabilities can be enabled without enabling the rest."""
+    capabilities = ModelCapabilities(
+        chat=True,
+        streaming=True,
+        tool_calling=True,
+    )
+    payload = capabilities.model_dump()
+    assert payload["chat"] is True
+    assert payload["streaming"] is True
+    assert payload["tool_calling"] is True
+    assert payload["structured_output"] is False
+    assert payload["vision"] is False
+    assert payload["embeddings"] is False
+    assert payload["reasoning"] is False
+    assert payload["code_specialization"] is False
+
+
+def test_model_capabilities_are_independent_of_each_other() -> None:
+    """Enabling one capability must not implicitly enable unrelated ones."""
+    capabilities = ModelCapabilities(tool_calling=True)
+    assert capabilities.tool_calling is True
+    assert capabilities.chat is False
+    assert capabilities.streaming is False
+    assert capabilities.structured_output is False
+    assert capabilities.reasoning is False
+    assert capabilities.vision is False
+
+    vision_only = ModelCapabilities(vision=True)
+    assert vision_only.vision is True
+    assert vision_only.tool_calling is False
+    assert vision_only.chat is False
+    assert vision_only.embeddings is False
+    assert vision_only.code_specialization is False
+
+
+def test_model_capabilities_serialize_to_json() -> None:
+    """ModelCapabilities must serialize to a JSON-safe, provider-neutral form."""
+    capabilities = ModelCapabilities(chat=True, reasoning=True)
+    payload = capabilities.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload == {
+        "chat": True,
+        "streaming": False,
+        "tool_calling": False,
+        "structured_output": False,
+        "vision": False,
+        "embeddings": False,
+        "reasoning": True,
+        "code_specialization": False,
+        "contract_version": CONTRACT_VERSION,
+    }
+
+
+def test_model_info_includes_capabilities() -> None:
+    """ModelInfo should carry identity, context window, and capabilities."""
+    info = ModelInfo(
+        provider_name="mock",
+        model_id="mock-model",
+        display_name="Mock Model",
+        context_limit=4096,
+        capabilities=ModelCapabilities(chat=True, streaming=True),
+    )
+    payload = info.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload["provider_name"] == "mock"
+    assert payload["model_id"] == "mock-model"
+    assert payload["display_name"] == "Mock Model"
+    assert payload["context_limit"] == 4096
+    assert payload["capabilities"]["chat"] is True
+    assert payload["capabilities"]["streaming"] is True
+    assert payload["capabilities"]["tool_calling"] is False
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_model_info_context_window_is_numeric_metadata() -> None:
+    """Context window is a numeric model property, not a boolean capability."""
+    capabilities = ModelCapabilities()
+    info = ModelInfo(
+        provider_name="mock",
+        model_id="mock-model",
+        context_limit=8192,
+        capabilities=capabilities,
+    )
+    assert isinstance(info.context_limit, int)
+    assert "context_limit" in info.model_dump(include={"context_limit", "capabilities"})
+    assert "context_limit" not in ModelCapabilities.model_fields
+
+
 def test_model_provider_health_status_values() -> None:
     """ModelProviderHealthStatus should expose expected values."""
     assert ModelProviderHealthStatus.HEALTHY == "healthy"
@@ -360,4 +479,362 @@ def test_model_provider_health_status_values() -> None:
 
 # ============================================================
 # END: Model Contract Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Model Provider Discovery Contract Tests
+# ============================================================
+
+
+def test_model_provider_discovery_item_serializes_to_json() -> None:
+    """ModelProviderDiscoveryItem should carry identity, model info, and health."""
+    item = ModelProviderDiscoveryItem(
+        provider_id="local",
+        is_default=True,
+        model_info=ModelInfo(provider_name="local", model_id="local-model"),
+        health=ModelProviderHealth(
+            available=True,
+            status=ModelProviderHealthStatus.HEALTHY,
+        ),
+    )
+    payload = item.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload["provider_id"] == "local"
+    assert payload["is_default"] is True
+    assert payload["model_info"]["model_id"] == "local-model"
+    assert payload["health"]["status"] == "healthy"
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_model_provider_discovery_response_serializes_with_empty_providers() -> None:
+    """ModelProviderDiscoveryResponse serializes an empty provider list truthfully."""
+    response = ModelProviderDiscoveryResponse(
+        default_provider_id="corporate",
+        providers=[],
+    )
+    payload = response.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload == {
+        "contract_version": CONTRACT_VERSION,
+        "default_provider_id": "corporate",
+        "providers": [],
+    }
+
+
+def test_model_provider_discovery_response_embeds_model_info_and_health() -> None:
+    """Discovery should reuse ModelInfo and ModelProviderHealth without duplication."""
+    response = ModelProviderDiscoveryResponse(
+        default_provider_id="local",
+        providers=[
+            ModelProviderDiscoveryItem(
+                provider_id="local",
+                is_default=True,
+                model_info=ModelInfo(
+                    provider_name="local",
+                    model_id="local-model",
+                    context_limit=8192,
+                ),
+                health=ModelProviderHealth(
+                    available=False,
+                    status=ModelProviderHealthStatus.RUNTIME_UNAVAILABLE,
+                ),
+            )
+        ],
+    )
+    payload = response.model_dump(mode="json")
+    json.dumps(payload)  # must not raise
+    provider = payload["providers"][0]
+    assert provider["model_info"]["context_limit"] == 8192
+    assert provider["model_info"]["provider_name"] == "local"
+    assert provider["health"]["status"] == "runtime_unavailable"
+    assert provider["health"]["available"] is False
+
+
+# ============================================================
+# END: Model Provider Discovery Contract Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Runtime Contract Tests
+# ============================================================
+
+
+def test_runtime_capabilities_default_to_conservative_false() -> None:
+    """RuntimeCapabilities defaults must be deterministic and conservative.
+
+    An unsupported capability must not accidentally default to enabled.
+    """
+    capabilities = RuntimeCapabilities()
+    payload = capabilities.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload["tools"] is False
+    assert payload["multi_agent"] is False
+    assert payload["shell"] is False
+    assert payload["filesystem"] is False
+    assert payload["browser"] is False
+    assert payload["code_execution"] is False
+    assert payload["checkpointing"] is False
+    assert payload["persistence"] is False
+    assert payload["human_approval"] is False
+    assert payload["parallel_execution"] is False
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_runtime_capabilities_can_enable_capabilities_independently() -> None:
+    """Multiple runtime capabilities can be enabled without enabling the rest."""
+    capabilities = RuntimeCapabilities(
+        tools=True,
+        filesystem=True,
+        code_execution=True,
+    )
+    payload = capabilities.model_dump()
+    assert payload["tools"] is True
+    assert payload["filesystem"] is True
+    assert payload["code_execution"] is True
+    assert payload["shell"] is False
+    assert payload["browser"] is False
+    assert payload["multi_agent"] is False
+    assert payload["persistence"] is False
+    assert payload["parallel_execution"] is False
+
+
+def test_runtime_capabilities_are_independent_of_each_other() -> None:
+    """Enabling one capability must not implicitly enable unrelated ones."""
+    capabilities = RuntimeCapabilities(tools=True)
+    assert capabilities.tools is True
+    assert capabilities.shell is False
+    assert capabilities.filesystem is False
+    assert capabilities.code_execution is False
+    assert capabilities.multi_agent is False
+    assert capabilities.parallel_execution is False
+
+    multi_agent_only = RuntimeCapabilities(multi_agent=True)
+    assert multi_agent_only.multi_agent is True
+    assert multi_agent_only.parallel_execution is False
+    assert multi_agent_only.tools is False
+    assert multi_agent_only.shell is False
+    assert multi_agent_only.filesystem is False
+    assert multi_agent_only.code_execution is False
+
+
+def test_runtime_capabilities_serialize_to_json() -> None:
+    """RuntimeCapabilities must serialize to a JSON-safe, framework-neutral form."""
+    capabilities = RuntimeCapabilities(tools=True, shell=True)
+    payload = capabilities.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload == {
+        "tools": True,
+        "multi_agent": False,
+        "shell": True,
+        "filesystem": False,
+        "browser": False,
+        "code_execution": False,
+        "checkpointing": False,
+        "persistence": False,
+        "human_approval": False,
+        "parallel_execution": False,
+        "contract_version": CONTRACT_VERSION,
+    }
+
+
+def test_runtime_info_includes_capabilities() -> None:
+    """RuntimeInfo should carry identity and capabilities."""
+    info = RuntimeInfo(
+        runtime_id="native",
+        display_name="AVA Native Runtime",
+        capabilities=RuntimeCapabilities(tools=True, shell=True),
+    )
+    payload = info.model_dump()
+    json.dumps(payload)  # must not raise
+    assert payload["runtime_id"] == "native"
+    assert payload["display_name"] == "AVA Native Runtime"
+    assert payload["capabilities"]["tools"] is True
+    assert payload["capabilities"]["shell"] is True
+    assert payload["capabilities"]["browser"] is False
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_runtime_info_requires_runtime_id() -> None:
+    """RuntimeInfo must require a runtime identifier."""
+    with pytest.raises(ValidationError):
+        RuntimeInfo()  # type: ignore[call-arg]
+
+
+def test_runtime_info_display_name_is_optional() -> None:
+    """RuntimeInfo display_name is optional; runtime_id suffices."""
+    info = RuntimeInfo(runtime_id="native")
+    payload = info.model_dump()
+    assert payload["runtime_id"] == "native"
+    assert payload["display_name"] is None
+
+
+def test_runtime_and_model_capabilities_are_independent() -> None:
+    """RuntimeCapabilities and ModelCapabilities are separate contracts.
+
+    One should not alter or imply values in the other.
+    """
+    runtime_caps = RuntimeCapabilities(tools=True)
+    model_caps = ModelCapabilities(tool_calling=True)
+
+    # Runtime has tools but model does not
+    assert runtime_caps.tools is True
+    assert model_caps.tool_calling is True
+    assert not hasattr(model_caps, "tools") or "tools" not in ModelCapabilities.model_fields
+    assert not hasattr(runtime_caps, "tool_calling") or "tool_calling" not in RuntimeCapabilities.model_fields
+
+    # Runtime without tools, model without tool calling
+    runtime_empty = RuntimeCapabilities()
+    model_empty = ModelCapabilities()
+    assert runtime_empty.tools is False
+    assert model_empty.tool_calling is False
+    assert runtime_empty.contract_version == CONTRACT_VERSION
+    assert model_empty.contract_version == CONTRACT_VERSION
+
+
+# ============================================================
+# END: Runtime Contract Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Document Revision Contract Tests (Step 4.13.E)
+# ============================================================
+
+
+def _revision_payload() -> dict[str, object]:
+    """Build the full wire payload for a DocumentRevisionResponse."""
+    return {
+        "revision_id": "rev-1",
+        "document_id": "doc-1",
+        "revision_number": 1,
+        "title": "My Doc",
+        "content": "<p>canonical html</p>",
+        "content_format": "html",
+        "created_at": "2026-01-01T00:00:00Z",
+        "contract_version": CONTRACT_VERSION,
+    }
+
+
+def _make_revision_response() -> DocumentRevisionResponse:
+    return DocumentRevisionResponse(
+        revision_id="rev-1",
+        document_id="doc-1",
+        revision_number=1,
+        title="My Doc",
+        content="<p>canonical html</p>",
+        content_format=ContentFormat.HTML,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def test_document_revision_response_serializes_to_json() -> None:
+    """DocumentRevisionResponse serializes with all revision fields and version."""
+    payload = _make_revision_response().model_dump(mode="json")
+    json.dumps(payload)  # must not raise
+    assert payload == _revision_payload()
+
+
+def test_document_revision_response_requires_document_scoped_fields() -> None:
+    """The revision contract carries identity, snapshot, and history fields."""
+    revision = _make_revision_response()
+    assert revision.revision_id == "rev-1"
+    assert revision.document_id == "doc-1"
+    assert revision.revision_number == 1
+    assert revision.content_format is ContentFormat.HTML
+    assert revision.title == "My Doc"
+    assert revision.content == "<p>canonical html</p>"
+    assert revision.created_at.tzinfo is not None
+    assert revision.contract_version == CONTRACT_VERSION
+
+
+def test_document_revision_response_revision_number_stays_numeric() -> None:
+    """revision_number is an int sequence, never coerced to a string."""
+    revision = _make_revision_response()
+    assert isinstance(revision.revision_number, int)
+    assert revision.model_dump()["revision_number"] == 1
+    assert isinstance(revision.model_dump()["revision_number"], int)
+
+
+def test_document_revision_response_exposes_no_persistence_only_fields() -> None:
+    """No surrogate id, audit, restore, author, or parent fields leak."""
+    revision = _make_revision_response()
+    fields = set(DocumentRevisionResponse.model_fields)
+    assert fields == {
+        "revision_id",
+        "document_id",
+        "revision_number",
+        "title",
+        "content",
+        "content_format",
+        "created_at",
+        "contract_version",
+    }
+    payload = revision.model_dump()
+    assert "id" not in payload
+    assert "author" not in payload
+    assert "source" not in payload
+    assert "parent_revision" not in payload
+    assert "document_updated_at" not in payload
+
+
+def test_document_revision_list_response_serializes_to_json() -> None:
+    """DocumentRevisionListResponse carries document id and ordered revisions."""
+    response = DocumentRevisionListResponse(
+        document_id="doc-1",
+        revisions=[_make_revision_response()],
+    )
+    payload = response.model_dump(mode="json")
+    json.dumps(payload)  # must not raise
+    assert payload == {
+        "contract_version": CONTRACT_VERSION,
+        "document_id": "doc-1",
+        "revisions": [_revision_payload()],
+    }
+
+
+def test_document_revision_list_response_allows_empty_history() -> None:
+    """A known document with no history serializes an empty revisions list."""
+    response = DocumentRevisionListResponse(document_id="doc-1", revisions=[])
+    payload = response.model_dump(mode="json")
+    assert payload["revisions"] == []
+    assert payload["document_id"] == "doc-1"
+    assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_contract_version_is_independent_of_revision_number() -> None:
+    """contract_version is the transport schema; revision_number is document history.
+
+    A revision at sequence position N still carries the same transport
+    contract_version as every other revision, and the transport version never
+    changes as history advances.
+    """
+    first = DocumentRevisionResponse(
+        revision_id="rev-1",
+        document_id="doc-1",
+        revision_number=1,
+        title="T",
+        content="<p>a</p>",
+        content_format=ContentFormat.HTML,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    second = DocumentRevisionResponse(
+        revision_id="rev-2",
+        document_id="doc-1",
+        revision_number=2,
+        title="T",
+        content="<p>b</p>",
+        content_format=ContentFormat.HTML,
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    assert first.revision_number == 1
+    assert second.revision_number == 2
+    assert first.contract_version == second.contract_version == CONTRACT_VERSION
+    assert first.contract_version != str(first.revision_number)
+    assert second.contract_version != str(second.revision_number)
+
+
+# ============================================================
+# END: Document Revision Contract Tests
 # ============================================================

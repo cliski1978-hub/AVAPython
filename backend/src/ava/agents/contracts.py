@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel
 
 from ava.contracts.capabilities import CapabilityName
+from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 
@@ -32,6 +33,7 @@ class AgentRunResult(BaseModel):
 
     status: RunStatus
     content: str | None = None
+    execution_selection: RunExecutionSelection | None = None
 
 
 class AgentPort(ABC):

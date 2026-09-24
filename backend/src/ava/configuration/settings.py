@@ -12,6 +12,8 @@ configuration-driven.
 import os
 from dataclasses import dataclass, field
 
+from ava.contracts.models import ModelHostingMode
+
 # ============================================================
 # BEGIN: Settings
 # ============================================================
@@ -20,6 +22,58 @@ from dataclasses import dataclass, field
 def _env_str(name: str, default: str) -> str:
     """Read a string from the environment with a default."""
     return os.getenv(name, default)
+
+
+def _env_hosting_mode(name: str, default: ModelHostingMode) -> ModelHostingMode:
+    """Read a strictly validated model hosting mode from the environment.
+
+    An absent/blank value uses ``default``; an unrecognized explicit value is a
+    configuration error and is never silently downgraded or inferred.
+    """
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    try:
+        return ModelHostingMode(raw)
+    except ValueError as exc:
+        valid = ", ".join(mode.value for mode in ModelHostingMode)
+        raise ValueError(f"{name} must be one of: {valid}") from exc
+
+
+def _env_persistence_provider(name: str, default: str) -> str:
+    """Read a strictly validated persistence provider from the environment.
+
+    As with hosting mode, an absent/blank value uses ``default`` and an
+    unrecognized explicit value is a configuration error — never silently
+    downgraded. ``memory`` keeps the in-memory stores (the default);
+    ``relational`` selects the durable SQLite adapters that cover every Phase 4
+    domain (run, run-event, conversation, message, document, document revision,
+    and attachment) over one shared database.
+    """
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw not in {"memory", "relational"}:
+        raise ValueError(f"{name} must be one of: memory, relational")
+    return raw
+
+
+def _env_attachment_storage(name: str, default: str) -> str:
+    """Read a strictly validated attachment storage provider from the environment.
+
+    Mirrors persistence selection: an absent/blank value uses ``default`` and
+    an unrecognized explicit value is a configuration error — never silently
+    downgraded or fallen back to memory. ``memory`` keeps the in-memory content
+    store (the default); ``local`` selects the local-filesystem content adapter
+    and requires ``AVA_ATTACHMENT_STORAGE_ROOT``. Selection is independent of
+    the metadata persistence provider (``AVA_PERSISTENCE``).
+    """
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw not in {"memory", "local"}:
+        raise ValueError(f"{name} must be one of: memory, local")
+    return raw
 
 
 def _env_int(name: str, default: int) -> int:
@@ -50,9 +104,62 @@ class Settings:
     debug: bool = field(default_factory=lambda: _env_bool("AVA_DEBUG", True))
     log_level: str = field(default_factory=lambda: _env_str("AVA_LOG_LEVEL", "info"))
 
-    # Provider selection (configuration-driven; not functional yet)
+    # Provider selection (configuration-driven)
     agent_provider: str = field(default_factory=lambda: _env_str("AVA_AGENT_PROVIDER", "mock"))
+    agent_runtime: str = field(default_factory=lambda: _env_str("AVA_AGENT_RUNTIME", "native"))
     model_provider: str = field(default_factory=lambda: _env_str("AVA_MODEL_PROVIDER", "local"))
+    model_name: str = field(default_factory=lambda: _env_str("AVA_MODEL_NAME", "local-model"))
+    # Stable AVA model identity (provider-neutral). Blank derives a legacy id
+    # from provider + model name so existing deployments need no reconfiguration.
+    model_id: str = field(default_factory=lambda: _env_str("AVA_MODEL_ID", ""))
+    # Server-owned deployment placement. The bootstrap local path defaults to
+    # LOCAL; it is never inferred from the provider id, protocol, or endpoint.
+    model_hosting_mode: ModelHostingMode = field(
+        default_factory=lambda: _env_hosting_mode("AVA_MODEL_HOSTING_MODE", ModelHostingMode.LOCAL)
+    )
+
+    # Model provider transport (endpoint-level, not carried into core config)
+    local_model_base_url: str = field(
+        default_factory=lambda: _env_str("AVA_LOCAL_MODEL_BASE_URL", "http://localhost:11434/v1")
+    )
+
+    # Persistence provider (Phase 4). "memory" (the default) keeps the
+    # in-memory stores; "relational" activates the durable SQLite adapters for
+    # every Phase 4 domain over one shared database.
+    persistence_provider: str = field(
+        default_factory=lambda: _env_persistence_provider("AVA_PERSISTENCE", "memory")
+    )
+    # Database location used when ``persistence_provider`` is ``relational``.
+    persistence_database_url: str = field(
+        default_factory=lambda: _env_str("AVA_PERSISTENCE_DATABASE_URL", "ava.sqlite3")
+    )
+
+    # Attachment content storage (Step 4.14.D). Independent of the metadata
+    # persistence provider: ``AVA_PERSISTENCE`` and ``AVA_ATTACHMENT_STORAGE``
+    # are orthogonal selections. ``memory`` (the default) keeps the in-memory
+    # content store; ``local`` selects the local-filesystem adapter and requires
+    # an explicit ``AVA_ATTACHMENT_STORAGE_ROOT``. In ``memory`` mode the root
+    # may be absent and is ignored.
+    attachment_storage: str = field(
+        default_factory=lambda: _env_attachment_storage("AVA_ATTACHMENT_STORAGE", "memory")
+    )
+    # Filesystem root used when ``attachment_storage`` is ``local``.
+    attachment_storage_root: str = field(
+        default_factory=lambda: _env_str("AVA_ATTACHMENT_STORAGE_ROOT", "")
+    )
+
+    def __post_init__(self) -> None:
+        if self.attachment_storage == "local" and not self.attachment_storage_root.strip():
+            raise ValueError(
+                "AVA_ATTACHMENT_STORAGE=local requires AVA_ATTACHMENT_STORAGE_ROOT to be set"
+            )
+
+    @property
+    def resolved_model_id(self) -> str:
+        """Return the stable AVA model identity, deriving a legacy id if unset."""
+        if self.model_id.strip():
+            return self.model_id
+        return f"{self.model_provider}-{self.model_name}"
 
     @property
     def is_debug(self) -> bool:

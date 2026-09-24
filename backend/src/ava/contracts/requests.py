@@ -5,6 +5,7 @@ Framework-neutral request DTOs. Vendor SDK objects must never appear here.
 
 from pydantic import BaseModel, Field, field_validator
 
+from ava.contracts.execution import RunExecutionOverride
 from ava.contracts.version import CONTRACT_VERSION
 
 # ============================================================
@@ -24,6 +25,8 @@ class RunRequest(BaseModel):
     """
 
     prompt: str = Field(min_length=1)
+    execution: RunExecutionOverride | None = None
+    workspace_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
     @field_validator("prompt")

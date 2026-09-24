@@ -13,6 +13,7 @@ Never the reverse. Framework types must never escape adapters.
 """
 
 import ast
+import re
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src" / "ava"
@@ -20,8 +21,18 @@ CORE_DIR = SRC_DIR / "core"
 CONTRACTS_DIR = SRC_DIR / "contracts"
 SERVICES_DIR = SRC_DIR / "services"
 API_DIR = SRC_DIR / "api"
+AGENTS_DIR = SRC_DIR / "agents"
 AGENT_ADAPTERS_DIR = SRC_DIR / "agents" / "adapters"
 MOCK_ADAPTER_DIR = AGENT_ADAPTERS_DIR / "mock"
+MODELS_DIR = SRC_DIR / "models"
+MODELS_PORT_FILE = MODELS_DIR / "contracts.py"
+MODELS_REGISTRY_FILE = MODELS_DIR / "model_registry.py"
+MODELS_RESOLVER_FILE = MODELS_DIR / "resolver.py"
+OPENAI_COMPATIBLE_PROVIDER_DIR = MODELS_DIR / "providers" / "openai_compatible"
+CONFIGURATION_DIR = SRC_DIR / "configuration"
+INFRASTRUCTURE_DIR = SRC_DIR / "infrastructure"
+PERSISTENCE_DIR = INFRASTRUCTURE_DIR / "persistence"
+REPOSITORIES_DIR = SRC_DIR / "repositories"
 
 # Vendor/provider modules that must never appear in AVA core or contracts.
 FORBIDDEN_IMPORTS = {
@@ -47,6 +58,7 @@ INTERNAL_BOUNDARIES: dict[str, set[str]] = {
     "core": {"api", "infrastructure", "services"},
     "contracts": {"api", "infrastructure", "services", "agents", "models"},
     "services": {"api", "infrastructure"},
+    "repositories": {"api", "infrastructure", "services", "agents", "models", "core"},
 }
 
 # Modules in agents/models that are ports and may be imported by core/services.
@@ -78,8 +90,11 @@ def _ava_imports(tree: ast.Module) -> set[str]:
             for alias in node.names:
                 if alias.name == "ava" or alias.name.startswith("ava."):
                     paths.add(alias.name)
-        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and (
-            node.module == "ava" or node.module.startswith("ava.")
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+            and (node.module == "ava" or node.module.startswith("ava."))
         ):
             paths.add(node.module)
     return paths
@@ -185,6 +200,234 @@ def test_mock_adapter_depends_only_on_ports_and_contracts() -> None:
 
 
 # ============================================================
+# BEGIN: Model Port Independence Tests
+# ============================================================
+
+
+def test_model_port_must_not_import_forbidden_modules() -> None:
+    """The model provider port must be free of vendor/provider and transport libraries.
+
+    ``ava.models.contracts`` defines the ``ModelProviderPort`` abstraction.
+    AVA Core programs against it; real provider SDKs must not leak into the
+    port layer.
+    """
+    violations: list[str] = []
+    for path in (MODELS_PORT_FILE,):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in FORBIDDEN_IMPORTS:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Forbidden imports in models port:\n" + "\n".join(violations)
+
+
+def test_model_port_depends_only_on_contracts() -> None:
+    """The model port must depend inward on AVA contracts only.
+
+    It may never reach outward into AVA services, core, API layer,
+    agents, infrastructure, or concrete provider implementations.
+    The same constraint applies to other modules in the models layer
+    (e.g. the provider registry), which may depend on the port or on
+    contracts but on nothing outward.
+    """
+    allowed = {"contracts", "models"}
+    violations: list[str] = []
+    for path in _iter_python_files(MODELS_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for sibling in _ava_sibling_imports(tree):
+            if sibling not in allowed:
+                violations.append(f"{path}: imports 'ava.{sibling}'")
+    assert not violations, "Outward imports in models layer:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Model Port Independence Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Model Resolver Independence Tests
+# ============================================================
+
+
+def test_model_resolver_depends_only_on_models_and_contracts() -> None:
+    """The resolver may depend only on the registry, the port, and contracts.
+
+    It must never import vendor/provider SDKs, the agent ports/adapters,
+    RunService, runtime frameworks, configuration, or any outward layer.
+    Resolution is AVA-identity-based only.
+    """
+    allowed = {"contracts", "models"}
+    violations: list[str] = []
+    tree = ast.parse(
+        MODELS_RESOLVER_FILE.read_text(encoding="utf-8"),
+        filename=str(MODELS_RESOLVER_FILE),
+    )
+    for name in _top_level_imports(tree):
+        if name in FORBIDDEN_IMPORTS:
+            violations.append(f"{MODELS_RESOLVER_FILE}: imports '{name}'")
+    for sibling in _ava_sibling_imports(tree):
+        if sibling not in allowed:
+            violations.append(f"{MODELS_RESOLVER_FILE}: imports 'ava.{sibling}'")
+    assert not violations, "Resolver dependency violations:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Model Resolver Independence Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Model Provider Discovery Service Independence Tests
+# ============================================================
+
+
+def test_model_provider_discovery_service_imports_only_contracts_and_model_ports() -> None:
+    """The discovery service depends only on contracts and the model layer.
+
+    Discovery answers "what providers are available?" through the registry and
+    ``ModelProviderPort``; it must never import concrete providers, HTTP
+    clients, configuration, agent layers, runtime frameworks, the API layer,
+    or infrastructure. The route-side guard (API layer never imports concrete
+    providers) already covers its consumer.
+    """
+    file = SERVICES_DIR / "model_provider_discovery_service.py"
+    allowed = {"contracts", "models"}
+    violations: list[str] = []
+    tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+    for name in _top_level_imports(tree):
+        if name in FORBIDDEN_IMPORTS:
+            violations.append(f"{file}: imports forbidden module '{name}'")
+    for import_path in _ava_imports(tree):
+        if import_path.startswith("ava.models.providers"):
+            violations.append(f"{file}: imports concrete provider '{import_path}'")
+    for sibling in _ava_sibling_imports(tree):
+        if sibling not in allowed:
+            violations.append(f"{file}: imports 'ava.{sibling}'")
+    assert not violations, "Discovery service dependency violations:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Model Provider Discovery Service Independence Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: OpenAI-Compatible Provider Independence Tests
+# ============================================================
+
+
+def test_openai_compatible_provider_imports_only_contracts_and_http() -> None:
+    """The concrete provider may depend only on AVA contracts + a generic HTTP client.
+
+    It may never depend on the registry, the resolver, configuration, agent
+    layers, services, the API layer, or vendor SDKs. The provider is a pure
+    protocol adapter: it does not register itself and does not know its AVA
+    registry id.
+    """
+    allowed_siblings = {"contracts", "models"}
+    violations: list[str] = []
+    for path in _iter_python_files(OPENAI_COMPATIBLE_PROVIDER_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in FORBIDDEN_IMPORTS:
+                violations.append(f"{path}: imports forbidden module '{name}'")
+        for import_path in _ava_imports(tree):
+            parts = import_path.split(".")
+            if len(parts) < 2 or parts[1] not in allowed_siblings:
+                violations.append(f"{path}: imports '{import_path}'")
+            if import_path.startswith("ava.models.registry") or import_path.startswith("ava.models.resolver"):
+                violations.append(f"{path}: imports registry/resolver '{import_path}'")
+    assert not violations, "OpenAI-compatible provider dependency violations:\n" + "\n".join(violations)
+
+
+def test_runtime_layers_must_not_import_openai_compatible_provider() -> None:
+    """API, services, core, and agent layers never import the concrete provider.
+
+    RunService (services) and AgentPort (agents) reach models only through the
+    ``ModelProviderPort`` abstraction; importing the concrete OpenAI-compatible
+    adapter in these runtime layers would couple execution to a vendor protocol.
+    """
+    runtime_dirs = (API_DIR, SERVICES_DIR, CORE_DIR, AGENTS_DIR)
+    violations: list[str] = []
+    for directory in runtime_dirs:
+        for path in _iter_python_files(directory):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for import_path in _ava_imports(tree):
+                if import_path.startswith("ava.models.providers.openai_compatible"):
+                    violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Concrete provider imports in runtime layers:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: OpenAI-Compatible Provider Independence Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Provider Construction Localization Tests
+# ============================================================
+
+
+def test_provider_construction_is_localized_to_infrastructure() -> None:
+    """The concrete model provider is constructed only by the composition layer.
+
+    ``ava.models.providers.openai_compatible`` may be imported by its own
+    package and by the infrastructure composition module (where the configured
+    provider is built and registered). Every other AVA module — including the
+    API factory and its routes — must reach the provider only through
+    composition, so provider choice stays a configuration decision.
+    """
+    allowed = (
+        OPENAI_COMPATIBLE_PROVIDER_DIR,  # the adapter's own package
+        INFRASTRUCTURE_DIR / "composition.py",  # provider construction site
+    )
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if any(path.is_relative_to(directory) for directory in allowed):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if import_path.startswith("ava.models.providers.openai_compatible"):
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Provider imports outside infrastructure composition:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Provider Construction Localization Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Configuration Independence Tests
+# ============================================================
+
+
+def test_configuration_must_not_import_registry_or_providers() -> None:
+    """The configuration layer must not depend on the registry or providers.
+
+    Configuration answers only what the application is configured to use. It
+    must never reach into provider resolution, the ``ModelProviderRegistry``,
+    or concrete model-provider adapters — those belong to the resolution step.
+    """
+    forbidden_prefixes = (
+        "ava.models.registry",
+        "ava.models.providers",
+    )
+    violations: list[str] = []
+    for path in _iter_python_files(CONFIGURATION_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if any(import_path.startswith(prefix) for prefix in forbidden_prefixes):
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Registry/provider imports in configuration layer:\n" + "\n".join(violations)
+
+
+# ============================================================
+# END: Configuration Independence Tests
+# ============================================================
+
+
+# ============================================================
 # BEGIN: Internal Dependency Direction Tests
 # ============================================================
 
@@ -216,9 +459,7 @@ def test_api_must_not_import_concrete_adapters() -> None:
     for path in _iter_python_files(API_DIR):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for import_path in _ava_imports(tree):
-            if import_path.startswith("ava.agents.adapters") or import_path.startswith(
-                "ava.models.providers"
-            ):
+            if import_path.startswith("ava.agents.adapters") or import_path.startswith("ava.models.providers"):
                 violations.append(f"{path}: imports '{import_path}'")
     assert not violations, "Adapter imports in the API layer:\n" + "\n".join(violations)
 
@@ -234,9 +475,7 @@ def test_services_must_not_import_concrete_adapters() -> None:
     for path in _iter_python_files(SERVICES_DIR):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for import_path in _ava_imports(tree):
-            if import_path.startswith("ava.agents.adapters") or import_path.startswith(
-                "ava.models.providers"
-            ):
+            if import_path.startswith("ava.agents.adapters") or import_path.startswith("ava.models.providers"):
                 violations.append(f"{path}: imports '{import_path}'")
     assert not violations, "Adapter imports in the services layer:\n" + "\n".join(violations)
 
@@ -260,4 +499,1300 @@ def test_core_may_import_agents_and_models_only_through_their_ports() -> None:
 
 # ============================================================
 # END: Internal Dependency Direction Tests
+# ============================================================
+
+
+def test_native_agent_depends_only_on_contracts_and_stdlib() -> None:
+    """Additive native guard, including the AVA error contract's actual location."""
+    import sys
+
+    files = _iter_python_files(AGENT_ADAPTERS_DIR / "native")
+    assert files
+    allowed = {
+        "ava.agents.contracts",
+        "ava.models.bindings",
+        "ava.models.contracts",
+        "ava.models.errors",
+        "ava.models.model_registry",
+        "ava.runtimes.contracts",
+    }
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0, f"Relative import bypass in {path}"
+        for name in _top_level_imports(tree):
+            assert name == "ava" or name in sys.stdlib_module_names, (path, name)
+        for name in _ava_imports(tree):
+            assert (
+                name in allowed
+                or name == "ava.contracts"
+                or name.startswith("ava.contracts.")
+                or name == "ava.workspaces"
+                or name.startswith("ava.workspaces.")
+                or name.startswith("ava.execution.")
+            ), (path, name)
+
+
+def test_run_service_remains_model_provider_free() -> None:
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    assert not any(name.startswith("ava.models") for name in _ava_imports(tree))
+
+
+def test_runtime_contract_layer_depends_only_on_ava_abstractions() -> None:
+    """Allow Pydantic DTOs, stdlib, and inward contracts; reject outward imports."""
+    import sys
+
+    files = [SRC_DIR / "runtimes" / "contracts.py", SRC_DIR / "runtimes" / "__init__.py"]
+    assert files
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0, f"Relative import bypass in {path}"
+        for name in _top_level_imports(tree):
+            assert name in {"ava", "pydantic"} or name in sys.stdlib_module_names, (path, name)
+        for name in _ava_imports(tree):
+            allowed = (
+                name == "ava.models.contracts"
+                or name == "ava.models.bindings"
+                or name == "ava.workspaces.contracts"
+                or name.startswith("ava.contracts.")
+            )
+            if path.name == "__init__.py":
+                allowed = allowed or name in {
+                    "ava.runtimes.contracts",
+                    "ava.runtimes.registry",
+                    "ava.runtimes.resolver",
+                }
+            assert allowed, (path, name)
+
+
+def test_model_and_data_contracts_do_not_depend_on_runtime_port() -> None:
+    for path in [*_iter_python_files(CONTRACTS_DIR), MODELS_PORT_FILE]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assert not any(name.startswith("ava.runtimes") for name in _ava_imports(tree)), path
+
+
+def test_run_service_does_not_depend_on_runtime_contracts() -> None:
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    assert not any(name.startswith(("ava.runtimes", "ava.contracts.runtimes")) for name in _ava_imports(tree))
+
+
+def test_native_runtime_depends_only_on_ports_and_contracts() -> None:
+    """Implementation guard separate from the stricter runtime-port guard."""
+    import sys
+
+    files = _iter_python_files(SRC_DIR / "runtimes" / "adapters")
+    assert files
+    allowed = {
+        "ava.models.contracts",
+        "ava.models.errors",
+        "ava.models.bindings",
+        "ava.execution.command_policy",
+        "ava.execution.tool_security",
+        "ava.execution.sandbox",
+        "ava.runtimes.contracts",
+        "ava.runtimes.qualification",
+        "ava.workspaces.contracts",
+    }
+    openhands_adapter_dir = SRC_DIR / "runtimes" / "adapters" / "openhands"
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0, f"Relative import bypass in {path}"
+        for name in _top_level_imports(tree):
+            # OpenHands imports live only inside the OpenHands adapter
+            # subpackage (the sanctioned adapter-local boundary); the SDK import
+            # inside execute() is lazy and never eager.
+            if name == "openhands" and path.is_relative_to(openhands_adapter_dir):
+                continue
+            assert name == "ava" or name in sys.stdlib_module_names, (path, name)
+        for name in _ava_imports(tree):
+            assert name in allowed or name.startswith("ava.contracts.") or name.startswith("ava.runtimes.adapters."), (
+                path,
+                name,
+            )
+
+
+def test_openhands_adapter_never_builds_terminal_task_or_shell() -> None:
+    """Architecture guard: OpenHands adapter has no terminal/exec tools or shell.
+
+    Step 33 grants FileEditorTool only. No TerminalTool, TaskTrackerTool,
+    browser, delegation, apply_patch, or subprocess-style execution may be
+    referenced anywhere in the adapter subpackage.
+    """
+    violations: list[str] = []
+    forbidden_modules = {
+        "openhands.tools.terminal",
+        "openhands.tools.task_tracker",
+        "openhands.tools.task",
+        "openhands.tools.browser_use",
+        "openhands.tools.delegate",
+        "openhands.tools.apply_patch",
+        "subprocess",
+        "shlex",
+    }
+    forbidden_calls = {"os.system", "os.popen"}
+
+    for path in _iter_python_files(SRC_DIR / "runtimes" / "adapters" / "openhands"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden_modules:
+                        violations.append(f"{path}: imports '{alias.name}'")
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in forbidden_modules:
+                violations.append(f"{path}: imports '{node.module}'")
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                base = getattr(node.func.value, "value", None) or getattr(node.func.value, "id", "")
+                candidate = f"{base}.{node.func.attr}"
+                if candidate in forbidden_calls:
+                    violations.append(f"{path}: calls '{candidate}'")
+    assert not violations, "Forbidden tool/shell usage in OpenHands adapter:\n" + "\n".join(violations)
+
+
+def test_command_policy_is_runtime_neutral_and_never_executes_commands() -> None:
+    """The Step 34 policy seam must not depend on OpenHands or run processes."""
+    path = SRC_DIR / "execution" / "command_policy.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    forbidden = {"openhands", "subprocess", "os", "shlex"}
+    imports = _top_level_imports(tree)
+    assert not imports.intersection(forbidden), (path, imports.intersection(forbidden))
+
+
+def test_public_run_request_has_no_shell_escalation_fields() -> None:
+    """Clients select an opaque workspace, never terminal authority."""
+    path = CONTRACTS_DIR / "requests.py"
+    text = path.read_text(encoding="utf-8")
+    for field in ("allow_shell", "enable_terminal", "allow_commands", "command_permissions"):
+        assert field not in text, f"Public RunRequest must not expose {field}"
+
+
+def test_runtime_registry_depends_only_on_runtime_port() -> None:
+    """The container must not know models, implementations, or outward layers."""
+    import sys
+
+    path = SRC_DIR / "runtimes" / "registry.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.level == 0, f"Relative import bypass in {path}"
+    for name in _top_level_imports(tree):
+        assert name == "ava" or name in sys.stdlib_module_names, (path, name)
+    assert _ava_imports(tree) == {"ava.runtimes.contracts"}
+
+
+def test_runtime_resolver_depends_only_on_runtime_port_and_registry() -> None:
+    """Resolution must not depend on models, implementations, or configuration."""
+    import sys
+
+    path = SRC_DIR / "runtimes" / "resolver.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.level == 0, f"Relative import bypass in {path}"
+    for name in _top_level_imports(tree):
+        assert name == "ava" or name in sys.stdlib_module_names, (path, name)
+    assert _ava_imports(tree) == {"ava.runtimes.contracts", "ava.runtimes.registry"}
+
+
+def test_workspace_discovery_service_imports_only_contracts_and_workspaces() -> None:
+    """Workspace discovery depends only on contracts and the workspaces layer.
+
+    Discovery answers "what workspaces are approved?" through the shared
+    ``WorkspaceRegistry``; it must never import models, runtimes, adapters,
+    configuration, the API layer, or infrastructure. It creates no
+    ``RuntimeWorkspaceBinding`` and performs no filesystem/network activity.
+    """
+    file = SERVICES_DIR / "workspace_discovery_service.py"
+    allowed = {"contracts", "workspaces"}
+    violations: list[str] = []
+    tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+    for name in _top_level_imports(tree):
+        if name in FORBIDDEN_IMPORTS:
+            violations.append(f"{file}: imports forbidden module '{name}'")
+    for sibling in _ava_sibling_imports(tree):
+        if sibling not in allowed:
+            violations.append(f"{file}: imports 'ava.{sibling}'")
+    assert not violations, "Workspace discovery service dependency violations:\n" + "\n".join(violations)
+
+
+# ============================================================
+# BEGIN: Workspace Security Boundary Tests
+# ============================================================
+
+
+def test_workspace_registry_and_resolver_depend_only_on_workspaces() -> None:
+    """The registry/resolver must not know runtimes, models, or outward layers."""
+    import sys
+
+    for path in (SRC_DIR / "workspaces" / "registry.py", SRC_DIR / "workspaces" / "resolver.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0, f"Relative import bypass in {path}"
+        for name in _top_level_imports(tree):
+            assert name == "ava" or name in sys.stdlib_module_names, (path, name)
+        siblings = {p.split(".")[1] for p in _ava_imports(tree) if len(p.split(".")) >= 2}
+        assert siblings <= {"workspaces"}, (path, siblings)
+
+
+def test_runtime_adapters_must_not_import_workspace_resolver_or_registry() -> None:
+    """Runtimes receive only approved bindings; they never resolve workspace ids."""
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR / "runtimes" / "adapters"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _ava_imports(tree):
+            if name.startswith(("ava.workspaces.resolver", "ava.workspaces.registry")):
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Workspace resolver/registry imports in runtime adapters:\n" + "\n".join(violations)
+
+
+def test_run_service_remains_workspace_free() -> None:
+    """RunService depends only on AgentPort and never learns about workspaces."""
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    assert not any(name.startswith("ava.workspaces") for name in _ava_imports(tree))
+
+
+def test_agent_port_contract_remains_workspace_free() -> None:
+    """The public AgentPort interface is unchanged by workspace orchestration.
+
+    ``RunRequest`` already carries the opaque ``workspace_id``; workspace
+    resolution lives inside the adapter implementation, not on the port.
+    """
+    tree = ast.parse((AGENTS_DIR / "contracts.py").read_text(encoding="utf-8"))
+    assert not any(name.startswith("ava.workspaces") for name in _ava_imports(tree))
+
+
+# ============================================================
+# END: Workspace Security Boundary Tests
+# ============================================================
+
+
+def test_tool_security_has_no_runtime_model_or_provider_dependency() -> None:
+    path = SRC_DIR / "execution" / "tool_security.py"
+    tree = ast.parse(path.read_text())
+    assert not (_top_level_imports(tree) & {"openhands", "litellm", "ollama"})
+    assert not (_ava_sibling_imports(tree) & {"models", "runtimes", "infrastructure"})
+    policy = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ToolAuthorizationPolicy"
+    )
+    names = {node.id for node in ast.walk(policy) if isinstance(node, ast.Name)}
+    assert not (names & {"model_id", "provider", "runtime_id", "profile", "prompt"})
+
+
+def test_run_service_does_not_own_security_policy() -> None:
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text())
+    assert not (_ava_sibling_imports(tree) & {"execution", "workspaces", "runtimes"})
+    assert not any(
+        isinstance(node, ast.Name) and node.id in {"ToolAuthorizationPolicy", "WorkspaceRegistry", "RuntimeRegistry"}
+        for node in ast.walk(tree)
+    )
+
+
+def test_public_request_has_no_permission_or_sandbox_grants() -> None:
+    from ava.contracts.requests import RunRequest
+
+    assert not (
+        set(RunRequest.model_fields)
+        & {
+            "allow_shell",
+            "enable_shell",
+            "allow_write",
+            "enable_network",
+            "permissions",
+            "workspace_root",
+            "sandbox",
+        }
+    )
+
+
+# ============================================================
+# BEGIN: Multi-Model Descriptive-Not-Authoritative Boundary Tests
+# ============================================================
+
+_DESCRIPTIVE_MODEL_FIELDS = {
+    "permissions",
+    "allow_shell",
+    "allow_write",
+    "allow_network",
+    "workspace_permissions",
+    "sandbox_limits",
+    "sandbox",
+    "capability_grant",
+    "elevated",
+}
+
+
+def test_model_and_runtime_metadata_contracts_carry_no_permission_grants() -> None:
+    """Model/runtime metadata stays descriptive and never grants authority.
+
+    A model's declared capabilities, runtime capabilities, provider health, and
+    selection identities may inform routing, but they must never carry a
+    permission, sandbox limit, or capability grant. Security decisions remain
+    server/workspace-owned (Steps 32-36).
+    """
+    from ava.contracts.execution import RunExecutionOverride, RunExecutionSelection
+    from ava.contracts.models import ModelCapabilities, ModelInfo, ModelProviderHealth
+    from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
+
+    for model in (
+        ModelCapabilities,
+        ModelInfo,
+        ModelProviderHealth,
+        RuntimeCapabilities,
+        RuntimeInfo,
+        RunExecutionSelection,
+        RunExecutionOverride,
+    ):
+        assert not (set(model.model_fields) & _DESCRIPTIVE_MODEL_FIELDS), model.__name__
+
+
+def test_runtime_model_binding_carries_no_permission_grants() -> None:
+    """The provider-to-runtime binding transports identity, not authority."""
+    from ava.models.bindings import ConfiguredModelBinding, RuntimeModelBinding
+
+    for binding in (ConfiguredModelBinding, RuntimeModelBinding):
+        assert not (set(binding.__dataclass_fields__) & _DESCRIPTIVE_MODEL_FIELDS), binding.__name__
+
+
+def test_hosting_mode_is_closed_descriptive_metadata() -> None:
+    """Hosting placement is a closed, descriptive enum — never authority.
+
+    Added in Step 39 and refined in Step 40: exactly local/company_hosted/external,
+    kept off the capability contract, and never a permission field on the binding.
+    Step 40 intentionally exposes it as descriptive metadata on the read-only
+    ``ModelInfo`` catalog, so it is now present there (but still not a capability
+    and still absent from ``_DESCRIPTIVE_MODEL_FIELDS``).
+    """
+    from ava.contracts.models import ModelCapabilities, ModelHostingMode, ModelInfo
+    from ava.models.bindings import ConfiguredModelBinding
+
+    assert {mode.value for mode in ModelHostingMode} == {"local", "company_hosted", "external"}
+    assert "hosting_mode" not in ModelCapabilities.model_fields
+    assert "hosting_mode" in ModelInfo.model_fields
+    assert "hosting_mode" not in _DESCRIPTIVE_MODEL_FIELDS
+    binding_fields = set(ConfiguredModelBinding.__dataclass_fields__) & _DESCRIPTIVE_MODEL_FIELDS
+    assert not binding_fields
+
+
+# ============================================================
+# END: Multi-Model Descriptive-Not-Authoritative Boundary Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Model Registry Boundary Tests
+# ============================================================
+
+
+def test_model_registry_is_a_pure_catalog() -> None:
+    """The Model Registry depends only on contracts/stdlib, not infrastructure.
+
+    Step 40 introduces ``ava.models.model_registry`` as the single source of
+    truth for configured models. It must stay a pure, in-process catalog: no
+    provider adapters, no runtime adapters, no API/service/infrastructure, and
+    no framework types.
+    """
+    import sys
+
+    tree = ast.parse(MODELS_REGISTRY_FILE.read_text(encoding="utf-8"))
+    for name in _top_level_imports(tree):
+        assert name in {"ava", "dataclasses", "builtins"} or name in sys.stdlib_module_names, name
+    for name in _ava_imports(tree):
+        assert name == "ava.contracts.models", name
+
+
+def test_model_qualification_store_is_harness_and_runtime_independent() -> None:
+    """Step 41 metadata lookup must not consume or invoke qualification harnesses."""
+    tree = ast.parse((MODELS_DIR / "qualifications.py").read_text(encoding="utf-8"))
+    imported = _ava_imports(tree)
+    assert "ava.runtimes.qualification" not in imported
+    assert not any(name.startswith("ava.runtimes") for name in imported)
+    assert not any(name.startswith("ava.models.providers") for name in imported)
+    assert not any(name.startswith("ava.infrastructure") for name in imported)
+
+
+def test_model_orchestrator_has_no_security_or_runtime_adapter_dependency() -> None:
+    """Selection metadata cannot become a workspace/tool/security authority."""
+    tree = ast.parse((SRC_DIR / "execution" / "model_orchestrator.py").read_text(encoding="utf-8"))
+    imported = _ava_imports(tree)
+    forbidden = (
+        "ava.execution.tool_security",
+        "ava.execution.model_resources",
+        "ava.infrastructure.sandbox",
+        "ava.workspaces",
+        "ava.runtimes",
+        "ava.models.providers",
+    )
+    assert not any(name.startswith(forbidden) for name in imported)
+
+
+def test_model_resource_manager_has_no_workspace_or_security_dependency() -> None:
+    """Resource lifecycle cannot become a permission or workspace authority.
+
+    The resource manager executes an already-selected model; it must never
+    select models (no orchestration/routing scope) and must stay away from
+    workspace, tool, sandbox, provider-implementation, and runtime-adapter
+    authority.
+    """
+    tree = ast.parse((SRC_DIR / "execution" / "model_resources.py").read_text(encoding="utf-8"))
+    imported = _ava_imports(tree)
+    forbidden = (
+        "ava.execution.model_orchestrator",
+        "ava.execution.routing",
+        "ava.execution.tool_security",
+        "ava.infrastructure.sandbox",
+        "ava.workspaces",
+        "ava.runtimes",
+        "ava.models.providers",
+    )
+    assert not any(name.startswith(forbidden) for name in imported)
+
+
+def test_model_registry_holds_no_operational_resource_state() -> None:
+    """Declared metadata and live resource state stay separate concepts.
+
+    ``ModelProfile``/``ModelRegistry`` describe configured models; the resource
+    manager keeps its descriptors, states, leases, and capacity elsewhere. A
+    registry-bound file must never reference the resource layer.
+    """
+    tree = ast.parse(MODELS_REGISTRY_FILE.read_text(encoding="utf-8"))
+    imported = _ava_imports(tree)
+    assert not any("resources" in name for name in imported)
+    assert not any("leases" in name.lower() for name in imported)
+
+
+def test_run_service_does_not_depend_on_model_registry() -> None:
+    """Registry resolution stays below the AgentPort; RunService is unaware of it."""
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    imported = _ava_imports(tree)
+    assert not any(name == "ava.models.model_registry" for name in imported)
+    assert not any(name.startswith("ava.models") for name in imported)
+
+
+def test_model_discovery_route_does_not_import_concrete_providers() -> None:
+    """The /models catalog route is registry/service-backed, never provider-aware."""
+    tree = ast.parse((API_DIR / "routes" / "models.py").read_text(encoding="utf-8"))
+    for name in _ava_imports(tree):
+        assert not name.startswith("ava.models.providers"), name
+        assert not name.startswith("ava.models.adapters"), name
+        assert not name.startswith("ava.runtimes.adapters"), name
+
+
+# ============================================================
+# END: Model Registry Boundary Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Persistence Repository Port Boundary Tests
+# ============================================================
+
+#: Modules a repository port must never import: vendor/framework/database.
+REPOSITORY_FORBIDDEN_MODULES = FORBIDDEN_IMPORTS | {
+    "aiosqlite",
+    "asyncpg",
+    "databases",
+    "duckdb",
+    "peewee",
+    "psycopg",
+    "psycopg2",
+    "pymysql",
+    "pymongo",
+    "redis",
+    "sqlalchemy",
+    "sqlite3",
+    "sqlmodel",
+}
+
+
+def test_repository_ports_import_no_forbidden_or_database_modules() -> None:
+    """Repository ports must not import SQL/ORM/database, vendor, or framework modules."""
+    violations: list[str] = []
+    for path in _iter_python_files(REPOSITORIES_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in REPOSITORY_FORBIDDEN_MODULES:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Forbidden imports in repository ports:\n" + "\n".join(violations)
+
+
+def test_repository_ports_depend_only_on_contracts_and_each_other() -> None:
+    """Repository ports use only AVA-owned types: contracts + sibling ports.
+
+    No runtime/model/provider implementations, no FastAPI/API layer, no
+    infrastructure, no services, no core. Anything else crossing the port
+    boundary would leak framework or database concepts into the contract.
+    """
+    allowed_siblings = {"contracts", "repositories"}
+    violations: list[str] = []
+    for path in _iter_python_files(REPOSITORIES_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _ava_imports(tree):
+            parts = name.split(".")
+            if len(parts) >= 2 and parts[1] not in allowed_siblings:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Outward imports in repository ports:\n" + "\n".join(violations)
+
+
+def test_content_store_ports_stay_free_of_filesystem_stdlib() -> None:
+    """Ports, contracts, and services never touch the filesystem directly.
+
+    Step 4.14.D introduces the first physical content adapter; it lives in
+    ``ava.infrastructure`` precisely so ``os`` / ``pathlib`` / ``tempfile``
+    machinery never leaks into the storage-neutral ports, contracts, or
+    services. The in-memory service adapter uses only ``io``.
+    """
+    violations: list[str] = []
+    for directory in (REPOSITORIES_DIR, CONTRACTS_DIR, SERVICES_DIR):
+        for path in _iter_python_files(directory):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for name in _top_level_imports(tree):
+                if name in {"os", "pathlib", "tempfile"}:
+                    violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Filesystem imports outside infrastructure:\n" + "\n".join(violations)
+
+
+def test_local_attachment_content_store_lives_in_infrastructure() -> None:
+    """The local content adapter is an infrastructure adapter over the port."""
+    from ava.infrastructure.attachment_content_store import LocalAttachmentContentStore
+    from ava.repositories import AttachmentContentStore
+
+    assert issubclass(LocalAttachmentContentStore, AttachmentContentStore)
+    assert LocalAttachmentContentStore.__module__.startswith("ava.infrastructure")
+    assert AttachmentContentStore.__abstractmethods__ == frozenset({"put", "open", "exists"})
+
+
+def test_attachment_service_programs_against_ports_only() -> None:
+    """AttachmentService depends on contracts + ports, never concrete adapters.
+
+    Step 4.14.E keeps the orchestration slice backend-neutral: it may import
+    the AVA contracts and the two ports (``AttachmentRepository``,
+    ``AttachmentContentStore``) and must never name the concrete stores, the
+    database layer, the local content adapter, or infrastructure. Composition
+    (``create_app``) injects the port implementations.
+    """
+    path = SERVICES_DIR / "attachment_service.py"
+    imports = _ava_imports(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+
+    assert imports & {
+        "ava.contracts",
+        "ava.contracts.attachments",
+        "ava.repositories.attachment_content_store",
+        "ava.repositories.attachment_repository",
+    }
+    forbidden_prefixes = (
+        "ava.infrastructure",
+        "ava.services.attachment_content_store",
+        "ava.services.attachment_store",
+    )
+    assert not any(name.startswith(forbidden_prefixes) for name in imports), imports
+
+
+def test_attachment_transport_vocabulary_stays_in_the_api_layer() -> None:
+    """FastAPI upload/multipart vocabulary never leaves the transport layer (Step 4.14.F).
+
+    ``UploadFile`` and the FastAPI ``File``/``Form`` upload markers are
+    transport concerns whose only legal home is ``ava/api``. Even the
+    attachment service — which receives the uploaded bytes — consumes a plain
+    ``BinaryIO`` stream, never a framework upload object. ``python-multipart``
+    is FastAPI's multipart parser and is therefore a declared dependency that
+    AVA source must never import directly.
+    """
+    transport_terms = ("UploadFile", "File(", "Form(")
+    offenders: list[str] = []
+    for path in sorted(SRC_DIR.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not any(term in source for term in transport_terms):
+            continue
+        if path.is_relative_to(API_DIR):
+            continue
+        offenders.append(str(path.relative_to(SRC_DIR)))
+    assert not offenders, offenders
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    assert "python-multipart" in pyproject.read_text(encoding="utf-8")
+
+
+def test_agent_port_remains_free_of_repository_ports() -> None:
+    """The AgentPort execution contract must not know persistence ports.
+
+    Repository adoption in Step 4.3 touches RunService and the stores only;
+    the port through which run execution happens stays a pure execution
+    contract. If an agent adapter ever needs persistent state beyond a run,
+    it does so through its own seams, never this one.
+    """
+    tree = ast.parse((AGENTS_DIR / "contracts.py").read_text(encoding="utf-8"))
+    assert not any(name.startswith("ava.repositories") for name in _ava_imports(tree))
+
+
+def test_run_service_depends_on_repository_ports_not_concrete_stores() -> None:
+    """RunService programs against repository ports; composition injects stores.
+
+    Step 4.3 inverts the dependency: RunService may import the
+    ``ava.repositories`` ports for typing and must never name the concrete
+    in-memory stores (``ava.services.run_store`` / ``ava.services.run_event_store``)
+    or any database/ORM layer. This is why the constructor requires injected
+    repositories rather than defaulting to fresh stores.
+    """
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(tree)
+    assert imports & {"ava.repositories", "ava.repositories.run_repository", "ava.repositories.run_event_repository"}
+    forbidden = (
+        "ava.services.run_store",
+        "ava.services.run_event_store",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+
+
+def test_agent_port_dependency_survives_run_service_repository_adoption() -> None:
+    """RunService keeps its AgentPort execution dependency alongside the ports."""
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    assert "ava.agents.contracts" in _ava_imports(tree)
+
+
+def test_repository_stores_conform_to_their_ports() -> None:
+    """The in-memory stores explicitly implement the repository ports."""
+    from ava.repositories import (
+        ConversationRepository,
+        DocumentRepository,
+        DocumentRevisionRepository,
+        MessageRepository,
+        RunEventRepository,
+        RunRepository,
+    )
+    from ava.services.conversation_store import ConversationStore
+    from ava.services.document_revision_store import InMemoryDocumentRevisionStore
+    from ava.services.document_store import DocumentStore
+    from ava.services.message_store import MessageStore
+    from ava.services.run_event_store import RunEventStore
+    from ava.services.run_store import RunStore
+
+    assert issubclass(RunStore, RunRepository)
+    assert issubclass(RunEventStore, RunEventRepository)
+    assert issubclass(ConversationStore, ConversationRepository)
+    assert issubclass(MessageStore, MessageRepository)
+    assert issubclass(DocumentStore, DocumentRepository)
+    assert issubclass(InMemoryDocumentRevisionStore, DocumentRevisionRepository)
+
+
+def test_conversation_service_depends_on_repository_ports_not_concrete_stores() -> None:
+    """ConversationService programs against repository ports; composition injects stores.
+
+    Step 4.4 keeps the service layer independent of persistence mechanics:
+    ConversationService must import the ``ava.repositories`` ports for
+    typing and must never name the concrete in-memory stores
+    (``ava.services.conversation_store`` / ``ava.services.message_store``)
+    or any database/ORM layer. This is why the constructor requires injected
+    repositories rather than defaulting to fresh stores.
+    """
+    tree = ast.parse((SERVICES_DIR / "conversation_service.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(tree)
+    assert imports & {
+        "ava.repositories.conversation_repository",
+        "ava.repositories.message_repository",
+    }
+    forbidden = (
+        "ava.services.conversation_store",
+        "ava.services.message_store",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+
+
+def test_run_service_stays_free_of_conversation_persistence() -> None:
+    """RunService must not know the conversation/message domain.
+
+    Step 4.4 introduces conversation persistence next to run persistence
+    without coupling the two: RunService keeps no imports of conversation
+    repositories, stores, or the conversation service. If run/message
+    linkage is ever needed, it is exercised through the conversation domain,
+    never inside RunService.
+    """
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(tree)
+    forbidden = (
+        "ava.repositories.conversation_repository",
+        "ava.repositories.message_repository",
+        "ava.services.conversation_service",
+        "ava.services.conversation_store",
+        "ava.services.message_store",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+
+
+def test_conversation_sources_import_no_frontend_or_vendor_packages() -> None:
+    """Conversation backend files import only stdlib + ava + pydantic + fastapi.
+
+    Step 4.4 is backend-only and the conversation domain must stay usable
+    from any future transport: no frontend package (``@ava/agent-ui``,
+    ``@ava/contracts``), Tauri, or React-family import may appear anywhere in
+    the new conversation sources. The role/status vocabulary is backend-owned
+    and deliberately mirrors the frontend's string members instead.
+    """
+    forbidden = {"@ava", "tauri", "react", "vue", "svelte", "preact", "solid-js"}
+    conversation_sources = [
+        CONTRACTS_DIR / "conversations.py",
+        REPOSITORIES_DIR / "conversation_repository.py",
+        REPOSITORIES_DIR / "message_repository.py",
+        SERVICES_DIR / "conversation_store.py",
+        SERVICES_DIR / "message_store.py",
+        SERVICES_DIR / "conversation_service.py",
+        API_DIR / "routes" / "conversations.py",
+    ]
+    violations: list[str] = []
+    for path in conversation_sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in forbidden:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Forbidden imports in conversation sources:\n" + "\n".join(violations)
+
+
+def test_conversation_repository_ports_import_only_contracts_and_records() -> None:
+    """Conversation/message ports import only AVA contracts plus stdlib.
+
+    The Step 4.4 ports are framework-neutral persistence contracts: their
+    AVA imports must be limited to ``ava`` (for exception typing) and the
+    ``ava.contracts`` vocabulary. Reuse of existing AVA port scanning
+    (``ava_imports`` vs allowed siblings) is unnecessary here because the
+    ports depend on exactly the contract enums and their own records.
+    """
+    tree = ast.parse((REPOSITORIES_DIR / "conversation_repository.py").read_text(encoding="utf-8"))
+    assert _ava_sibling_imports(tree) <= {"contracts"}
+    message_tree = ast.parse((REPOSITORIES_DIR / "message_repository.py").read_text(encoding="utf-8"))
+    assert _ava_sibling_imports(message_tree) <= {"contracts"}
+
+
+def test_document_service_depends_on_repository_port_not_concrete_store() -> None:
+    """DocumentService programs against the repository port; composition injects store.
+
+    Step 4.5 keeps the service layer independent of persistence mechanics:
+    DocumentService must import the ``ava.repositories`` document port for
+    typing and must never name the concrete in-memory store
+    (``ava.services.document_store``) or any database/ORM layer. This is why
+    the constructor requires an injected repository rather than defaulting to
+    a fresh store.
+    """
+    tree = ast.parse((SERVICES_DIR / "document_service.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(tree)
+    assert "ava.repositories.document_repository" in imports
+    assert not any(
+        name.startswith(("ava.services.document_store", "ava.infrastructure"))
+        for name in imports
+    )
+
+
+def test_document_repository_port_imports_only_contracts_and_records() -> None:
+    """The document port is framework/database neutral: contracts + its record."""
+    tree = ast.parse((REPOSITORIES_DIR / "document_repository.py").read_text(encoding="utf-8"))
+    assert _ava_sibling_imports(tree) <= {"contracts"}
+
+
+def test_run_service_stays_free_of_document_domain() -> None:
+    """RunService must not know the document domain.
+
+    Step 4.5 introduces document persistence next to run persistence without
+    coupling either: RunService keeps no imports of document repositories,
+    stores, the document service, or the HTML content policy.
+    """
+    tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(tree)
+    forbidden = (
+        "ava.repositories.document_repository",
+        "ava.services.document_service",
+        "ava.services.document_store",
+        "ava.services.html_content_policy",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+
+
+def test_document_sources_import_no_frontend_or_vendor_packages() -> None:
+    """Document backend files import only stdlib + ava + pydantic + fastapi.
+
+    Step 4.5 is backend-only and the document domain must stay usable from
+    any future transport: no frontend package (``@ava/*``), Tauri,
+    React-family, Tiptap, or ProseMirror import may appear anywhere in the
+    new document sources. Editor-neutral content is enforced by the
+    ``html_content_policy`` module, which never imports the editor.
+    """
+    forbidden = {
+        "@ava",
+        "@tiptap",
+        "tiptap",
+        "prosemirror",
+        "prosemirror-state",
+        "prosemirror-view",
+        "prosemirror-model",
+        "prosemirror-commands",
+        "react",
+        "vue",
+        "svelte",
+        "preact",
+        "solid-js",
+        "tauri",
+    }
+    document_sources = [
+        CONTRACTS_DIR / "documents.py",
+        REPOSITORIES_DIR / "document_repository.py",
+        SERVICES_DIR / "document_store.py",
+        SERVICES_DIR / "document_service.py",
+        SERVICES_DIR / "html_content_policy.py",
+        API_DIR / "routes" / "documents.py",
+    ]
+    violations: list[str] = []
+    for path in document_sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in forbidden:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Forbidden imports in document sources:\n" + "\n".join(violations)
+
+
+def test_html_content_policy_is_editor_neutral_and_stdlib_only() -> None:
+    """The HTML content policy depends only on the standard library.
+
+    Content safety cannot depend on the editor that produced the content:
+    ``html_content_policy`` must import no ``ava`` modules (no services, no
+    contracts) and nothing outside the standard library (only ``html``). This
+    proves the sanitization boundary is AVA-owned and editor-neutral.
+    """
+    tree = ast.parse((SERVICES_DIR / "html_content_policy.py").read_text(encoding="utf-8"))
+    assert not _ava_imports(tree)
+    assert _top_level_imports(tree) <= {"html", "re"}
+
+
+#: Database drivers / ORM modules that may be imported ONLY by
+#: ``ava.infrastructure.persistence`` — the sanctioned database boundary.
+DATABASE_MODULES = {
+    "aiosqlite",
+    "asyncpg",
+    "databases",
+    "duckdb",
+    "peewee",
+    "psycopg",
+    "psycopg2",
+    "pymysql",
+    "pymongo",
+    "redis",
+    "sqlalchemy",
+    "sqlite3",
+    "sqlmodel",
+}
+
+
+def test_database_imports_are_confined_to_infrastructure_persistence() -> None:
+    """Only ``ava.infrastructure.persistence`` may import database drivers.
+
+    Step 4.6 introduces the first concrete relational adapter. To keep the
+    repository ports, contracts, services, and API layer database-neutral, no
+    file outside the persistence package may import a database driver or ORM
+    module (``sqlite3``, ``sqlalchemy``, ``aiosqlite``, ``sqlmodel``, ...).
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path.is_relative_to(PERSISTENCE_DIR):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in DATABASE_MODULES:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Database imports outside persistence:\n" + "\n".join(violations)
+
+
+def test_services_do_not_import_database_modules() -> None:
+    """The services layer programs against ports; no driver/ORM import."""
+    violations: list[str] = []
+    for path in _iter_python_files(SERVICES_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in DATABASE_MODULES:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Database imports in services:\n" + "\n".join(violations)
+
+
+def test_contracts_do_not_import_database_modules() -> None:
+    """AVA contracts stay database-neutral and shareable with clients."""
+    violations: list[str] = []
+    for path in _iter_python_files(CONTRACTS_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name in DATABASE_MODULES:
+                violations.append(f"{path}: imports '{name}'")
+    assert not violations, "Database imports in contracts:\n" + "\n".join(violations)
+
+
+def test_persistence_layer_imports_only_repositories_and_contracts() -> None:
+    """Adapters depend inward on the ports/contracts, never on services/core/API.
+
+    The persistence package may import the ``ava.repositories`` ports, the
+    ``ava.contracts`` vocabulary, and its own sibling modules
+    (``ava.infrastructure``). Everything else — services, core, API, agents,
+    models — is forbidden, and top-level imports must be stdlib plus ``ava``
+    only (no third-party ORM dependencies).
+    """
+    import sys
+
+    allowed_siblings = {"contracts", "infrastructure", "repositories"}
+    violations: list[str] = []
+    for path in _iter_python_files(PERSISTENCE_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_imports(tree):
+            if name != "ava" and name not in sys.stdlib_module_names:
+                violations.append(f"{path}: top-level import '{name}'")
+        for name in _ava_sibling_imports(tree):
+            if name not in allowed_siblings:
+                violations.append(f"{path}: imports 'ava.{name}'")
+    assert not violations, "Persistence layer dependency violations:\n" + "\n".join(violations)
+
+
+def test_relational_repositories_conform_to_their_ports() -> None:
+    """The relational adapters explicitly implement the repository ports."""
+    from ava.infrastructure.persistence.repositories import (
+        RelationalAttachmentRepository,
+        RelationalConversationRepository,
+        RelationalDocumentRepository,
+        RelationalDocumentRevisionRepository,
+        RelationalMessageRepository,
+        RelationalRunEventRepository,
+        RelationalRunRepository,
+    )
+    from ava.repositories import (
+        AttachmentRepository,
+        ConversationRepository,
+        DocumentRepository,
+        DocumentRevisionRepository,
+        MessageRepository,
+        RunEventRepository,
+        RunRepository,
+    )
+
+    assert issubclass(RelationalRunRepository, RunRepository)
+    assert issubclass(RelationalRunEventRepository, RunEventRepository)
+    assert issubclass(RelationalConversationRepository, ConversationRepository)
+    assert issubclass(RelationalMessageRepository, MessageRepository)
+    assert issubclass(RelationalDocumentRepository, DocumentRepository)
+    assert issubclass(RelationalDocumentRevisionRepository, DocumentRevisionRepository)
+    assert issubclass(RelationalAttachmentRepository, AttachmentRepository)
+
+
+def test_persistence_schema_introduces_no_later_phase_tables() -> None:
+    """The migrations create only the approved framework + Phase 4 tables.
+
+    The default migrations create ``runs``, ``run_events``, ``conversations``,
+    ``messages``, ``documents`` (Step 4.7), ``document_revisions``
+    (Step 4.13.C's immutable revision history), and ``attachments`` +
+    ``idx_attachments_owner`` (Step 4.14.C's attachment metadata). No later
+    phase vocabulary may leak into the schema, and schema text may live only
+    in the migrations package. ``attachment`` became legitimate with Step
+    4.14.C, so its schema vocabulary is no longer forbidden; migration files
+    must still never name approval/audit/model-invocation/qualification
+    concepts.
+    """
+    migration_dir = PERSISTENCE_DIR / "migrations" / "versions"
+    created: list[str] = []
+    for path in _iter_python_files(migration_dir):
+        text = path.read_text(encoding="utf-8")
+        created.extend(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", text))
+        created.extend(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", text))
+    assert sorted(created) == [
+        "attachments",
+        "conversations",
+        "document_revisions",
+        "documents",
+        "idx_attachments_owner",
+        "idx_messages_conversation_order",
+        "idx_run_events_one_terminal",
+        "messages",
+        "run_events",
+        "runs",
+    ]
+    forbidden = ("approval", "audit", "model_invocation", "qualification")
+    for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
+        text = path.read_text(encoding="utf-8")
+        for word in forbidden:
+            assert word not in text, f"forbidden later-phase vocabulary in {path}: {word}"
+
+
+def test_schema_creation_is_owned_by_the_migration_system() -> None:
+    """CREATE statements live only in the migrations package (Step 4.7).
+
+    The migration system is the single authoritative schema owner: no adapter,
+    database-lifecycle module, composition seam, or settings code may embed
+    ``CREATE TABLE``/``CREATE INDEX`` DDL.
+    """
+    violations: list[str] = []
+    creation_dirs = {PERSISTENCE_DIR / "migrations"}
+    ddl_pattern = re.compile(r"\bCREATE\s+(TABLE|UNIQUE\s+INDEX|INDEX)\b")
+    for path in _iter_python_files(PERSISTENCE_DIR):
+        if any(path.is_relative_to(directory) for directory in creation_dirs):
+            continue
+        if ddl_pattern.search(path.read_text(encoding="utf-8")):
+            violations.append(str(path))
+    assert not violations, f"Schema DDL outside the migration system: {violations}"
+
+
+def test_migrations_are_confined_to_infrastructure_persistence() -> None:
+    """Only the persistence package may import the migration system.
+
+    Repository ports, contracts, services, API, core, agents, and configuration
+    must never see the migration module.
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path.is_relative_to(PERSISTENCE_DIR):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if import_path.startswith("ava.infrastructure.persistence.migrations"):
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Migration imports outside infrastructure persistence:\n" + "\n".join(
+        violations
+    )
+
+
+def test_ports_services_and_contracts_never_name_the_migration_system() -> None:
+    """The five repository ports and their consumers stay migration-unaware."""
+    violations: list[str] = []
+    for directory in (REPOSITORIES_DIR, SERVICES_DIR, CONTRACTS_DIR):
+        for path in _iter_python_files(directory):
+            text = path.read_text(encoding="utf-8")
+            if "migrations" in text:
+                violations.append(f"{path}: mentions the migration system")
+    assert not violations, "Migration vocabulary in ports/services/contracts:\n" + "\n".join(
+        violations
+    )
+
+
+def test_schema_metadata_table_is_infrastructure_only() -> None:
+    """``ava_schema_migrations`` appears only inside infrastructure persistence."""
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        text = path.read_text(encoding="utf-8")
+        if "ava_schema_migrations" in text and not path.is_relative_to(PERSISTENCE_DIR):
+            violations.append(str(path))
+    assert not violations, f"Metadata table named outside infrastructure persistence: {violations}"
+
+
+def test_default_persistence_provider_remains_the_in_memory_stores() -> None:
+    """The unconfigured production default stays ``memory`` (Step 4.7 unchanged)."""
+    text = (CONFIGURATION_DIR / "settings.py").read_text(encoding="utf-8")
+    assert '"AVA_PERSISTENCE", "memory"' in text, "default persistence provider must be memory"
+
+
+def test_application_persistence_selection_is_localized_to_composition() -> None:
+    """The application-persistence selector lives in composition; API consumes ports.
+
+    Steps 4.8/4.9 activate run/run-event/conversation/message persistence by
+    composing ``create_application_persistence`` in
+    ``ava.infrastructure.composition``. The API
+    factory must reach the selected implementation only through that seam —
+    never the concrete stores, never the relational adapters directly. Because
+    ``ava.services`` may not be imported from the persistence package, the
+    selector (which needs both the in-memory stores and the relational
+    bundles) must live in composition, not in ``ava.infrastructure.persistence``.
+    """
+    composition_source = INFRASTRUCTURE_DIR / "composition.py"
+    source = composition_source.read_text(encoding="utf-8")
+    assert "class ApplicationPersistence" in source
+    assert "def create_application_persistence" in source
+    assert "def create_relational_repositories" not in source
+
+    app_tree = ast.parse((API_DIR / "app.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(app_tree)
+    assert "ava.infrastructure.composition" in imports
+    forbidden = (
+        "ava.services.run_store",
+        "ava.services.run_event_store",
+        "ava.services.conversation_store",
+        "ava.services.message_store",
+        "ava.services.document_store",
+        "ava.infrastructure.persistence.repositories",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+    app_text = (API_DIR / "app.py").read_text(encoding="utf-8")
+    assert "create_application_persistence(" in app_text
+
+
+def test_relational_adapters_are_constructed_only_inside_the_persistence_package() -> None:
+    """Concrete relational adapters stay confined to their persistence package.
+
+    Only ``ava.infrastructure.persistence.composition`` may import the
+    concrete ``Relational*`` adapter modules; only the infrastructure
+    composition seam may import the top-level persistence package. Services,
+    contracts, ports, routes, and the API factory never name the relational
+    implementation or the persistence package.
+    """
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path.is_relative_to(PERSISTENCE_DIR):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            if import_path.startswith("ava.infrastructure.persistence.repositories"):
+                violations.append(f"{path}: imports '{import_path}'")
+            if (
+                import_path == "ava.infrastructure.persistence"
+                or import_path.startswith("ava.infrastructure.persistence.")
+            ) and path != INFRASTRUCTURE_DIR / "composition.py":
+                violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Relational adapter imports outside persistence:\n" + "\n".join(
+        violations
+    )
+
+
+def test_application_persistence_carries_all_activated_ports() -> None:
+    """ApplicationPersistence selects every activated port through one seam.
+
+    ``ApplicationPersistence`` carries run, run-event, conversation, message,
+    and document state plus the Step 4.13 document revision history repository,
+    the Step 4.14.C attachment metadata repository, and the document write
+    coordinator. The API factory receives only the composed ports, never
+    concrete stores.
+    """
+    fields = _collect_annotated_fields(
+        INFRASTRUCTURE_DIR / "composition.py", "ApplicationPersistence"
+    )
+    assert fields == {
+        "run_repository",
+        "run_event_repository",
+        "conversation_repository",
+        "message_repository",
+        "document_repository",
+        "document_revision_repository",
+        "attachment_repository",
+        "document_write_coordinator",
+        "database",
+    }
+
+    app_text = (API_DIR / "app.py").read_text(encoding="utf-8")
+    assert "application_persistence.conversation_repository" in app_text
+    assert "application_persistence.message_repository" in app_text
+    assert "application_persistence.document_repository" in app_text
+
+    composition_text = (INFRASTRUCTURE_DIR / "composition.py").read_text(encoding="utf-8")
+    assert "conversation_repository=bundle.conversation_repository" in composition_text
+    assert "message_repository=bundle.message_repository" in composition_text
+    assert "document_repository=bundle.document_repository" in composition_text
+    assert "document_revision_repository=bundle.document_revision_repository" in composition_text
+    assert "attachment_repository=bundle.attachment_repository" in composition_text
+    assert "document_write_coordinator=bundle.document_write_coordinator" in composition_text
+
+
+def test_conversation_routes_remain_persistence_neutral() -> None:
+    """Conversation routes use the service and never name persistence details."""
+    route_tree = ast.parse((API_DIR / "routes" / "conversations.py").read_text(encoding="utf-8"))
+    imports = _ava_imports(route_tree)
+    assert "ava.services.conversation_service" in imports
+    forbidden = (
+        "ava.repositories",
+        "ava.infrastructure.persistence",
+        "ava.services.conversation_store",
+        "ava.services.message_store",
+    )
+    assert not any(name.startswith(forbidden) for name in imports)
+
+
+def test_migration_versions_are_only_the_initial_and_revision_schemas() -> None:
+    """The codebase ships exactly the initial, revision, and attachment schemas.
+
+    Steps 4.8/4.9/4.10/4.11/4.12 activate existing schema only — no migrations
+    are added — Step 4.13.C adds exactly one (the document revision history,
+    v0002), and Step 4.14.C adds exactly one more (the attachment metadata
+    table, v0003).
+    """
+    version_files = sorted(
+        path.name
+        for path in (PERSISTENCE_DIR / "migrations" / "versions").iterdir()
+        if re.match(r"v\d{4}_.*\.py", path.name)
+    )
+    assert version_files == [
+        "v0001_initial_schema.py",
+        "v0002_document_revisions.py",
+        "v0003_attachments.py",
+    ], (
+        "unexpected migration version files; found versions: "
+        + ", ".join(version_files)
+    )
+
+
+def _collect_annotated_fields(path: Path, class_name: str) -> set[str]:
+    """Return the annotated field names declared on a dataclass body."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            fields: set[str] = set()
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    fields.add(item.target.id)
+            return fields
+    raise AssertionError(f"{path} does not define class {class_name}")
+
+
+# ============================================================
+# END: Persistence Repository Port Boundary Tests
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Step 4.13 Document Revision Boundary Tests
+# ============================================================
+
+
+def _public_methods(tree: ast.Module, class_name: str) -> set[str]:
+    """Collect the names of public methods declared on the named class."""
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return {
+                item.name
+                for item in node.body
+                if isinstance(item, ast.FunctionDef) and not item.name.startswith("_")
+            }
+    raise AssertionError(f"{class_name} not found")
+
+
+def test_document_revision_repository_port_is_append_only() -> None:
+    """The revision port exposes append/read only; no history mutation methods.
+
+    Step 4.13 keeps ``DocumentRevisionRepository`` immutable: the port may
+    append and read (``list_for_document``/``get``/``get_latest``) but must
+    never expose update/replace/rename/delete/save/restore/revert. History
+    mutation or a later restore that rewrites history would break the
+    current-vs-history ownership split.
+    """
+    path = REPOSITORIES_DIR / "document_revision_repository.py"
+    methods = _public_methods(
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path)),
+        "DocumentRevisionRepository",
+    )
+    assert methods == {"append", "get", "get_latest", "list_for_document"}, methods
+
+
+def test_document_repository_port_stays_revision_free() -> None:
+    """The current-document port contains no revision/history behavior.
+
+    Step 4.13's ownership split keeps ``DocumentRepository`` current-state
+    only: the port exposes create/get/list/update_title/update_content and no
+    revision or history naming. If a method name or record field carried
+    revision vocabulary, history would have leaked into the durable current
+    state.
+    """
+    path = REPOSITORIES_DIR / "document_repository.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    methods = _public_methods(tree, "DocumentRepository")
+    assert methods == {"create", "get", "list", "update_content", "update_title"}, methods
+    for record in tree.body:
+        if isinstance(record, ast.ClassDef) and record.name == "DocumentRecord":
+            fields = {
+                item.target.id
+                for item in record.body
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+            }
+            assert not any("revision" in field for field in fields), fields
+
+
+# ============================================================
+# END: Step 4.13 Document Revision Boundary Tests
 # ============================================================

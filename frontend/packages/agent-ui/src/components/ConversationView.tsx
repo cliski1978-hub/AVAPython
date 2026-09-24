@@ -1,5 +1,6 @@
 import { defaultTheme } from "@ava/ui-core";
 import type { Conversation, ConversationMessage } from "../types";
+import { selectTranscriptMessages } from "../lib/transcript";
 import { ConversationEmptyState } from "./ConversationEmptyState";
 import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
@@ -27,7 +28,10 @@ export function ConversationView({
   onRetryMessage,
   onRegenerateMessage,
 }: ConversationViewProps) {
-  const list = messages ?? conversation?.messages ?? [];
+  const raw = messages ?? conversation?.messages ?? [];
+  // Normal transcript: superseded regenerated assistant responses are hidden;
+  // only the active/latest response per user turn is rendered.
+  const list = selectTranscriptMessages(raw);
   const heading =
     title ?? conversation?.title ?? "New Conversation";
   const runPhase = conversation?.run?.uiPhase;

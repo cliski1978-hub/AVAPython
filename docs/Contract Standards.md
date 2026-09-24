@@ -90,18 +90,75 @@ evolves.
 Only capabilities that actually exist are reported as `true`. The presence of
 a capability name does not imply the capability is implemented.
 
+### `GET /model-providers`
+
+Discover the composed model providers with model identity and health
+(read-only; never selects or starts a provider). Added in Step 10; a
+dedicated resource endpoint rather than an extension of `/capabilities`.
+
+```json
+{
+  "contract_version": "v1",
+  "default_provider_id": "local",
+  "providers": [
+    {
+      "provider_id": "local",
+      "is_default": true,
+      "model_info": {
+        "provider_name": "local",
+        "model_id": "local-model",
+        "display_name": null,
+        "context_limit": null,
+        "capabilities": {
+          "chat": true,
+          "streaming": false,
+          "tool_calling": false,
+          "structured_output": false,
+          "vision": false,
+          "embeddings": false,
+          "reasoning": false,
+          "code_specialization": false,
+          "contract_version": "v1"
+        },
+        "contract_version": "v1"
+      },
+      "health": {
+        "available": true,
+        "status": "healthy",
+        "message": null,
+        "contract_version": "v1"
+      },
+      "contract_version": "v1"
+    }
+  ]
+}
+```
+
+- `default_provider_id` truthfully reports the configured default
+  (`Settings.model_provider`) even when nothing is registered under it; an
+  unknown default yields no `is_default` entry, never a fabricated one.
+- Per-provider `health` reuses the `ModelProviderHealth` contract; one
+  raising/unreachable provider is reported as
+  `available=false, status=runtime_unavailable` (never an HTTP error) and
+  does not affect the others.
+- Providers appear in registry insertion order. No startup health checks —
+  the endpoint performs I/O only when called.
+
 ## Contract Families (v1)
 
 - **`version.py`** — `CONTRACT_VERSION`
 - **`json_types.py`** — `JsonValue` (JSON-safe recursive value type)
 - **`requests.py`** — `RunRequest`
-- **`responses.py`** — `HealthResponse`, `CapabilitiesResponse`, `RunResponse`
+- **`responses.py`** — `HealthResponse`, `CapabilitiesResponse`, `RunResponse`,
+  `ModelProviderDiscoveryItem`, `ModelProviderDiscoveryResponse`
   (with `HealthStatus`, `RunStatus`)
 - **`events.py`** — `RunEvent` (with `EventType`)
 - **`capabilities.py`** — `CapabilityName`
 - **`errors.py`** — `ErrorResponse` (with `ErrorCategory`)
-- **`models.py`** — `ModelProviderHealth`, `ModelInfo`, `ModelMessage`,
-  `ModelRequest`, `ModelResponse` (with `ModelProviderHealthStatus`)
+- **`models.py`** — `ModelProviderHealth`, `ModelCapabilities`, `ModelInfo`,
+  `ModelMessage`, `ModelRequest`, `ModelResponse` (with
+  `ModelProviderHealthStatus`)
+- **`runtimes.py`** — `RuntimeCapabilities`, `RuntimeInfo`
 - **`approvals.py`** — reserved scaffold; DTOs to be designed with the
   approval workflow
 
@@ -171,8 +228,14 @@ types.
   `configuration_invalid`.
 - **`ModelProviderHealth`** — `available` (bool), `status`, `message`
   (optional).
+- **`ModelCapabilities`** — typed boolean record of a model's capabilities:
+  `chat`, `streaming`, `tool_calling`, `structured_output`, `vision`,
+  `embeddings`, `reasoning`, `code_specialization`. Defaults are all `False`
+  (conservative). This is the normalized capability vocabulary used by
+  `ModelProviderPort.get_capabilities()` — distinct from the application-level
+  `CapabilityName` vocabulary.
 - **`ModelInfo`** — `provider_name`, `model_id`, `display_name` (optional),
-  `context_limit` (optional).
+  `context_limit` (optional), `capabilities` (`ModelCapabilities`).
 - **`ModelMessage`** — `role`, `content`.
 - **`ModelRequest`** — `messages`, `temperature` (optional),
   `max_output_tokens` (optional).
@@ -181,6 +244,20 @@ types.
 Model request/response contracts are deliberately minimal for Sprint 1.
 Tool calling, structured output, usage, and metadata fields will be added
 through additive contract changes.
+
+## Runtime Contracts
+
+Defined in `backend/src/ava/contracts/runtimes.py`. Framework-neutral
+descriptions of agent runtime capabilities, parallel to the model contracts.
+
+- **`RuntimeCapabilities`** — typed boolean record of a runtime's
+  capabilities: `tools`, `multi_agent`, `shell`, `filesystem`, `browser`,
+  `code_execution`, `checkpointing`, `persistence`, `human_approval`,
+  `parallel_execution`. Defaults are all `False`. Kept separate from
+  `ModelCapabilities`: a runtime may support tools while the selected model
+  does not support tool calling.
+- **`RuntimeInfo`** — `runtime_id`, `display_name` (optional),
+  `capabilities` (`RuntimeCapabilities`).
 
 ## Keeping the Definitions in Sync
 

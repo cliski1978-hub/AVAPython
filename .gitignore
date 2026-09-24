@@ -49,3 +49,10 @@ frontend/apps/desktop/src-tauri/target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local AVA model-training and deployment artifacts
+training/.venv/
+training/tools/
+training/outputs/
+training/deployment/*.gguf
+training/deployment/*-merged/

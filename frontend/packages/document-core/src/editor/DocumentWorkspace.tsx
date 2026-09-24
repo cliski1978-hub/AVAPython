@@ -156,7 +156,7 @@ export function DocumentWorkspace() {
 
   const commitRename = () => {
     if (activeDocument != null && renameDraft.trim()) {
-      renameDocument(activeDocument.id, renameDraft);
+      void renameDocument(activeDocument.id, renameDraft);
     }
     setRenaming(false);
   };
@@ -179,7 +179,7 @@ export function DocumentWorkspace() {
   return (
     <div style={{ ...surfaceStyle, flexDirection: "row" }}>
       <nav className="ava-doc-nav" aria-label="Documents">
-        <div className="ava-doc-nav-header"><strong>Documents</strong><Button variant="primary" ariaLabel="New Document" onClick={createFromNavigation}>New</Button></div>
+        <div className="ava-doc-nav-header"><strong>Documents</strong><Button variant="primary" ariaLabel="New Document" disabled={state.isCreating} onClick={createFromNavigation}>New</Button></div>
         {state.documents.map((document) => (
           <button
             className="ava-doc-nav-item"
@@ -193,7 +193,7 @@ export function DocumentWorkspace() {
       </nav>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
       {activeDocument == null ? (
-        <div className="ava-doc-empty"><strong>No document open</strong><span>Create a document to start writing.</span><Button variant="primary" ariaLabel="New Document" onClick={createDocument}>New Document</Button></div>
+        <div className="ava-doc-empty"><strong>No document open</strong><span>Create a document to start writing.</span><Button variant="primary" ariaLabel="New Document" disabled={state.isCreating} onClick={createDocument}>New Document</Button></div>
       ) : <>
       <div className="ava-doc-header" aria-label="Document details">
         {renaming ? (

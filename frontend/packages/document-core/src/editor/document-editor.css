@@ -50,6 +50,19 @@
   gap: 8px;
 }
 
+/* The colored document actions always use white labels. This overrides the
+ * muted foreground rule visible in the host app, while remaining local to the
+ * Documents header; a disabled Save still retains its disabled background. */
+.ava-doc-actions button[data-variant="primary"],
+.ava-doc-actions button[data-variant="danger"] {
+  color: #ffffff !important;
+}
+
+.ava-doc-actions button[data-variant="primary"] > span,
+.ava-doc-actions button[data-variant="danger"] > span {
+  color: #ffffff !important;
+}
+
 .ava-doc-nav-header { justify-content: space-between; margin-bottom: 8px; }
 .ava-doc-nav-item { background: transparent; border: 0; border-radius: 6px; color: var(--ava-foreground); cursor: pointer; font: inherit; overflow: hidden; padding: 9px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .ava-doc-nav-item[aria-current="page"] { background: var(--ava-bg); color: var(--ava-primary); font-weight: 600; }

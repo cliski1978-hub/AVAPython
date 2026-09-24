@@ -9,6 +9,8 @@ import { EMPTY_CONVERSATION_RUN } from "../types";
 export interface ConversationState {
   conversations: Conversation[];
   activeConversationId: string | null;
+  loading?: boolean;
+  error?: string | null;
 }
 
 export const DEFAULT_CONVERSATION_TITLE = "New Conversation";
@@ -22,6 +24,15 @@ export interface MessagePatch {
 }
 
 export type ConversationAction =
+  | { type: "conversation:upsert"; conversation: Conversation }
+  | { type: "conversation:rename"; conversationId: string; title: string }
+  | { type: "conversation:messagesLoadStart"; conversationId: string }
+  | { type: "conversation:messagesHydrate"; conversationId: string; messages: Conversation["messages"] }
+  | { type: "conversation:messagesLoadFailure"; conversationId: string; error: string }
+  | { type: "conversation:replaceMessage"; conversationId: string; placeholderId: string; message: ConversationMessage }
+  | { type: "conversation:hydrate"; conversations: Conversation[] }
+  | { type: "conversation:loadStart" }
+  | { type: "conversation:loadFailure"; error: string }
   | { type: "conversation:create" }
   | { type: "conversation:select"; id: string }
   | {
@@ -132,6 +143,44 @@ function appendUserMessage(
   };
 }
 
+/**
+ * Merge a server (authoritative) message snapshot into the local conversation
+ * without dropping messages whose persistence is still in flight.
+ *
+ * Server-known messages take the server snapshot in authoritative (append)
+ * order; identical ids that already exist locally are replaced by the server
+ * copy. Local-only messages — those the server does not know yet (typically
+ * the in-flight assistant placeholder for a run that has not finished
+ * persisting) — are kept, after the server messages, in their local order.
+ * Re-merging the same snapshot is a no-op (no duplicates on re-select), and
+ * the final list is deduplicated by stable message id.
+ *
+ * The authoritative server order matters for regenerate semantics: when a
+ * failed/superseded assistant response (A1) is re-read together with the
+ * regenerated response (A2), the server lists A1 before A2, so a caller that
+ * derives the turn's active response sees the newest row last.
+ */
+export function mergeConversationMessages(
+  current: ConversationMessage[],
+  incoming: ConversationMessage[],
+): ConversationMessage[] {
+  if (current.length === 0) return incoming;
+  if (incoming.length === 0) return current;
+  const incomingIds = new Set(incoming.map((message) => message.id));
+  const merged = [
+    ...incoming,
+    ...current.filter((message) => !incomingIds.has(message.id)),
+  ];
+  const seen = new Set<string>();
+  const unique: ConversationMessage[] = [];
+  for (const message of merged) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    unique.push(message);
+  }
+  return unique;
+}
+
 /** Immutably apply an updater to one conversation, leaving others untouched. */
 export function updateConversation(
   state: ConversationState,
@@ -165,6 +214,30 @@ export function conversationReducer(
   action: ConversationAction,
 ): ConversationState {
   switch (action.type) {
+    case "conversation:upsert": {
+      const exists = state.conversations.some((item) => item.id === action.conversation.id);
+      return { ...state, conversations: exists ? state.conversations.map((item) => item.id === action.conversation.id ? action.conversation : item) : [action.conversation, ...state.conversations], activeConversationId: action.conversation.id };
+    }
+    case "conversation:rename": {
+      // Rename only the title. Unlike upsert, this never touches selection or
+      // messages, so renaming a non-active conversation from the sidebar menu
+      // cannot switch the active conversation.
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.title === action.title
+          ? conversation
+          : { ...conversation, title: action.title },
+      );
+    }
+    case "conversation:messagesLoadStart": return { ...state, error: null };
+    case "conversation:messagesLoadFailure": return { ...state, error: action.error };
+    case "conversation:messagesHydrate": return updateConversation(state, action.conversationId, (conversation) => ({ ...conversation, messages: mergeConversationMessages(conversation.messages, action.messages) }));
+    case "conversation:replaceMessage": return updateConversation(state, action.conversationId, (conversation) => ({ ...conversation, messages: conversation.messages.map((message) => message.id === action.placeholderId ? action.message : message) }));
+    case "conversation:loadStart": return { ...state, loading: true, error: null };
+    case "conversation:loadFailure": return { ...state, loading: false, error: action.error };
+    case "conversation:hydrate": return {
+      ...state, loading: false, error: null, conversations: action.conversations,
+      activeConversationId: state.activeConversationId ?? action.conversations[0]?.id ?? null,
+    };
     case "conversation:create": {
       const conversation = createConversationEntry(DEFAULT_CONVERSATION_TITLE);
       return {

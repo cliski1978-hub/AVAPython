@@ -399,3 +399,197 @@ describe("createEntityId", () => {
     expect(ids.size).toBe(3);
   });
 });
+
+describe("conversation:replaceMessage", () => {
+  it("reconciles a placeholder in place without changing thread order", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const conversationId = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId, messageId: "local", sourceUserMessageId: undefined });
+    state = conversationReducer(state, { type: "conversation:replaceMessage", conversationId, placeholderId: "local", message: { id: "backend", role: "assistant", status: "complete", content: "done", createdAt: "2026-01-01T00:00:00Z" } });
+    const messages = state.conversations[0].messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ id: "backend", content: "done", status: "complete" });
+  });
+});
+
+describe("conversation:rename", () => {
+  it("replaces the title of the named conversation only", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:rename", conversationId: id, title: "Backend Title" });
+    expect(state.conversations[0].title).toBe("Backend Title");
+  });
+
+  it("does not change the active selection when renaming a non-active conversation", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const activeId = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:create" });
+    const targetId = state.activeConversationId!;
+
+    state = conversationReducer(state, { type: "conversation:select", id: activeId });
+    state = conversationReducer(state, { type: "conversation:rename", conversationId: targetId, title: "Renamed" });
+
+    expect(state.activeConversationId).toBe(activeId);
+    expect(state.conversations.find((c) => c.id === targetId)!.title).toBe("Renamed");
+  });
+
+  it("preserves messages and leaves other conversations untouched", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const a = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:create" });
+    const b = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: b, content: "Keep me", createdMessageId: "b1" });
+    const bBefore = state.conversations.find((c) => c.id === b);
+
+    state = conversationReducer(state, { type: "conversation:rename", conversationId: a, title: "Renamed A" });
+
+    expect(state.conversations.find((c) => c.id === a)!.title).toBe("Renamed A");
+    expect(state.conversations.find((c) => c.id === a)!.messages).toEqual([]);
+    expect(state.conversations.find((c) => c.id === b)).toBe(bBefore);
+  });
+
+  it("keeps state identical when the title is unchanged", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    const title = state.conversations[0].title;
+    const next = conversationReducer(state, { type: "conversation:rename", conversationId: id, title });
+    expect(next).toBe(state);
+  });
+});
+
+describe("conversation:messagesHydrate merging", () => {
+  const ts = "2026-01-01T00:00:00Z";
+
+  function hydratedUser(id: string, content: string) {
+    return { id, role: "user" as const, status: "complete" as const, content, createdAt: ts };
+  }
+
+  function hydratedAssistant(id: string, content: string) {
+    return { id, role: "assistant" as const, status: "complete" as const, content, createdAt: ts };
+  }
+
+  it("keeps local-only messages when the server snapshot lags in-flight persistence", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Question", createdMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId: id, messageId: "local-asst", sourceUserMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:updateMessage", conversationId: id, messageId: "local-asst", patch: { content: "Answer A", status: "complete" } });
+
+    state = conversationReducer(state, { type: "conversation:messagesHydrate", conversationId: id, messages: [hydratedUser("u1", "Question")] });
+
+    const messages = state.conversations[0].messages;
+    expect(messages.map((m) => m.id)).toEqual(["u1", "local-asst"]);
+    expect(messages[0]).toMatchObject({ id: "u1", role: "user", content: "Question" });
+    expect(messages[1]).toMatchObject({ id: "local-asst", role: "assistant", content: "Answer A", status: "complete" });
+  });
+
+  it("replaces same-id messages with the authoritative server copy", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Local user", createdMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId: id, messageId: "a1", sourceUserMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:updateMessage", conversationId: id, messageId: "a1", patch: { content: "Local draft", status: "complete" } });
+
+    state = conversationReducer(state, {
+      type: "conversation:messagesHydrate",
+      conversationId: id,
+      messages: [hydratedUser("u1", "Server user"), hydratedAssistant("a1", "Server Answer")],
+    });
+
+    const messages = state.conversations[0].messages;
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ id: "u1", content: "Server user" });
+    expect(messages[1]).toMatchObject({ id: "a1", content: "Server Answer", status: "complete" });
+  });
+
+  it("appends server-only messages in server order", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Question", createdMessageId: "u1" });
+
+    state = conversationReducer(state, {
+      type: "conversation:messagesHydrate",
+      conversationId: id,
+      messages: [hydratedUser("u1", "Question"), hydratedAssistant("a1", "Answer"), hydratedUser("u2", "Follow-up")],
+    });
+
+    const messages = state.conversations[0].messages;
+    expect(messages.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
+    expect(messages[1].role).toBe("assistant");
+  });
+
+  it("is idempotent when re-hydrated with the same snapshot", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Question", createdMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId: id, messageId: "local-asst", sourceUserMessageId: "u1" });
+    const snapshot = [hydratedUser("u1", "Question")];
+
+    state = conversationReducer(state, { type: "conversation:messagesHydrate", conversationId: id, messages: snapshot });
+    const once = state.conversations[0].messages.map((m) => m.id).join(",");
+    state = conversationReducer(state, { type: "conversation:messagesHydrate", conversationId: id, messages: snapshot });
+    const twice = state.conversations[0].messages.map((m) => m.id).join(",");
+
+    expect(twice).toBe(once);
+    expect(state.conversations[0].messages).toHaveLength(2);
+  });
+
+  it("leaves other conversations untouched", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const a = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:create" });
+    const b = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: b, content: "For B", createdMessageId: "b1" });
+    const bBefore = state.conversations.find((c) => c.id === b);
+
+    state = conversationReducer(state, { type: "conversation:messagesHydrate", conversationId: a, messages: [hydratedUser("a1", "For A")] });
+
+    expect(state.conversations.find((c) => c.id === b)).toBe(bBefore);
+    expect(state.conversations.find((c) => c.id === b)!.messages.map((m) => m.id)).toEqual(["b1"]);
+    expect(state.conversations.find((c) => c.id === a)!.messages.map((m) => m.id)).toEqual(["a1"]);
+  });
+
+  it("re-hydrating a regenerated turn yields the server's authoritative order (U1 A1 A2)", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    // Local conversation after a successful regenerate: the old assistant row
+    // (a1) was replaced in place by the regenerated response (a2).
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Question", createdMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId: id, messageId: "a2", sourceUserMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:updateMessage", conversationId: id, messageId: "a2", patch: { content: "Regenerated", status: "complete" } });
+
+    // Server (append-order) snapshot still contains the superseded A1 row.
+    state = conversationReducer(state, {
+      type: "conversation:messagesHydrate",
+      conversationId: id,
+      messages: [hydratedUser("u1", "Question"), hydratedAssistant("a1", "Original"), hydratedAssistant("a2", "Regenerated")],
+    });
+
+    const messages = state.conversations[0].messages;
+    expect(messages.map((m) => m.id)).toEqual(["u1", "a1", "a2"]);
+    expect(messages[1].content).toBe("Original");
+    expect(messages[2].content).toBe("Regenerated");
+  });
+
+  it("re-hydration never duplicates a message by id, even when local and server overlap", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, { type: "conversation:addUserMessage", conversationId: id, content: "Question", createdMessageId: "u1" });
+    state = conversationReducer(state, { type: "conversation:addAssistantMessage", conversationId: id, messageId: "a2", sourceUserMessageId: "u1" });
+
+    state = conversationReducer(state, {
+      type: "conversation:messagesHydrate",
+      conversationId: id,
+      messages: [hydratedUser("u1", "Question"), hydratedAssistant("a1", "Original"), hydratedAssistant("a2", "Regenerated")],
+    });
+    state = conversationReducer(state, {
+      type: "conversation:messagesHydrate",
+      conversationId: id,
+      messages: [hydratedUser("u1", "Question"), hydratedAssistant("a1", "Original"), hydratedAssistant("a2", "Regenerated")],
+    });
+
+    const ids = state.conversations[0].messages.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(["u1", "a1", "a2"]);
+  });
+});

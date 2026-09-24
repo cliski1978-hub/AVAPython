@@ -11,6 +11,16 @@ from ava_client.models import (
     CapabilityName,
     HealthResponse,
     HealthStatus,
+    ModelCapabilities,
+    ModelDiscoveryResponse,
+    ModelHostingMode,
+    ModelInfo,
+    ModelProviderDiscoveryItem,
+    ModelProviderDiscoveryResponse,
+    ModelProviderHealth,
+    ModelProviderHealthStatus,
+    ModelQualificationInfo,
+    QualificationStatus,
 )
 
 __all__ = [
@@ -19,5 +29,15 @@ __all__ = [
     "CapabilityName",
     "HealthResponse",
     "HealthStatus",
+    "ModelCapabilities",
+    "ModelDiscoveryResponse",
+    "ModelHostingMode",
+    "ModelInfo",
+    "ModelProviderDiscoveryItem",
+    "ModelProviderDiscoveryResponse",
+    "ModelProviderHealth",
+    "ModelProviderHealthStatus",
+    "ModelQualificationInfo",
+    "QualificationStatus",
 ]
 __version__ = "0.1.0"

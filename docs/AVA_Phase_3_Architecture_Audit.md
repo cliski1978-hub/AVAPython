@@ -8,6 +8,66 @@ input for Phase 3 (model providers + agent runtimes as independently
 configurable runtime/model platform). No production code was modified and no
 Phase 3 component was implemented.
 
+> **Note:** This audit represents the **pre-Phase-3 baseline**. Additive
+> Phase 3 contracts created after this audit (e.g. `ModelCapabilities`, see
+> `docs/AVA_Phase_3_Implementation_Log.md`) intentionally extend — not
+> rewrite — the baseline recorded here.
+
+### Phase 3 Step 13 clarification
+
+The extension proposals below are historical, not current wiring instructions.
+`RunService` continues to depend only on `AgentPort`; model providers and
+runtime orchestration belong behind that boundary. Steps 11–12 established
+`RunService → NativeAgentAdapter → ModelProviderPort`, validated with Ollama.
+Step 13 adds only `ava.runtimes.contracts.AgentRuntimePort` and the independent
+internal `RuntimeRunResult`; production execution does not use them yet.
+
+Agent runtime selection and model-provider selection are independent axes.
+`AgentRuntimePort` receives the selected `ModelProviderPort` at execution time
+rather than owning or resolving a model provider itself. It reuses Step 3
+`RuntimeInfo` / `RuntimeCapabilities`. There is no runtime implementation,
+registry, resolver, configuration, or working runtime selection in Step 13.
+See the implementation log for current implementation and validation evidence.
+
+### Phase 3 Step 14 clarification
+
+`ava.runtimes.adapters.native.native_runtime.NativeRuntime` now implements
+AgentRuntimePort with execution-time provider injection, normalized results,
+and local cancellation/task ownership. Its `native` identity is independent
+of the model/provider, and all RuntimeCapabilities remain false. It is not yet
+wired into NativeAgentAdapter or application composition. Runtime selection,
+registry, resolver, and configuration remain unimplemented; the proven Step 12
+production path is unchanged.
+
+### Phase 3 Step 15 clarification
+
+`ava.runtimes.registry.RuntimeRegistry` now stores caller-created
+AgentRuntimePort instances under opaque nonblank ids. It rejects duplicates,
+returns None for unknown lookups, and lists ids in insertion order. It owns
+neither construction, execution, resolution, nor lifecycle, and imports only
+the runtime port. No runtime registry is composed in production; no runtime
+resolver, configuration, or runtime selection exists yet. The Step 12
+execution path remains unchanged.
+
+### Phase 3 Step 16 clarification
+
+`RuntimeResolver` now resolves exact ids through an injected RuntimeRegistry,
+returning the stored AgentRuntimePort or raising UnknownRuntimeError for blank
+or unknown input. RuntimeRegistry/RuntimeResolver and
+ModelProviderRegistry/ModelProviderResolver are parallel but independent systems.
+Neither selects the other axis, constructs implementations, or chooses defaults.
+Runtime configuration and production runtime composition remain absent; the
+validated native-agent execution path remains unchanged.
+
+### Phase 3 Step 17 clarification
+
+`AVA_AGENT_RUNTIME` now defaults to `native` and is mirrored in
+`ApplicationConfig.agent_runtime`. Infrastructure composition constructs and
+registers `NativeRuntime` in one RuntimeRegistry and exposes one RuntimeResolver
+and registry on app state. The configured id is not eagerly resolved because
+runtime execution remains dormant; mock and native agent startup tolerate an
+unknown runtime. The production run path remains unchanged.
+
 All paths below are relative to the repository root.
 
 **Repository root (backend):** `backend/src/ava`

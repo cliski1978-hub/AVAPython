@@ -53,6 +53,11 @@ uvicorn ava.api.app:create_app --factory --reload
 
 The backend listens on `http://localhost:8000` by default.
 
+The default `local` model provider targets an OpenAI-compatible endpoint
+(Ollama's `/v1` route) at `http://localhost:11434/v1`. The backend starts
+without the endpoint running; `/health` works immediately, but model
+operations require a compatible runtime to be available.
+
 ### Run tests
 
 ```bash
@@ -138,7 +143,10 @@ Reference: `.env.example`. All settings are `AVA_*` prefixed.
 | `AVA_APPLICATION` | `AVA` | Application name reported by contracts |
 | `AVA_ENVIRONMENT` | `development` | Application environment |
 | `AVA_AGENT_PROVIDER` | `mock` | Agent provider selection |
+| `AVA_AGENT_RUNTIME` | `native` | Agent runtime selection (composed but not yet used by runs) |
 | `AVA_MODEL_PROVIDER` | `local` | Model provider selection |
+| `AVA_MODEL_NAME` | `local-model` | Model name/id selection |
+| `AVA_LOCAL_MODEL_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible base URL for the local model provider |
 | `AVA_HOST` | `127.0.0.1` | Backend bind host (localhost-only by default; set `0.0.0.0` for LAN access) |
 | `AVA_PORT` | `8000` | Backend bind port |
 | `AVA_DEBUG` | `true` | Debug mode |
@@ -147,3 +155,66 @@ Reference: `.env.example`. All settings are `AVA_*` prefixed.
 
 Provider selections are configuration-driven and become functional as
 adapters land in later sprints.
+## Optional real local-model validation (Phase 3 Step 12)
+
+This manual check requires an already running Ollama and an installed chat
+model. It is not part of `test_all.sh`; do not install or download anything
+merely to run the deterministic suite.
+
+1. Inspect the local runtime with `ollama --version`, `ollama list`, and
+   `ollama ps`. Choose an installed chat model, preferably your configured one.
+2. Set the following in your developer-controlled repository-root `.env`
+   (record previous values so you can restore them):
+
+   ```dotenv
+   AVA_AGENT_PROVIDER=native
+   AVA_MODEL_PROVIDER=local
+   AVA_MODEL_NAME=<installed model id from ollama list>
+   AVA_LOCAL_MODEL_BASE_URL=http://localhost:11434/v1
+   ```
+
+   Alternatively, if no root `.env` exists, export these variables for the
+   backend process only. `dev_backend.sh` loads root `.env` after inherited
+   variables, so existing file values take precedence. Keep `.env.example`
+   and the source default at `mock`.
+3. Start `./scripts/dev_backend.sh`. In a second terminal, run:
+
+   ```bash
+   curl --fail http://localhost:8000/health
+   curl --fail http://localhost:8000/model-providers
+   curl --fail -H 'Content-Type: application/json' \
+     -d '{"prompt":"Reply with exactly: AVA LOCAL MODEL OK"}' \
+     http://localhost:8000/runs
+   ```
+
+   Discovery should report default `local`, your model id, and health
+   `available=true`, `status=healthy`. Discovery probes `/v1/models`; startup
+   itself does not contact Ollama. A healthy discovery response proves endpoint
+   reachability, not model existence. Generation must return `completed`.
+4. Copy the returned run id into the retrieval requests:
+
+   ```bash
+   curl --fail http://localhost:8000/runs/<run_id>
+   curl --fail http://localhost:8000/runs/<run_id>/events
+   ```
+
+   Expect `run_started → message_started → message_content → run_completed`,
+   with non-empty assistant content. Retrieve before restarting: stores are
+   in memory. Exact model text and latency may vary.
+5. For a safe failure check, restart only this AVA process with a confirmed
+   unused local port in `AVA_LOCAL_MODEL_BASE_URL`; do not stop Ollama or
+   unrelated services. Repeat the API calls. Application health should still
+   work; provider health should be unavailable. `POST /runs` should return
+   HTTP 200 with status `failed`, followed by `run_started → run_failed`.
+   The event message is `The agent failed to complete the run.`; it must not
+   contain transport errors, URLs, or response bodies.
+6. Restore your previous local configuration, stop the temporary validation
+   backend, and run `./scripts/test_all.sh` (and `./scripts/build_all.sh` for
+   the application build check).
+
+Live cancellation is not externally testable through the current synchronous
+route: the client receives the generated run id only after the run finishes.
+Step 11 deterministic cancellation tests remain authoritative; do not redesign
+the API to perform this manual check. Provider generation currently uses a
+30-second HTTP timeout, which can matter for slower cold starts or longer
+responses.

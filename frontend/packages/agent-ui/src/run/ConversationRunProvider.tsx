@@ -16,13 +16,19 @@ import {
   submitPrompt,
   type RunCommands,
 } from "./conversationRun";
+import { createPersistAssistantMessageCommand } from "./persistAssistantMessage";
+import type { RunExecutionOverride } from "@ava/contracts";
 
 /** Phases during which a new run must not start. */
 const ACTIVE_PHASES: UIRunPhase[] = ["starting", "running", "stopping"];
 
 export interface AgentRunApi {
   /** Submit a prompt: immediate user + pending assistant, then a backend run. */
-  submitPrompt(prompt: string): Promise<void>;
+  submitPrompt(
+    prompt: string,
+    execution?: RunExecutionOverride,
+    workspaceId?: string | null,
+  ): Promise<void>;
   /** Cancel the active run of the active conversation (via the API). */
   stopRun(): void;
   /** Retry a failed/cancelled assistant message from its source prompt. */
@@ -65,8 +71,19 @@ export function AgentRunProvider({
       addAssistantMessage: conversation.addAssistantMessage,
       setRunState: conversation.setRunState,
       updateMessage: conversation.updateMessage,
+      getRunState: conversation.getRunState,
+      // The run hands us the final content/source directly: reading them back
+      // from state here would race React's re-render after the last event.
+      persistAssistantMessage: async (conversationId, placeholderId, message) => {
+        await createPersistAssistantMessageCommand({ client, replaceMessage: conversation.replaceMessage })(
+          conversationId,
+          placeholderId,
+          message.content,
+          message.sourceUserMessageId ?? undefined,
+        );
+      },
     }),
-    [conversation],
+    [conversation, client],
   );
 
   const activeConversation = conversation.activeConversation;
@@ -78,7 +95,7 @@ export function AgentRunProvider({
   const runError = activeRun?.runError ?? null;
 
   const submitPromptFn = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, execution?: RunExecutionOverride, workspaceId?: string | null) => {
       const current = conversation.activeConversation;
       // One active run per conversation; ignore programmatic double submits.
       if (current?.run != null && ACTIVE_PHASES.includes(current.run.uiPhase)) {
@@ -86,7 +103,7 @@ export function AgentRunProvider({
       }
       const promptText = prompt.trim();
       if (promptText.length === 0) return;
-      await submitPrompt(promptText, current?.id ?? null, agent, commands);
+      await submitPrompt(promptText, current?.id ?? null, agent, commands, execution, workspaceId);
     },
     [conversation, agent, commands],
   );

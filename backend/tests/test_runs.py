@@ -54,7 +54,7 @@ def test_start_run_returns_200_and_run_response_shape() -> None:
     """A valid request should return a 200 with the AVA RunResponse."""
     with make_client() as client:
         body = start_run(client, "Hello AVA")
-    assert set(body) == {"run_id", "status", "contract_version"}
+    assert set(body) == {"run_id", "status", "contract_version", "execution_selection"}
     assert body["status"] == "completed"
     assert body["contract_version"] == CONTRACT_VERSION
 
@@ -210,7 +210,7 @@ def test_get_run_reports_cancelled_status() -> None:
     app = create_app()
     adapter = MockAgentAdapter(run_delay=0.2)
     app.state.run_service = RunService(
-        adapter, run_store=RunStore(), event_store=RunEventStore()
+        adapter, run_repository=RunStore(), run_event_repository=RunEventStore()
     )
 
     async def cancel_during_run() -> str:
@@ -293,7 +293,7 @@ def test_get_run_events_for_cancelled_run() -> None:
     app = create_app()
     adapter = MockAgentAdapter(run_delay=0.2)
     app.state.run_service = RunService(
-        adapter, run_store=RunStore(), event_store=RunEventStore()
+        adapter, run_repository=RunStore(), run_event_repository=RunEventStore()
     )
 
     async def cancel_during_run() -> str:
@@ -317,8 +317,8 @@ def test_get_run_events_for_failed_run() -> None:
     app = create_app()
     app.state.run_service = RunService(
         MockAgentAdapter(fail_on_prompt="force failure"),
-        run_store=RunStore(),
-        event_store=RunEventStore(),
+        run_repository=RunStore(),
+        run_event_repository=RunEventStore(),
     )
 
     async def start_failing_run() -> str:

@@ -1,5 +1,5 @@
 import { Button, defaultTheme, IconButton, Textarea } from "@ava/ui-core";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import {
   enterShouldSubmit,
@@ -32,6 +32,7 @@ export interface PromptComposerProps {
   placeholder?: string;
   minRows?: number;
   maxRows?: number;
+  controls?: ReactNode;
 }
 
 const t = defaultTheme;
@@ -48,6 +49,7 @@ export function PromptComposer({
   placeholder,
   minRows = 1,
   maxRows = 6,
+  controls,
 }: PromptComposerProps) {
   const [draft, setDraft] = useState("");
   const draftRef = useRef("");
@@ -113,18 +115,20 @@ export function PromptComposer({
         background: disabled ? t.colors.disabledBg : t.colors.surface,
         transition: "border-color 120ms ease, background 120ms ease",
         boxSizing: "border-box",
+        position: "relative",
       }}
       data-prompt-composer=""
     >
-      <Textarea
-        value={text}
-        onChange={update}
-        onKeyDown={handleKeyDown}
-        rows={rows}
-        placeholder={placeholder}
-        disabled={disabled}
-        ariaLabel="Message"
-      />
+      <div style={{ display: "flex", alignItems: "flex-end", gap: t.spacing.sm }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Textarea value={text} onChange={update} onKeyDown={handleKeyDown} rows={rows} placeholder={placeholder} disabled={disabled} ariaLabel="Message" />
+        </div>
+        {!inFlight && (
+          <Button variant="primary" disabled={!canSend} ariaLabel="Send" title={canSend ? "Send message" : "Type a message to send a prompt"} onClick={handleSubmit}
+            style={{ flex: "0 0 34px", width: 34, height: 34, marginBottom: 10, padding: 0, borderRadius: "50%", background: "#174a9c", borderColor: "#174a9c", fontSize: 20, lineHeight: 1 }}
+          >↑</Button>
+        )}
+      </div>
       <div
         style={{
           display: "flex",
@@ -151,6 +155,8 @@ export function PromptComposer({
             +
           </IconButton>
         )}
+        <div style={{ display: "flex", alignItems: "center", gap: t.spacing.sm }}>
+        {controls}
         {inFlight ? (
           <Button
             variant="danger"
@@ -167,19 +173,8 @@ export function PromptComposer({
           >
             Stop
           </Button>
-        ) : (
-          <Button
-            variant="primary"
-            disabled={!canSend}
-            ariaLabel="Send"
-            title={
-              canSend ? "Send message" : "Type a message to send a prompt"
-            }
-            onClick={handleSubmit}
-          >
-            Send
-          </Button>
-        )}
+        ) : null}
+        </div>
       </div>
     </div>
   );
