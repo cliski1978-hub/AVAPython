@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from ava.contracts.models import ModelHostingMode
-from ava.models.model_registry import ModelRegistry
+from ava.models.model_registry import ModelProfile, ModelRegistry
 
 
 class ModelResourceState(StrEnum):
@@ -41,6 +41,31 @@ class ModelResourceDescriptor:
     resource_adapter_id: str
     estimated_vram_mb: int | None = None
     estimated_ram_mb: int | None = None
+
+
+@dataclass(frozen=True)
+class DefaultResourceDescriptor:
+    """Composition-owned resource policy for newly selected profiles.
+
+    Used only when ``acquire`` receives an explicit, enabled ``ModelProfile``.
+    Bare unknown ids still fail closed. Production uses provider-managed
+    residency with unknown estimates, just like the bootstrap catalog.
+    Tests or future adapters can supply estimates; dynamic local profiles then
+    participate in the same capacity accounting as startup profiles.
+    """
+
+    resource_adapter_id: str
+    estimated_vram_mb: int | None = None
+    estimated_ram_mb: int | None = None
+
+    def for_model(self, model_id: str) -> ModelResourceDescriptor:
+        """Materialize the per-model descriptor this default stands in for."""
+        return ModelResourceDescriptor(
+            model_id=model_id,
+            resource_adapter_id=self.resource_adapter_id,
+            estimated_vram_mb=self.estimated_vram_mb,
+            estimated_ram_mb=self.estimated_ram_mb,
+        )
 
 
 class ModelResourceAdapter(Protocol):
@@ -135,6 +160,7 @@ class ModelResourceManager:
         descriptors: tuple[ModelResourceDescriptor, ...],
         adapters: ModelResourceAdapterRegistry,
         capacity: ResourceCapacity | None = None,
+        default_descriptor: DefaultResourceDescriptor | None = None,
     ) -> None:
         self._registry = registry
         self._descriptors = {descriptor.model_id: descriptor for descriptor in descriptors}
@@ -145,9 +171,16 @@ class ModelResourceManager:
                 raise ValueError(f"resource descriptor references unknown model: {model_id!r}")
             if adapters.get(descriptor.resource_adapter_id) is None:
                 raise ValueError(f"unknown resource adapter: {descriptor.resource_adapter_id!r}")
+        if default_descriptor is not None and adapters.get(default_descriptor.resource_adapter_id) is None:
+            # Fail at wiring time, not at the first run: a default descriptor
+            # pointing at an uninstalled adapter would otherwise surface as an
+            # unavailable model long after the misconfiguration was introduced.
+            raise ValueError(f"unknown resource adapter: {default_descriptor.resource_adapter_id!r}")
+        self._default_descriptor = default_descriptor
         self._adapters = adapters
         self._capacity = capacity or ResourceCapacity()
         self._states: dict[str, ModelResourceState] = {}
+        self._selected_profiles: dict[str, ModelProfile] = {}
         self._leases: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
@@ -155,9 +188,11 @@ class ModelResourceManager:
         async with self._lock:
             return await self._state_for(model_id)
 
-    async def acquire(self, model_id: str) -> ModelLease:
+    async def acquire(self, model_id: str, *, profile: ModelProfile | None = None) -> ModelLease:
         """Ensure the selected model is ready, then issue one active lease."""
         async with self._lock:
+            if profile is not None:
+                self._accept_selected_profile(model_id, profile)
             state = await self._state_for(model_id)
             if state is ModelResourceState.UNAVAILABLE:
                 raise ModelResourceUnavailableError("Selected model resource is unavailable")
@@ -204,9 +239,28 @@ class ModelResourceManager:
 
     def _descriptor_for(self, model_id: str) -> ModelResourceDescriptor:
         descriptor = self._descriptors.get(model_id)
-        if descriptor is None:
-            raise ModelResourceUnavailableError("Selected model resource is not configured")
-        return descriptor
+        if descriptor is not None:
+            return descriptor
+        raise ModelResourceUnavailableError("Selected model resource is not configured")
+
+    def _accept_selected_profile(self, model_id: str, profile: ModelProfile) -> None:
+        """Admit an already-selected profile, never an arbitrary unknown id.
+
+        The descriptor policy is composition-owned. Existing descriptors keep
+        their estimates and adapter. A profile cannot redefine an active lease.
+        """
+        if profile.model_id != model_id or not profile.enabled:
+            raise ModelResourceUnavailableError("Selected model profile is invalid")
+        previous = self._selected_profiles.get(model_id) or self._registry.get(model_id)
+        if previous is not None and previous != profile:
+            if model_id in self._leases.values():
+                raise ModelLeaseConflictError("Selected model changed while leased")
+            self._states.pop(model_id, None)
+        if model_id not in self._descriptors:
+            if self._default_descriptor is None:
+                raise ModelResourceUnavailableError("Selected model resource is not configured")
+            self._descriptors[model_id] = self._default_descriptor.for_model(model_id)
+        self._selected_profiles[model_id] = profile
 
     def _adapter_for(self, model_id: str) -> ModelResourceAdapter:
         descriptor = self._descriptor_for(model_id)
@@ -222,13 +276,13 @@ class ModelResourceManager:
         return self._states[model_id]
 
     async def _ensure_capacity(self, model_id: str) -> None:
-        profile = self._registry.get(model_id)
+        profile = self._selected_profiles.get(model_id) or self._registry.get(model_id)
         descriptor = self._descriptor_for(model_id)
         if profile is None or profile.hosting_mode is not ModelHostingMode.LOCAL:
             return
         used_vram = used_ram = 0
         for other_id, other_descriptor in self._descriptors.items():
-            other_profile = self._registry.get(other_id)
+            other_profile = self._selected_profiles.get(other_id) or self._registry.get(other_id)
             if (
                 other_id == model_id
                 or other_profile is None

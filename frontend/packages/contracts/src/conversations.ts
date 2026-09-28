@@ -1,7 +1,7 @@
 import type { ContractVersion } from "./version";
 
 export type MessageRole = "user" | "assistant" | "system";
-export type MessageStatus = "pending" | "complete" | "failed" | "cancelled";
+export type MessageStatus = "pending" | "streaming" | "complete" | "failed" | "cancelled";
 
 export interface ConversationResponse {
   conversation_id: string;

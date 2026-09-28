@@ -41,6 +41,7 @@ class RunEventRepository(ABC):
       tolerating (ignoring) a terminal event for an already-terminal run.
     * ``get_events`` — return the run's events in append order, or ``[]`` for
       an unknown run.
+    * ``list_after_sequence`` — replay facts after an exclusive per-run cursor.
     * ``get_latest`` — return the most recently appended event, if any.
 
     Terminal-event enforcement is expressed by ``TERMINAL_EVENT_TYPES`` and the
@@ -49,7 +50,8 @@ class RunEventRepository(ABC):
     same observable semantics.
 
     Deliberately not part of this port: ``clear``/list observability helpers,
-    streaming, event replay, and any event schema beyond ``RunEvent``.
+    transport streaming, lifecycle reconstruction, and any event schema beyond
+    ``RunEvent``.
     """
 
     @abstractmethod
@@ -63,8 +65,8 @@ class RunEventRepository(ABC):
             event: The AVA-owned ``RunEvent`` to append.
 
         Returns:
-            The appended event (the input instance; terminal-ignored appends
-            report the event without storing it).
+            The persisted event, including its allocated sequence. A
+            terminal-ignored append reports the input without storing it.
         """
         raise NotImplementedError
 
@@ -79,6 +81,15 @@ class RunEventRepository(ABC):
             Ordered immutable snapshot of the run's events. An unknown run
             yields an empty collection; run existence is the caller's concern
             (see ``RunRepository``).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_after_sequence(self, run_id: str, after_sequence: int) -> Collection[RunEvent]:
+        """Return persisted facts whose per-run sequence is strictly newer.
+
+        ``after_sequence`` is an exclusive cursor. Zero returns a run's full
+        log; a cursor ahead of the log returns an empty snapshot.
         """
         raise NotImplementedError
 

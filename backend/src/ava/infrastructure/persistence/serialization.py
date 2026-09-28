@@ -109,6 +109,14 @@ def row_to_run_record(row: sqlite3.Row) -> RunRecord:
         created_at=parse_utc(row["created_at"]),
         updated_at=parse_utc(row["updated_at"]),
         execution_selection=load_execution_selection(row["execution_selection"]),
+        conversation_id=row["conversation_id"],
+        source_user_message_id=row["source_user_message_id"],
+        assistant_message_id=row["assistant_message_id"],
+        cancellation_requested_at=(
+            parse_utc(row["cancellation_requested_at"])
+            if row["cancellation_requested_at"] is not None
+            else None
+        ),
     )
 
 
@@ -117,6 +125,7 @@ def row_to_run_event(row: sqlite3.Row) -> RunEvent:
     return RunEvent(
         event_id=row["event_id"],
         run_id=row["run_id"],
+        sequence=int(row["seq"]),
         event_type=EventType(row["event_type"]),
         timestamp=parse_utc(row["timestamp"]),
         payload=load_json(row["payload"]),

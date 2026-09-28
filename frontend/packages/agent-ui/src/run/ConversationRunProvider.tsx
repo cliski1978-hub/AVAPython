@@ -3,7 +3,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 
@@ -12,8 +14,10 @@ import type { UIRunPhase } from "../types";
 import {
   cancelActiveRun,
   clientRunAgent,
+  recoverRunForConversation,
   startRunForPrompt,
   submitPrompt,
+  visibleRecoveryCandidate,
   type RunCommands,
 } from "./conversationRun";
 import { createPersistAssistantMessageCommand } from "./persistAssistantMessage";
@@ -64,6 +68,19 @@ export function AgentRunProvider({
 }) {
   const conversation = useConversationState();
   const agent = useMemo(() => clientRunAgent(client), [client]);
+  const streamController = useRef<AbortController | null>(null);
+  const activeConversationId = useRef<string | null>(conversation.activeConversation?.id ?? null);
+  const recoveryKey = useRef<string | null>(null);
+
+  useEffect(() => () => streamController.current?.abort(), []);
+  useEffect(() => {
+    if (activeConversationId.current !== conversation.activeConversation?.id) {
+      streamController.current?.abort();
+      streamController.current = null;
+      recoveryKey.current = null;
+      activeConversationId.current = conversation.activeConversation?.id ?? null;
+    }
+  }, [conversation.activeConversation?.id]);
 
   const commands = useMemo<RunCommands>(
     () => ({
@@ -71,6 +88,7 @@ export function AgentRunProvider({
       addAssistantMessage: conversation.addAssistantMessage,
       setRunState: conversation.setRunState,
       updateMessage: conversation.updateMessage,
+      associateAssistantMessage: conversation.associateAssistantMessage,
       getRunState: conversation.getRunState,
       // The run hands us the final content/source directly: reading them back
       // from state here would race React's re-render after the last event.
@@ -94,6 +112,27 @@ export function AgentRunProvider({
   const isStopping = uiPhase === "stopping";
   const runError = activeRun?.runError ?? null;
 
+  useEffect(() => {
+    if (activeConversation == null) return;
+    const candidate = visibleRecoveryCandidate(activeConversation);
+    if (candidate == null) return;
+    const key = `${activeConversation.id}:${candidate.assistantMessageId}:${candidate.sourceRunId}`;
+    if (recoveryKey.current === key) return;
+    recoveryKey.current = key;
+    streamController.current?.abort();
+    const controller = new AbortController();
+    streamController.current = controller;
+    void recoverRunForConversation({
+      conversation: activeConversation,
+      agent,
+      commands,
+      streamSignal: controller.signal,
+    }).catch(() => {
+      // A failed lookup is transport state; do not manufacture lifecycle.
+      if (!controller.signal.aborted) recoveryKey.current = null;
+    });
+  }, [activeConversation, agent, commands]);
+
   const submitPromptFn = useCallback(
     async (prompt: string, execution?: RunExecutionOverride, workspaceId?: string | null) => {
       const current = conversation.activeConversation;
@@ -103,7 +142,12 @@ export function AgentRunProvider({
       }
       const promptText = prompt.trim();
       if (promptText.length === 0) return;
-      await submitPrompt(promptText, current?.id ?? null, agent, commands, execution, workspaceId);
+      streamController.current?.abort();
+      streamController.current = new AbortController();
+      await submitPrompt(
+        promptText, current?.id ?? null, agent, commands, execution, workspaceId,
+        streamController.current.signal,
+      );
     },
     [conversation, agent, commands],
   );
@@ -153,6 +197,11 @@ export function AgentRunProvider({
         prompt,
         agent,
         commands,
+        streamSignal: (() => {
+          streamController.current?.abort();
+          streamController.current = new AbortController();
+          return streamController.current.signal;
+        })(),
       });
     },
     [conversation, agent, commands],

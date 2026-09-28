@@ -21,6 +21,12 @@ export interface ButtonProps {
   title?: string;
   /** Communicates pressed (active) state for toggle-style buttons. */
   ariaPressed?: boolean;
+  /**
+   * `md` is the standard control height; `sm` is a compact variant for
+   * row-level and inline actions where a full-height button would dominate
+   * its surroundings.
+   */
+  size?: "sm" | "md";
   style?: CSSProperties;
 }
 
@@ -84,24 +90,26 @@ export function Button({
   ariaLabel,
   title,
   ariaPressed,
+  size = "md",
   style: customStyle,
 }: ButtonProps) {
   const interactive = !disabled && !loading;
   const interaction = useInteraction(interactive);
   const variantStyle = variants[variant];
+  const compact = size === "sm";
 
   const style: CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     gap: t.spacing.sm,
-    height: t.control.height,
-    padding: `0 ${t.spacing.lg}px`,
+    height: compact ? 28 : t.control.height,
+    padding: `0 ${compact ? t.spacing.md : t.spacing.lg}px`,
     borderRadius: t.control.radius,
     borderWidth: t.border.width,
     borderStyle: "solid",
     borderColor: variantStyle.base.borderColor,
-    fontSize: t.control.fontSize,
+    fontSize: compact ? t.font.sizeXs : t.control.fontSize,
     fontWeight: t.font.weightSemibold,
     fontFamily: t.font.family,
     cursor: interactive ? "pointer" : "not-allowed",
@@ -135,6 +143,7 @@ export function Button({
       aria-disabled={disabled || loading || undefined}
       aria-pressed={ariaPressed ?? undefined}
       data-variant={variant}
+      data-size={size}
       title={title}
       onMouseEnter={interaction.onMouseEnter}
       onMouseLeave={interaction.onMouseLeave}

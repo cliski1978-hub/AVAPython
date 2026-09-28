@@ -25,6 +25,8 @@ class RunRequest(BaseModel):
     """
 
     prompt: str = Field(min_length=1)
+    conversation_id: str | None = None
+    source_user_message_id: str | None = None
     execution: RunExecutionOverride | None = None
     workspace_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)

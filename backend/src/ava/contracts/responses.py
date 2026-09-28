@@ -3,6 +3,7 @@
 Framework-neutral response DTOs. Vendor SDK objects must never appear here.
 """
 
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -67,7 +68,19 @@ class CapabilitiesResponse(BaseModel):
 
 
 class RunStatus(StrEnum):
-    """Run status values for AVA runs."""
+    """The authoritative lifecycle status of an AVA run.
+
+    This enum *is* the run lifecycle state machine's vocabulary, and it is the
+    single source of the active/terminal classification every backend layer
+    asks about. The allowed transitions between these values are policy and live
+    with the transition authority (``ava.services.run_lifecycle_service``), not
+    here: this type answers "is this state final?", never "may this state move?".
+
+    ``WAITING_FOR_APPROVAL`` is declared and projected but has no production
+    writer today; see ``docs/AVA_Phase_5_23_Run_Lifecycle_Normalization.md``.
+    It is kept because it is part of the published vocabulary and an approvals
+    flow is anticipated, not because a run can currently reach it.
+    """
 
     PENDING = "pending"
     RUNNING = "running"
@@ -76,14 +89,65 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
     FAILED = "failed"
 
+    @property
+    def is_terminal(self) -> bool:
+        """Whether this status is a final state no run may leave.
+
+        Terminal means the run produced its outcome. It does not mean the run
+        succeeded: ``failed`` and ``cancelled`` are terminal outcomes too.
+        """
+        return self in TERMINAL_RUN_STATUSES
+
+    @property
+    def is_active(self) -> bool:
+        """Whether a run in this status is still in progress.
+
+        The exact complement of :attr:`is_terminal`, so the two can never
+        disagree and no caller has to keep its own copy of the list.
+        """
+        return self in ACTIVE_RUN_STATUSES
+
+
+#: The one canonical definition of a finished run, shared by the run service,
+#: the lifecycle authority, conversation reads, and lifecycle tests.
+TERMINAL_RUN_STATUSES: frozenset[RunStatus] = frozenset(
+    {RunStatus.COMPLETED, RunStatus.CANCELLED, RunStatus.FAILED}
+)
+
+#: The one canonical definition of an in-progress run. ``waiting_for_approval``
+#: counts as active: an approval-gated run has started and still owes an
+#: outcome.
+ACTIVE_RUN_STATUSES: frozenset[RunStatus] = frozenset(RunStatus) - TERMINAL_RUN_STATUSES
+
 
 class RunResponse(BaseModel):
-    """Response contract describing the state of a run."""
+    """Response contract describing the state of a run.
+
+    ``cancellation_requested_at`` is durable *intent*: the moment a user asked
+    for this run to stop. It is deliberately not a status and deliberately not
+    proof of cancellation. A run reported as ``running`` with a request
+    timestamp is a run whose cancellation has not settled yet — the request
+    survived, the outcome is still open. Only ``status == cancelled`` means the
+    run actually stopped.
+    """
 
     run_id: str
     status: RunStatus
+    conversation_id: str | None = None
+    source_user_message_id: str | None = None
+    assistant_message_id: str | None = None
     execution_selection: RunExecutionSelection | None = None
+    cancellation_requested_at: datetime | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
+
+    @property
+    def cancellation_requested(self) -> bool:
+        """Whether a cancellation request was recorded for this run.
+
+        Derived from the timestamp rather than stored beside it, so the two can
+        never disagree and a client never has to decide which one is real.
+        """
+        return self.cancellation_requested_at is not None
 
 
 class RuntimeDiscoveryItem(BaseModel):

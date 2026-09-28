@@ -412,6 +412,24 @@ describe("conversation:replaceMessage", () => {
   });
 });
 
+describe("conversation:associateAssistantMessage", () => {
+  it("rekeys the existing streaming bubble to the durable backend message id", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const conversationId = state.activeConversationId!;
+    state = conversationReducer(state, {
+      type: "conversation:addAssistantMessage", conversationId,
+      messageId: "local", sourceUserMessageId: "user",
+    });
+    state = conversationReducer(state, {
+      type: "conversation:associateAssistantMessage", conversationId,
+      placeholderId: "local", messageId: "durable",
+    });
+    expect(state.conversations[0].messages).toEqual([
+      expect.objectContaining({ id: "durable", sourceUserMessageId: "user" }),
+    ]);
+  });
+});
+
 describe("conversation:rename", () => {
   it("replaces the title of the named conversation only", () => {
     let state = conversationReducer(emptyState, { type: "conversation:create" });

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from ava.agents.adapters.native.native_agent import NativeAgentAdapter
+from ava.contracts.conversations import RunContext
 from ava.contracts.models import (
     ModelCapabilities,
     ModelInfo,
@@ -92,8 +93,9 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del model_provider, model_binding
+        del model_provider, model_binding, context
         self.calls += 1
         self.received.append(workspace)
         return RuntimeRunResult(status=self._status, content=self._content)

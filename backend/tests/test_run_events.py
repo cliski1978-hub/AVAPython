@@ -262,6 +262,8 @@ def test_cancelled_run_emits_run_cancelled_only() -> None:
         events = store.get_events(run_id)
         assert [e.event_type for e in events] == [
             EventType.RUN_STARTED,
+            EventType.MESSAGE_STARTED,
+            EventType.RUN_CANCEL_REQUESTED,
             EventType.RUN_CANCELLED,
         ]
         assert cancel_response.status == RunStatus.CANCELLED
@@ -287,7 +289,12 @@ def test_cancellation_wins_over_completion() -> None:
 
         assert response.status == RunStatus.CANCELLED
         types = [e.event_type for e in store.get_events(run_id)]
-        assert types == [EventType.RUN_STARTED, EventType.RUN_CANCELLED]
+        assert types == [
+            EventType.RUN_STARTED,
+            EventType.MESSAGE_STARTED,
+            EventType.RUN_CANCEL_REQUESTED,
+            EventType.RUN_CANCELLED,
+        ]
         # The store enforces a single terminal event: no run_completed.
         terminals = [
             t
@@ -321,7 +328,7 @@ def test_failed_run_emits_run_failed_with_payload() -> None:
 
         events = store.get_events(response.run_id)
         types = [e.event_type for e in events]
-        assert types == [EventType.RUN_STARTED, EventType.RUN_FAILED]
+        assert types == [EventType.RUN_STARTED, EventType.MESSAGE_STARTED, EventType.RUN_FAILED]
         assert response.status == RunStatus.FAILED
 
         payload = events[-1].payload

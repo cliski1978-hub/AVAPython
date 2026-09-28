@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 from ava.agents.adapters.native.native_agent import NativeAgentAdapter
+from ava.contracts.conversations import RunContext
 from ava.contracts.execution import RunExecutionOverride
 from ava.contracts.models import (
     ModelCapabilities,
@@ -123,8 +124,9 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del run_id, workspace
+        del run_id, workspace, context
         assert model_binding is not None
         self.invocations.append(
             Invocation(

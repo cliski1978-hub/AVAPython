@@ -67,9 +67,9 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
     try:
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert [m.version for m in runner.pending_migrations()] == [1, 2, 3]
-        assert runner.migrate() == [1, 2, 3]
-        assert runner.current_version() == 3
+        assert [m.version for m in runner.pending_migrations()] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert runner.migrate() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert runner.current_version() == 9
         assert list(runner.pending_migrations()) == []
         tables = _tables(database)
         assert {
@@ -80,6 +80,10 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             "documents",
             "document_revisions",
             "attachments",
+            "provider_connections",
+            "model_configurations",
+            "runtime_configurations",
+            "application_execution_defaults",
         } <= tables
         assert "ava_schema_migrations" in tables
         applied = runner.applied_migrations()
@@ -87,6 +91,12 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             (1, "initial application persistence schema"),
             (2, "document revision history"),
             (3, "attachment metadata"),
+            (4, "provider connections"),
+            (5, "model configurations"),
+                (6, "runtime configurations"),
+                (7, "application execution defaults"),
+                (8, "durable conversation run relationships"),
+                (9, "durable run cancellation request"),
         ]
         assert applied[0].applied_at
     finally:
@@ -101,9 +111,9 @@ def test_migrate_is_idempotent_for_an_already_current_database() -> None:
         runner.migrate()
         tables_before = _tables(database)
         assert runner.migrate() == []
-        assert runner.current_version() == 3
+        assert runner.current_version() == 9
         assert _tables(database) == tables_before
-        assert _metadata_versions(database) == [1, 2, 3]
+        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     finally:
         database.dispose()
         path.unlink()
@@ -117,11 +127,17 @@ def test_migration_records_version_and_name_metadata() -> None:
             rows = connection.execute(
                 "SELECT version, name, applied_at FROM ava_schema_migrations ORDER BY version"
             ).fetchall()
-        assert len(rows) == 3
+        assert len(rows) == 9
         assert [(row["version"], row["name"]) for row in rows] == [
             (1, "initial application persistence schema"),
             (2, "document revision history"),
             (3, "attachment metadata"),
+            (4, "provider connections"),
+            (5, "model configurations"),
+                (6, "runtime configurations"),
+                (7, "application execution defaults"),
+                (8, "durable conversation run relationships"),
+                (9, "durable run cancellation request"),
         ]
         assert rows[0]["applied_at"].startswith("20")
         assert rows[1]["applied_at"].startswith("20")
@@ -293,9 +309,9 @@ def test_migrate_adopts_a_legacy_step4_6_database_without_destroying_data() -> N
 
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert runner.migrate() == [1, 2, 3]
-        assert runner.current_version() == 3
-        assert _metadata_versions(database) == [1, 2, 3]
+        assert runner.migrate() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert runner.current_version() == 9
+        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
         with database.connect() as connection:
             row = connection.execute("SELECT run_id, status FROM runs").fetchone()
         assert row["run_id"] == "legacy-run"
@@ -359,8 +375,8 @@ def test_legacy_v1_v2_database_upgrades_to_v3_without_backfill() -> None:
         assert "document_revisions" in before
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == [3]
-        assert _metadata_versions(database) == [1, 2, 3]
+        assert runner.migrate() == [3, 4, 5, 6, 7, 8, 9]
+        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
         with database.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
@@ -387,7 +403,7 @@ def test_create_relational_repositories_adopts_a_legacy_database_usable_through_
         assert repositories.run_repository.get("via-port") is not None
         repositories.dispose()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 3
+            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 9
     finally:
         path.unlink()
 
@@ -637,7 +653,7 @@ def test_migrated_file_database_keeps_schema_and_data_across_reopen() -> None:
 
         reopened = SqliteDatabase(str(path), auto_migrate=False)
         runner = MigrationRunner(reopened, default_registry())
-        assert runner.current_version() == 3
+        assert runner.current_version() == 9
         assert runner.migrate() == []
         with reopened.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
@@ -666,3 +682,127 @@ def test_initial_migration_statements_match_the_step_4_6_schema() -> None:
     statements = " ".join(v0001_initial_schema.STATEMENTS)
     assert statements.count("CREATE TABLE") == 5
     assert "ava_schema_migrations" not in statements
+
+
+# ============================================================
+# Phase 5.24: durable run cancellation request
+# ============================================================
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    return [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+
+
+def _seed_version_8_run(database: SqliteDatabase, path: Path) -> None:
+    """Reduce a database to the pre-5.24 shape and give it two runs."""
+    only_through_eight = MigrationRegistry()
+    for migration in default_registry():
+        if migration.version > 8:
+            break
+        only_through_eight.register(migration)
+    MigrationRunner(database, only_through_eight).migrate()
+    database.dispose()
+
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO runs (run_id, status, created_at, updated_at) VALUES ("
+            "'old-run', 'completed', '2026-02-03T04:05:06+00:00', '2026-02-03T04:05:06+00:00')"
+        )
+        connection.execute(
+            "INSERT INTO runs (run_id, status, created_at, updated_at) VALUES ("
+            "'old-running', 'running', '2026-02-03T04:05:06+00:00', '2026-02-03T04:05:06+00:00')"
+        )
+        connection.commit()
+
+
+def test_v9_adds_a_nullable_cancellation_request_column() -> None:
+    from ava.infrastructure.persistence.migrations.versions import v0009_run_cancellation_request
+
+    assert v0009_run_cancellation_request.VERSION == 9
+    assert v0009_run_cancellation_request.NAME == "durable run cancellation request"
+    assert v0009_run_cancellation_request.EXPECTED_COLUMNS[-1] == "cancellation_requested_at"
+
+
+def test_v9_leaves_existing_runs_with_no_cancellation_request() -> None:
+    """Existing rows gain a NULL, which is the truth for pre-5.24 runs.
+
+    There is deliberately no backfill: inventing a request time for a run that
+    predates the feature would be fabricating evidence that nobody asked.
+    """
+    database, path = _file_database()
+    try:
+        _seed_version_8_run(database, path)
+        database.dispose()
+
+        reopened = SqliteDatabase(str(path), auto_migrate=False)
+        try:
+            runner = MigrationRunner(reopened, default_registry())
+            assert runner.current_version() == 8
+            assert runner.migrate() == [9]
+
+            with reopened.connect() as connection:
+                assert _table_columns(connection, "runs")[-1] == "cancellation_requested_at"
+                rows = connection.execute(
+                    "SELECT run_id, status, cancellation_requested_at FROM runs ORDER BY run_id"
+                ).fetchall()
+            assert [(row["run_id"], row["status"], row["cancellation_requested_at"]) for row in rows] == [
+                ("old-run", "completed", None),
+                ("old-running", "running", None),
+            ]
+        finally:
+            reopened.dispose()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_v9_preserves_the_existing_runs_table_and_its_rows() -> None:
+    database, path = _file_database()
+    try:
+        _seed_version_8_run(database, path)
+        database.dispose()
+
+        reopened = SqliteDatabase(str(path), auto_migrate=False)
+        try:
+            MigrationRunner(reopened, default_registry()).migrate()
+            with reopened.connect() as connection:
+                assert tuple(_table_columns(connection, "runs")) == (
+                    "run_id", "status", "created_at", "updated_at", "execution_selection",
+                    "conversation_id", "source_user_message_id", "assistant_message_id",
+                    "cancellation_requested_at",
+                )
+                assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
+                assert connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' "
+                    "AND name = 'idx_runs_cancellation_requested'"
+                ).fetchone()[0] == 1
+        finally:
+            reopened.dispose()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_a_cancellation_request_written_after_migration_survives_reopen() -> None:
+    database, path = _file_database()
+    try:
+        MigrationRunner(database, default_registry()).migrate()
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO runs (run_id, status, created_at, updated_at, cancellation_requested_at) "
+                "VALUES ('run-1', 'running', '2026-02-03T04:05:06+00:00', "
+                "'2026-02-03T04:05:06+00:00', '2026-02-03T05:00:00+00:00')"
+            )
+            connection.commit()
+        database.dispose()
+
+        reopened = SqliteDatabase(str(path), auto_migrate=False)
+        try:
+            with reopened.connect() as connection:
+                row = connection.execute(
+                    "SELECT status, cancellation_requested_at FROM runs WHERE run_id = 'run-1'"
+                ).fetchone()
+            assert row["status"] == "running"
+            assert row["cancellation_requested_at"] == "2026-02-03T05:00:00+00:00"
+        finally:
+            reopened.dispose()
+    finally:
+        Path(path).unlink(missing_ok=True)

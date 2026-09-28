@@ -12,6 +12,7 @@ Implements the AVA ``MessageRepository`` port over the shared
 """
 
 import sqlite3
+from datetime import UTC, datetime
 
 from ava.infrastructure.persistence.database import SqliteDatabase, translate_database_error
 from ava.infrastructure.persistence.serialization import row_to_message_record, to_utc_iso
@@ -66,6 +67,21 @@ class RelationalMessageRepository(MessageRepository):
                 (conversation_id,),
             ).fetchall()
         return [row_to_message_record(row) for row in rows]
+
+    def update_content(self, conversation_id: str, message_id: str, content: str) -> MessageRecord | None:
+        now = datetime.now(UTC)
+        with self._database.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE messages SET content = ?, updated_at = ? WHERE conversation_id = ? AND message_id = ?",
+                (content, to_utc_iso(now), conversation_id, message_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                f"SELECT {_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND message_id = ?",
+                (conversation_id, message_id),
+            ).fetchone()
+        return row_to_message_record(row) if row is not None else None
 
 
 # ============================================================

@@ -59,11 +59,11 @@ export function AssistantMessage({
   onRegenerate,
   progressLabel = "AVA is responding…",
 }: AssistantMessageProps) {
-  if (status === "pending") {
+  if (status === "pending" || status === "streaming") {
     return (
       <div
         data-message-role="assistant"
-        data-message-state="pending"
+        data-message-state={status}
         aria-live="polite"
         style={bubbleStyle}
       >

@@ -15,6 +15,7 @@ import {
 import type { ApiClient } from "@ava/api-client";
 import { getHealth, getModelProviders, getRuntimes, getExecutionProfiles, getWorkspaces, subscribeConnectivity } from "@ava/api-client";
 import { DocumentProvider, DocumentWorkspace } from "@ava/document-core";
+import { SettingsWorkspace } from "@ava/settings-core";
 import {
   AppShell,
   StatusIndicator,
@@ -112,13 +113,14 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
 
   const [workspace, setWorkspace] = useState<WorkspaceId>("chat");
   const [documentOpened, setDocumentOpened] = useState(false);
+  const [settingsOpened, setSettingsOpened] = useState(false);
   const [status, setStatus] = useState<AppStatus>("checking");
   const connectivityVersion = useRef(0);
   const [runtimes, setRuntimes] = useState<RuntimeDiscoveryItem[]>([]);
   const [providers, setProviders] = useState<ModelProviderDiscoveryItem[]>([]);
   const [runtimeId, setRuntimeId] = useState<string>();
   const [providerId, setProviderId] = useState<string>();
-  const [profileId, setProfileId] = useState("custom");
+  const [profileId, setProfileId] = useState("application-default");
   const [profiles, setProfiles] = useState<ExecutionProfile[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
@@ -160,9 +162,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       if (cancelled) return;
       setRuntimes(r.runtimes); setProviders(p.providers);
       setProfiles(profilesResponse.profiles);
-      if (r.runtimes.some(x => x.runtime_info.runtime_id === r.default_runtime_id)) setRuntimeId(r.default_runtime_id);
-      if (p.providers.some(x => x.provider_id === p.default_provider_id)) setProviderId(p.default_provider_id);
-      if (profilesResponse.profiles.some(x => x.id === profilesResponse.default_profile_id)) setProfileId(profilesResponse.default_profile_id);
+      // Discovery offers explicit choices; it never expresses user intent.
     }).catch(() => undefined);
 
     // Workspace discovery is isolated: a /workspaces failure must not block
@@ -192,10 +192,13 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
     if (next === "document") {
       setDocumentOpened(true);
     }
+    if (next === "settings") {
+      setSettingsOpened(true);
+    }
   };
 
   const handleComposerSubmit = (prompt: string) => {
-    const execution = profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...(providerId ? { model_provider_id: providerId } : {}) } : undefined);
+    const execution = profileId === "application-default" ? undefined : profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...(providerId ? { model_provider_id: providerId } : {}) } : undefined);
     const workspaceId =
       selectedWorkspaceId != null &&
       workspaces.some(w => w.workspace_id === selectedWorkspaceId)
@@ -215,6 +218,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
           />
         </>
       }
+      showSidebar={workspace === "chat"}
       sidebarChildren={
         <ConversationList
           conversations={conversations}
@@ -257,6 +261,11 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
               <DocumentWorkspace />
             </WorkspacePane>
           )}
+          {settingsOpened && (
+            <WorkspacePane visible={workspace === "settings"} id="settings-workspace">
+              <SettingsWorkspace client={client} />
+            </WorkspacePane>
+          )}
         </>
       }
       prompt={
@@ -270,7 +279,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
           }}
         >
           <PromptComposer
-            controls={<ExecutionControls profiles={profiles} selectedProfileId={profileId} onAutoChange={() => setProfileId("auto")} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId("custom"); setRuntimeId(id); }} onModelProviderChange={id => { setProfileId("custom"); setProviderId(id); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
+            controls={<ExecutionControls profiles={profiles} selectedProfileId={profileId} onDefaultChange={() => { setProfileId("application-default"); setRuntimeId(undefined); setProviderId(undefined); }} onAutoChange={() => { setProfileId("auto"); setRuntimeId(undefined); setProviderId(undefined); }} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId(id || providerId ? "custom" : "application-default"); setRuntimeId(id || undefined); }} onModelProviderChange={id => { setProfileId(id || runtimeId ? "custom" : "application-default"); setProviderId(id || undefined); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
             placeholder="Ask AVA anything..."
             onSubmit={handleComposerSubmit}
             onStop={stopRun}

@@ -12,6 +12,10 @@ export type RunStatus =
 
 export interface RunRequest {
   prompt: string;
+  /** Durable conversation ownership for a conversation-originated run. */
+  conversation_id?: string | null;
+  /** Durable user message that caused the run; supplied with conversation_id. */
+  source_user_message_id?: string | null;
   execution?: RunExecutionOverride | null;
   /** Opaque AVA workspace id. Omitted when no workspace is selected. */
   workspace_id?: string | null;
@@ -53,8 +57,13 @@ export interface RuntimeDiscoveryResponse {
 }
 
 export interface RunResponse {
+  /** Durable intent only; status remains the authoritative outcome. */
+  cancellation_requested_at?: string | null;
   run_id: string;
   status: RunStatus;
+  conversation_id?: string | null;
+  source_user_message_id?: string | null;
+  assistant_message_id?: string | null;
   contract_version: ContractVersion;
   execution_selection?: RunExecutionSelection | null;
 }

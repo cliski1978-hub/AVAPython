@@ -658,7 +658,7 @@ def test_runtime_cancellation_revokes_tools_in_surviving_sdk_thread(tmp_path: Pa
         ))
         try:
             assert await asyncio.to_thread(entered.wait, 3)
-            assert (await runtime.cancel_run("cancelled")).status == RunStatus.CANCELLED
+            assert (await runtime.cancel_run("cancelled")).status == RunStatus.RUNNING
         finally:
             release.set()
         assert (await asyncio.wait_for(task, 3)).status == RunStatus.CANCELLED

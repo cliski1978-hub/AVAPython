@@ -30,6 +30,7 @@ export type ConversationAction =
   | { type: "conversation:messagesHydrate"; conversationId: string; messages: Conversation["messages"] }
   | { type: "conversation:messagesLoadFailure"; conversationId: string; error: string }
   | { type: "conversation:replaceMessage"; conversationId: string; placeholderId: string; message: ConversationMessage }
+  | { type: "conversation:associateAssistantMessage"; conversationId: string; placeholderId: string; messageId: string }
   | { type: "conversation:hydrate"; conversations: Conversation[] }
   | { type: "conversation:loadStart" }
   | { type: "conversation:loadFailure"; error: string }
@@ -232,6 +233,17 @@ export function conversationReducer(
     case "conversation:messagesLoadFailure": return { ...state, error: action.error };
     case "conversation:messagesHydrate": return updateConversation(state, action.conversationId, (conversation) => ({ ...conversation, messages: mergeConversationMessages(conversation.messages, action.messages) }));
     case "conversation:replaceMessage": return updateConversation(state, action.conversationId, (conversation) => ({ ...conversation, messages: conversation.messages.map((message) => message.id === action.placeholderId ? action.message : message) }));
+    case "conversation:associateAssistantMessage": return updateConversation(state, action.conversationId, (conversation) => {
+      if (conversation.messages.some((message) => message.id === action.messageId)) {
+        return { ...conversation, messages: conversation.messages.filter((message) => message.id !== action.placeholderId) };
+      }
+      return {
+        ...conversation,
+        messages: conversation.messages.map((message) =>
+          message.id === action.placeholderId ? { ...message, id: action.messageId } : message,
+        ),
+      };
+    });
     case "conversation:loadStart": return { ...state, loading: true, error: null };
     case "conversation:loadFailure": return { ...state, loading: false, error: action.error };
     case "conversation:hydrate": return {

@@ -29,12 +29,16 @@ from ava.repositories.document_revision_repository import (
     DocumentRevisionRecord,
     DocumentRevisionRepository,
 )
+from ava.repositories.execution_defaults_repository import ExecutionDefaultsRepository
 from ava.repositories.message_repository import MessageRecord, MessageRepository
+from ava.repositories.model_configuration_repository import ModelConfigurationRepository
+from ava.repositories.provider_connection_repository import ProviderConnectionRepository
 from ava.repositories.run_event_repository import (
     TERMINAL_EVENT_TYPES,
     RunEventRepository,
 )
 from ava.repositories.run_repository import RunRecord, RunRepository
+from ava.repositories.runtime_configuration_repository import RuntimeConfigurationRepository
 
 __all__ = [
     "AttachmentContentStore",
@@ -46,11 +50,15 @@ __all__ = [
     "DocumentRepository",
     "DocumentRevisionRecord",
     "DocumentRevisionRepository",
+    "ExecutionDefaultsRepository",
     "MessageRecord",
     "MessageRepository",
+    "ModelConfigurationRepository",
+    "ProviderConnectionRepository",
     "RunEventRepository",
     "RunRepository",
     "RunRecord",
+    "RuntimeConfigurationRepository",
     "StoredContentInfo",
     "TERMINAL_EVENT_TYPES",
 ]

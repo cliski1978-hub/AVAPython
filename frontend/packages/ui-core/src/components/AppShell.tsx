@@ -15,6 +15,12 @@ export interface AppShellProps {
   sidebarChildren?: ReactNode;
   mainContent?: ReactNode;
   prompt?: ReactNode;
+  /**
+   * Hides the sidebar entirely. Views that are not conversation-shaped (for
+   * example Settings) pass `false` rather than rendering an unrelated sidebar.
+   * Defaults to `true` so existing compositions are unaffected.
+   */
+  showSidebar?: boolean;
 }
 
 const t = defaultTheme;
@@ -43,6 +49,7 @@ export function AppShell({
   sidebarChildren,
   mainContent,
   prompt,
+  showSidebar = true,
 }: AppShellProps) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
@@ -57,7 +64,9 @@ export function AppShell({
     <div style={rootStyle}>
       <Header actions={headerActions} />
       <div style={bodyStyle}>
-        <Sidebar collapsed={collapsed} onToggle={toggle} children={sidebarChildren} />
+        {showSidebar && (
+          <Sidebar collapsed={collapsed} onToggle={toggle} children={sidebarChildren} />
+        )}
         <main
           style={{
             flex: 1,

@@ -125,6 +125,10 @@ def test_run_response_serializes_to_json() -> None:
         "status": "completed",
         "contract_version": CONTRACT_VERSION,
         "execution_selection": None,
+        "conversation_id": None,
+        "source_user_message_id": None,
+        "assistant_message_id": None,
+        "cancellation_requested_at": None,
     }
 
 

@@ -251,7 +251,7 @@ def test_mock_agent_cancel_unknown_run_is_a_no_op() -> None:
 
         response = await agent.cancel_run("never-started")
 
-        assert response.status == RunStatus.CANCELLED
+        assert response.status == RunStatus.RUNNING
         assert response.run_id == "never-started"
         assert agent.final_status_for("never-started") is None
         assert agent.response_for("never-started") is None

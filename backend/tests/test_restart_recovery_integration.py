@@ -21,7 +21,7 @@ on either side:
   plus one new message), and a *second* restart (A→B→C) preserves the original
   state *and* the post-recovery writes;
 * every restart bootstrap exercises the real migration runner and stays at
-  schema version 3 (v0001..v0003) with nothing pending — the normal migration
+  schema version 4 (v0001..v0004) with nothing pending — the normal migration
   path, never bypassed.
 
 The run is created through ``POST /runs`` against the deterministic mock
@@ -112,19 +112,23 @@ def _seed(client: TestClient) -> DurableState:
     ).json()
 
     # A completed run via the deterministic mock agent, with its 4 ordered events.
-    run = client.post("/runs", json={"prompt": RUN_PROMPT}).json()
+    run = client.post(
+        "/runs",
+        json={
+            "prompt": RUN_PROMPT,
+            "conversation_id": conversation["conversation_id"],
+            "source_user_message_id": user_message["message_id"],
+        },
+    ).json()
+    assert run["status"] == "running", "[run] seed run was not accepted"
+    run = client.get(f"/runs/{run['run_id']}").json()
     assert run["status"] == "completed", "[run] seed run did not complete"
     events = client.get(f"/runs/{run['run_id']}/events").json()
     assert [event["event_type"] for event in events] == EXPECTED_RUN_EVENT_TYPES, "[run event] seed sequence deviated"
 
-    # An assistant message linked to the run (cross-domain reference).
-    assistant_content = next(
-        event["payload"]["content"] for event in events if event["event_type"] == "message_content"
-    )
-    assistant_message = client.post(
-        f"/conversations/{conversation['conversation_id']}/messages",
-        json={"content": assistant_content, "role": "assistant", "source_run_id": run["run_id"]},
-    ).json()
+    assistant_message = client.get(
+        f"/conversations/{conversation['conversation_id']}/messages"
+    ).json()["messages"][1]
     assert assistant_message["source_run_id"] == run["run_id"], "[message] seed link to run lost"
 
     # A document with two immutable revisions (create records rev 1, update records rev 2).
@@ -173,7 +177,7 @@ def _schema_info(app: FastAPI) -> tuple[list[int], int]:
     """Return the applied schema versions and the number of pending migrations.
 
     Infrastructure-only introspection (constraint #33): verifies the migrated
-    database at schema version 3 with nothing pending, exercising the normal
+    database at the latest schema version with nothing pending, exercising the normal
     bootstrap path rather than bypassing it.
     """
     from ava.infrastructure.persistence.migrations.runner import MigrationRunner
@@ -185,9 +189,9 @@ def _schema_info(app: FastAPI) -> tuple[list[int], int]:
     return applied, len(pending)
 
 
-def _assert_schema_at_v3(app: FastAPI) -> None:
+def _assert_schema_at_v5(app: FastAPI) -> None:
     applied, pending = _schema_info(app)
-    assert applied == [1, 2, 3], f"[migrations] applied versions changed across restart: {applied}"
+    assert applied == [1, 2, 3, 4, 5, 6, 7, 8, 9], f"[migrations] applied versions changed across restart: {applied}"
     assert pending == 0, f"[migrations] unexpected pending migrations after startup: {pending}"
 
 
@@ -292,7 +296,7 @@ def test_seeded_durable_state_survives_a_clean_restart(tmp_path) -> None:
     first = TestClient(first_app)
     with first:
         state = _seed(first)
-        _assert_schema_at_v3(first_app)
+        _assert_schema_at_v5(first_app)
 
     # Dispose and discard the entire application + persistence.
     first_app.state.persistence.dispose()
@@ -302,7 +306,7 @@ def test_seeded_durable_state_survives_a_clean_restart(tmp_path) -> None:
     second_app = create_app(settings=settings)
     second = TestClient(second_app)
     with second:
-        _assert_schema_at_v3(second_app)
+        _assert_schema_at_v5(second_app)
         _assert_original_state(second, state)
 
     # Physical proof under the unchanged content root (constraint #34): the
@@ -326,7 +330,7 @@ def test_recovered_application_continues_writing_across_a_second_restart(tmp_pat
     client_a = TestClient(app_a)
     with client_a:
         state = _seed(client_a)
-        _assert_schema_at_v3(app_a)
+        _assert_schema_at_v5(app_a)
     app_a.state.persistence.dispose()
     del client_a
     del app_a
@@ -336,7 +340,7 @@ def test_recovered_application_continues_writing_across_a_second_restart(tmp_pat
     client_b = TestClient(app_b)
     allocated_rev3: dict[str, Any] | None = None
     with client_b:
-        _assert_schema_at_v3(app_b)
+        _assert_schema_at_v5(app_b)
         _assert_original_state(client_b, state)
 
         # The document update appends exactly one new revision.
@@ -361,7 +365,7 @@ def test_recovered_application_continues_writing_across_a_second_restart(tmp_pat
             json={"content": POST_RECOVERY_MESSAGE, "role": "user"},
         )
         assert appended.status_code == 201, "[message] post-recovery write failed"
-        assert _schema_info(app_b)[0] == [1, 2, 3], "[migrations] write churn touched the schema"
+        assert _schema_info(app_b)[0] == [1, 2, 3, 4, 5, 6, 7, 8, 9], "[migrations] write churn touched the schema"
 
     assert allocated_rev3 is not None
     app_b.state.persistence.dispose()
@@ -372,7 +376,7 @@ def test_recovered_application_continues_writing_across_a_second_restart(tmp_pat
     app_c = create_app(settings=settings)
     client_c = TestClient(app_c)
     with client_c:
-        _assert_schema_at_v3(app_c)
+        _assert_schema_at_v5(app_c)
         _assert_original_state(client_c, state, post_recovery=True)
 
         document = client_c.get(f"/documents/{state.document['document_id']}")

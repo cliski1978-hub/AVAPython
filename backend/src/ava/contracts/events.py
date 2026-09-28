@@ -32,6 +32,11 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run_completed"
     RUN_CANCELLED = "run_cancelled"
     RUN_FAILED = "run_failed"
+    #: Durable fact that a cancellation was *requested* for a run. Not a terminal
+    #: event: the run may still complete or fail after this. The run's
+    #: ``cancellation_requested_at`` is the authority for the request; this is
+    #: the observable record of it.
+    RUN_CANCEL_REQUESTED = "run_cancel_requested"
 
 
 # ============================================================
@@ -53,6 +58,10 @@ class RunEvent(BaseModel):
 
     event_id: str
     run_id: str
+    #: Monotonic order within a run. Persisted SQLite events already have this
+    #: value; the in-memory adapter assigns the same stable per-run order.
+    #: It is a transport cursor, not a lifecycle state or a replay promise.
+    sequence: int = 0
     event_type: EventType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: dict[str, JsonValue] = Field(default_factory=dict)

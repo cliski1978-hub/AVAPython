@@ -11,3 +11,4 @@ export * from "./models";
 export * from "./runs";
 export * from "./version";
 export * from "./workspaces";
+export * from "./settings";

@@ -1,7 +1,7 @@
 import { defaultTheme, useInteraction } from "@ava/ui-core";
 import type { CSSProperties } from "react";
 
-export type WorkspaceId = "chat" | "document";
+export type WorkspaceId = "chat" | "document" | "settings";
 
 export interface WorkspaceTabsProps {
   active: WorkspaceId;
@@ -19,6 +19,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: "chat", label: "Chat", panelId: "chat-workspace" },
   { id: "document", label: "Documents", panelId: "document-workspace" },
+  { id: "settings", label: "Settings", panelId: "settings-workspace" },
 ];
 
 interface TabButtonProps {

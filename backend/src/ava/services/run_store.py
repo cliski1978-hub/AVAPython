@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from ava.contracts.execution import RunExecutionSelection
-from ava.contracts.responses import RunStatus
+from ava.contracts.responses import ACTIVE_RUN_STATUSES, RunStatus
 from ava.repositories.run_repository import (
     RunRecord,
     RunRepository,
@@ -30,7 +30,13 @@ class RunStore(RunRepository):
     def __init__(self) -> None:
         self._runs: dict[str, RunRecord] = {}
 
-    def create(self, run_id: str) -> RunRecord:
+    def create(
+        self,
+        run_id: str,
+        *,
+        conversation_id: str | None = None,
+        source_user_message_id: str | None = None,
+    ) -> RunRecord:
         """Create a new pending run record.
 
         Args:
@@ -50,6 +56,8 @@ class RunStore(RunRepository):
             status=RunStatus.PENDING,
             created_at=now,
             updated_at=now,
+            conversation_id=conversation_id,
+            source_user_message_id=source_user_message_id,
         )
         self._runs[run_id] = record
         return record
@@ -71,6 +79,42 @@ class RunStore(RunRepository):
         self._runs[run_id] = updated
         return updated
 
+    def compare_and_set_status(
+        self,
+        run_id: str,
+        *,
+        expected_status: RunStatus,
+        status: RunStatus,
+    ) -> RunRecord | None:
+        """Move a run only while it is still in ``expected_status``.
+
+        The in-memory store is mutated without awaiting, so the check and the
+        write cannot interleave with another task and the guard is exact.
+        """
+        record = self._runs.get(run_id)
+        if record is None or record.status is not expected_status:
+            return None
+        return self.update_status(run_id, status)
+
+    def request_cancellation(self, run_id: str, *, requested_at: datetime) -> RunRecord | None:
+        """Record cancellation intent once, and only while the run is active.
+
+        The in-memory store is mutated without awaiting, so the guard and the
+        write cannot interleave and the guard is exact.
+        """
+        record = self._runs.get(run_id)
+        if record is None or not record.status.is_active:
+            return None
+        if record.cancellation_requested_at is not None:
+            # The first request's timestamp is the one that persists; a repeat
+            # click is not a later request, it is the same request.
+            return None
+        updated = replace(
+            record, cancellation_requested_at=requested_at, updated_at=datetime.now(UTC)
+        )
+        self._runs[run_id] = updated
+        return updated
+
     def set_execution_selection(
         self, run_id: str, selection: RunExecutionSelection | None
     ) -> RunRecord | None:
@@ -81,9 +125,23 @@ class RunStore(RunRepository):
         self._runs[run_id] = updated
         return updated
 
+    def set_assistant_message_id(self, run_id: str, assistant_message_id: str) -> RunRecord | None:
+        record = self._runs.get(run_id)
+        if record is None:
+            return None
+        updated = replace(record, assistant_message_id=assistant_message_id, updated_at=datetime.now(UTC))
+        self._runs[run_id] = updated
+        return updated
+
     def get(self, run_id: str) -> RunRecord | None:
         """Return the run record for ``run_id``, or ``None`` if unknown."""
         return self._runs.get(run_id)
+
+    def list_active(self) -> list[RunRecord]:
+        return sorted(
+            (record for record in self._runs.values() if record.status in ACTIVE_RUN_STATUSES),
+            key=lambda record: (record.created_at, record.run_id),
+        )
 
     def list_run_ids(self) -> list[str]:
         """Return the identifiers of all tracked runs in insertion order."""

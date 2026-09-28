@@ -21,14 +21,26 @@ from ava.infrastructure.persistence.repositories.document_revision_repository im
 from ava.infrastructure.persistence.repositories.document_write_coordinator import (
     RelationalDocumentWriteCoordinator,
 )
+from ava.infrastructure.persistence.repositories.execution_defaults_repository import (
+    RelationalExecutionDefaultsRepository,
+)
 from ava.infrastructure.persistence.repositories.message_repository import (
     RelationalMessageRepository,
+)
+from ava.infrastructure.persistence.repositories.model_configuration_repository import (
+    RelationalModelConfigurationRepository,
+)
+from ava.infrastructure.persistence.repositories.provider_connection_repository import (
+    RelationalProviderConnectionRepository,
 )
 from ava.infrastructure.persistence.repositories.run_event_repository import (
     RelationalRunEventRepository,
 )
 from ava.infrastructure.persistence.repositories.run_repository import (
     RelationalRunRepository,
+)
+from ava.infrastructure.persistence.repositories.runtime_configuration_repository import (
+    RelationalRuntimeConfigurationRepository,
 )
 
 __all__ = [
@@ -37,7 +49,11 @@ __all__ = [
     "RelationalDocumentRepository",
     "RelationalDocumentRevisionRepository",
     "RelationalDocumentWriteCoordinator",
+    "RelationalExecutionDefaultsRepository",
     "RelationalMessageRepository",
+    "RelationalModelConfigurationRepository",
+    "RelationalProviderConnectionRepository",
     "RelationalRunEventRepository",
     "RelationalRunRepository",
+    "RelationalRuntimeConfigurationRepository",
 ]

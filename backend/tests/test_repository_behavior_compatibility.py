@@ -122,6 +122,88 @@ def test_run_execution_selection_round_trip(repositories: RepositorySetup) -> No
     assert repositories.runs.set_execution_selection("ghost", selection) is None
 
 
+def test_run_cancellation_intent_is_written_once_and_only_while_active(
+    repositories: RepositorySetup,
+) -> None:
+    """Both adapters must agree on the whole rule, not just on the happy path."""
+    first = datetime(2026, 5, 6, 7, 1, tzinfo=UTC)
+    repositories.runs.create("run-1")
+    assert repositories.runs.get("run-1").cancellation_requested_at is None
+
+    assert repositories.runs.request_cancellation("run-1", requested_at=first) is not None
+    # A repeat is not a later request.
+    assert (
+        repositories.runs.request_cancellation(
+            "run-1", requested_at=datetime(2026, 5, 6, 7, 9, tzinfo=UTC)
+        )
+        is None
+    )
+    stored = repositories.runs.get("run-1")
+    assert stored.cancellation_requested_at == first
+    assert stored.cancellation_requested is True
+
+    # A run that settles keeps the evidence but gains no new request.
+    repositories.runs.update_status("run-1", RunStatus.COMPLETED)
+    assert (
+        repositories.runs.request_cancellation(
+            "run-1", requested_at=datetime(2026, 5, 6, 8, 0, tzinfo=UTC)
+        )
+        is None
+    )
+    finished = repositories.runs.get("run-1")
+    assert finished.status == RunStatus.COMPLETED
+    assert finished.cancellation_requested_at == first
+
+    # A run that was already settled never gains one at all.
+    repositories.runs.create("run-2")
+    repositories.runs.update_status("run-2", RunStatus.FAILED)
+    assert repositories.runs.request_cancellation("run-2", requested_at=first) is None
+    assert repositories.runs.get("run-2").cancellation_requested_at is None
+
+    assert repositories.runs.request_cancellation("ghost", requested_at=first) is None
+
+
+def test_run_list_active_returns_only_active_runs_in_creation_order(
+    repositories: RepositorySetup,
+) -> None:
+    """Both adapters must agree on which runs a cold start would have to settle.
+
+    Ordering is part of the contract, not a convenience: recovery settles runs in
+    a deterministic order, so a flaky sequence would make the recovery-time event
+    history irreproducible. The identifiers are deliberately created in a
+    non-alphabetical order so an implementation that sorted by ``run_id`` would
+    fail here rather than pass by accident.
+    """
+    assert list(repositories.runs.list_active()) == []
+
+    for run_id in ("zulu", "alpha", "mike"):
+        repositories.runs.create(run_id)
+    repositories.runs.update_status("alpha", RunStatus.RUNNING)
+    repositories.runs.update_status("mike", RunStatus.WAITING_FOR_APPROVAL)
+    repositories.runs.create("settled")
+    repositories.runs.update_status("settled", RunStatus.COMPLETED)
+
+    active = list(repositories.runs.list_active())
+    # "zulu" is still pending; all three active statuses are reported, the
+    # terminal run is never included, and creation order wins over the name.
+    assert [record.run_id for record in active] == ["zulu", "alpha", "mike"]
+    assert [record.status for record in active] == [
+        RunStatus.PENDING,
+        RunStatus.RUNNING,
+        RunStatus.WAITING_FOR_APPROVAL,
+    ]
+    timestamps = [record.created_at for record in active]
+    assert timestamps == sorted(timestamps)
+    # A requested-but-unsettled run is still active: intent is not an outcome.
+    repositories.runs.request_cancellation(
+        "alpha", requested_at=datetime(2026, 5, 6, 7, 1, tzinfo=UTC)
+    )
+    assert "alpha" in {record.run_id for record in repositories.runs.list_active()}
+    # ...and once it settles it leaves the active set.
+    repositories.runs.update_status("alpha", RunStatus.CANCELLED)
+    assert "alpha" not in {record.run_id for record in repositories.runs.list_active()}
+
+
 # ============================================================
 # END: Run semantics
 # ============================================================
@@ -158,7 +240,7 @@ def test_event_payload_and_timestamp_round_trip(repositories: RepositorySetup) -
     event = RunEvent(event_id="e1", run_id="r", event_type=EventType.MESSAGE_CONTENT, payload=payload)
     repositories.events.append(event)
     restored = repositories.events.get_events("r")[0]
-    assert restored == event
+    assert restored == event.model_copy(update={"sequence": 1})
     assert restored.payload == payload
     assert restored.timestamp == event.timestamp
 

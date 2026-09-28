@@ -57,6 +57,7 @@ export interface ConversationManager {
     patch: MessagePatch,
   ) => void;
   replaceMessage: (conversationId: string, placeholderId: string, message: import("../types").ConversationMessage) => void;
+  associateAssistantMessage: (conversationId: string, placeholderId: string, messageId: string) => void;
   /** Merges run lifecycle state into a conversation. */
   setRunState: (
     conversationId: string,
@@ -89,7 +90,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
       const hydrated = await Promise.all(conversations.map(async (conversation) => {
         const messages = await listMessages(client, conversation.conversation_id);
         return { id: conversation.conversation_id, title: conversation.title, createdAt: conversation.created_at,
-          messages: associateAssistantMessages(messages.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, createdAt: message.created_at }))), run: undefined };
+          messages: associateAssistantMessages(messages.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceRunId: message.source_run_id, createdAt: message.created_at }))), run: undefined };
       }));
       if (live) dispatch({ type: "conversation:hydrate", conversations: hydrated });
     }).catch((error: unknown) => { if (live) dispatch({ type: "conversation:loadFailure", error: error instanceof Error ? error.message : "Unable to load conversations." }); });
@@ -115,7 +116,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
         try {
           const result = await listMessages(client, id);
           if (selectedRef.current !== id) return;
-          dispatch({ type: "conversation:messagesHydrate", conversationId: id, messages: associateAssistantMessages(result.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, createdAt: message.created_at }))) });
+          dispatch({ type: "conversation:messagesHydrate", conversationId: id, messages: associateAssistantMessages(result.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceRunId: message.source_run_id, createdAt: message.created_at }))) });
         } catch (error) {
           if (selectedRef.current === id) dispatch({ type: "conversation:messagesLoadFailure", conversationId: id, error: error instanceof Error ? error.message : "Unable to load messages." });
         }
@@ -172,6 +173,9 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           patch,
         }),
       replaceMessage: (conversationId, placeholderId, message) => dispatch({ type: "conversation:replaceMessage", conversationId, placeholderId, message }),
+      associateAssistantMessage: (conversationId, placeholderId, messageId) => dispatch({
+        type: "conversation:associateAssistantMessage", conversationId, placeholderId, messageId,
+      }),
       setRunState: (conversationId, update) =>
         dispatch({ type: "conversation:setRunState", conversationId, update }),
       getRunState: (conversationId) =>

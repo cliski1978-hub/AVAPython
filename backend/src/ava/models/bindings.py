@@ -20,7 +20,7 @@ runtime needs. It is never a public metadata object, and its credential field
 (``api_key``) must never be serialized to clients.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from ava.contracts.models import ModelHostingMode
@@ -115,6 +115,7 @@ class ModelBindingResolver:
         registry: ModelRegistry,
         *,
         default_model_id: str | None = None,
+        allow_unconfigured: bool = False,
     ) -> None:
         """Bind the resolver to a registry and validate the default identity.
 
@@ -131,6 +132,9 @@ class ModelBindingResolver:
             ModelDisabledError: If ``default_model_id`` is configured disabled.
         """
         self._registry = registry
+        self._default: ModelProfile | None = None
+        if allow_unconfigured and not registry.list():
+            return
         if default_model_id is not None:
             self._default = self._require(default_model_id)
             return
@@ -165,11 +169,13 @@ class ModelBindingResolver:
 
     def default_profile(self) -> ModelProfile:
         """Return the bootstrap default profile (no explicit identity given)."""
+        if self._default is None:
+            raise ValueError("No bootstrap model configured; configure execution defaults in Settings")
         return self._default
 
     def default(self) -> ConfiguredModelBinding:
         """Return the bootstrap default execution binding."""
-        return model_binding_from_profile(self._default)
+        return model_binding_from_profile(self.default_profile())
 
     def default_profile_for_provider(self, provider_id: str) -> ModelProfile:
         """Return the first *enabled* configured profile for ``provider_id``.
@@ -222,7 +228,7 @@ class RuntimeModelBinding:
     provider_model_name: str
     protocol: str
     endpoint: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
 
 
 @runtime_checkable

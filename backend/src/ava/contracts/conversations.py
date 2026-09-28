@@ -12,6 +12,13 @@ The role/status vocabulary mirrors the frontend reducer's message shape
 (``user``/``assistant``/``system`` and ``pending``/``complete``/``failed``/
 ``cancelled``) so a future client mapping is 1:1; these are AVA-owned
 backend enums, not the frontend TypeScript types.
+
+This module also owns the neutral execution-context vocabulary
+(``ContextMessage`` / ``RunContext``) and the two rules every caller shares:
+the assistant-status projection derived from an authoritative run, and the
+resolution of a constructed context against a run's prompt. Both are pure
+derivations over AVA-owned values so no runtime, agent adapter, or service can
+implement its own version.
 """
 
 from datetime import datetime
@@ -19,6 +26,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
+from ava.contracts.responses import RunStatus
 from ava.contracts.version import CONTRACT_VERSION
 
 # ============================================================
@@ -49,6 +57,7 @@ class MessageStatus(StrEnum):
     """
 
     PENDING = "pending"
+    STREAMING = "streaming"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -56,6 +65,98 @@ class MessageStatus(StrEnum):
 
 # ============================================================
 # END: Message vocabulary
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Assistant status projection
+# ============================================================
+
+
+def assistant_status_for_run(status: RunStatus) -> MessageStatus:
+    """Project a run's authoritative status onto its assistant message status.
+
+    The run is the sole lifecycle record; a stored assistant-message status is
+    only a creation placeholder. This mapping is the single implementation of
+    that projection, shared by conversation reads and context construction so a
+    message can never be ``complete`` in one place and not in another.
+    """
+    return {
+        RunStatus.PENDING: MessageStatus.PENDING,
+        RunStatus.WAITING_FOR_APPROVAL: MessageStatus.PENDING,
+        RunStatus.RUNNING: MessageStatus.STREAMING,
+        RunStatus.COMPLETED: MessageStatus.COMPLETE,
+        RunStatus.FAILED: MessageStatus.FAILED,
+        RunStatus.CANCELLED: MessageStatus.CANCELLED,
+    }[status]
+
+
+# ============================================================
+# END: Assistant status projection
+# ============================================================
+
+
+# ============================================================
+# BEGIN: Neutral execution context
+# ============================================================
+
+
+class ContextMessage(BaseModel):
+    """One framework-neutral message handed to a runtime for execution.
+
+    Carries the durable AVA ``message_id`` when the message came from a
+    conversation, its AVA role, and its text. No provider, model, or runtime
+    SDK type appears here: runtimes translate these values into their own
+    request shapes and never re-derive which messages belong to the run.
+    """
+
+    role: MessageRole
+    content: str
+    message_id: str | None = None
+
+
+class RunContext(BaseModel):
+    """The AVA-constructed context for exactly one run.
+
+    ``messages`` is the canonical, already-ordered execution sequence and is
+    the only authority a runtime may use for conversational history. An empty
+    ``messages`` list means the run has no durable context (a legacy direct
+    ``/runs`` caller with no conversation), never "history was dropped".
+
+    ``conversation_id`` and ``source_user_message_id`` identify the durable
+    facts the context was built from, for tracing and validation. They are not
+    authorization: a caller can never supply its own context.
+    """
+
+    conversation_id: str | None = None
+    source_user_message_id: str | None = None
+    messages: list[ContextMessage] = Field(default_factory=list)
+
+    @property
+    def has_messages(self) -> bool:
+        """Whether durable context exists for this run."""
+        return bool(self.messages)
+
+
+def execution_context_messages(
+    context: RunContext | None,
+    prompt: str,
+) -> list[ContextMessage]:
+    """Resolve the one message sequence a runtime may execute.
+
+    A constructed context always wins, and the prompt is never appended to it:
+    the durable sequence already ends with the run's source user message, so
+    adding the prompt again would duplicate the current turn. The prompt is
+    used only when no durable context exists, which keeps legacy unlinked runs
+    on their existing single-message behavior.
+    """
+    if context is not None and context.messages:
+        return list(context.messages)
+    return [ContextMessage(role=MessageRole.USER, content=prompt)]
+
+
+# ============================================================
+# END: Neutral execution context
 # ============================================================
 
 

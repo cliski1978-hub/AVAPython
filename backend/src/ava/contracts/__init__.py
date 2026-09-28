@@ -11,6 +11,7 @@ from ava.contracts.attachments import (
 )
 from ava.contracts.capabilities import CapabilityName
 from ava.contracts.conversations import (
+    ContextMessage,
     ConversationListResponse,
     ConversationMessagesResponse,
     ConversationResponse,
@@ -19,7 +20,10 @@ from ava.contracts.conversations import (
     MessageResponse,
     MessageRole,
     MessageStatus,
+    RunContext,
     UpdateConversationRequest,
+    assistant_status_for_run,
+    execution_context_messages,
 )
 from ava.contracts.documents import (
     ContentFormat,
@@ -92,12 +96,14 @@ __all__ = [
     "ModelProviderHealthStatus",
     "ModelRequest",
     "ModelResponse",
+    "ContextMessage",
     "MessageResponse",
     "MessageRole",
     "MessageStatus",
     "RunEvent",
     "RunExecutionSelection",
     "RunExecutionOverride",
+    "RunContext",
     "RunRequest",
     "RunResponse",
     "RunStatus",
@@ -107,4 +113,6 @@ __all__ = [
     "RuntimeInfo",
     "UpdateConversationRequest",
     "UpdateDocumentRequest",
+    "assistant_status_for_run",
+    "execution_context_messages",
 ]

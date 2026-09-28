@@ -1,7 +1,7 @@
 {
   "name": "@ava/workspace",
   "version": "0.1.0",
-  "description": "Shared AVA application workspace: chat and document workspaces composed for Web and Desktop",
+  "description": "Shared AVA application workspace: chat, document, and settings workspaces composed for Web and Desktop",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -16,6 +16,7 @@
     "@ava/agent-ui": "workspace:*",
     "@ava/api-client": "workspace:*",
     "@ava/document-core": "workspace:*",
+    "@ava/settings-core": "workspace:*",
     "@ava/ui-core": "workspace:*"
   },
   "peerDependencies": {

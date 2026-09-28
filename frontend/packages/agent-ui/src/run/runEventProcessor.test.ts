@@ -24,11 +24,12 @@ function event(
 }
 
 describe("applyRunEvent", () => {
-  it("maps run_started to running phase + backend status", () => {
+  it("maps run_started to running phase, backend status, and streaming message", () => {
     const effects = applyRunEvent(event("run_started"));
     expect(effects).toEqual([
       { kind: "setPhase", phase: "running" },
       { kind: "setBackendStatus", backendStatus: "running" },
+      { kind: "setMessageStatus", messageStatus: "streaming" },
     ]);
   });
 
@@ -46,7 +47,7 @@ describe("applyRunEvent", () => {
       event("message_content", { content: "Hello AVA" }),
     );
     expect(effects).toEqual([
-      { kind: "setMessageContent", content: "Hello AVA" },
+      { kind: "setMessageContent", messageId: null, content: "Hello AVA" },
     ]);
   });
 
@@ -87,7 +88,7 @@ describe("applyRunEvent", () => {
     const effects = applyRunEvent(
       event("message_content", { other: "x" }),
     );
-    expect(effects).toEqual([{ kind: "setMessageContent", content: "" }]);
+    expect(effects).toEqual([{ kind: "setMessageContent", messageId: null, content: "" }]);
   });
 });
 

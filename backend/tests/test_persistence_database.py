@@ -44,6 +44,10 @@ def test_schema_is_bootstrapped_on_first_connect() -> None:
         "documents",
         "document_revisions",
         "attachments",
+        "provider_connections",
+        "model_configurations",
+        "runtime_configurations",
+        "application_execution_defaults",
     } <= tables
     assert "ava_schema_migrations" in tables
     database.dispose()
@@ -64,8 +68,12 @@ def test_schema_bootstrap_is_idempotent() -> None:
         "documents",
         "document_revisions",
         "attachments",
+        "provider_connections",
+        "runtime_configurations",
+        "application_execution_defaults",
     } <= tables
-    assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 3
+    with database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 9
     database.dispose()
 
 
@@ -107,6 +115,24 @@ def test_transaction_rolls_back_on_error() -> None:
             "VALUES ('c1', 'T', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
         )
         raise RuntimeError("boom")
+    with database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 0
+    database.dispose()
+
+
+def test_nested_transactions_use_reentrant_savepoints_without_committing_outer_work() -> None:
+    database = SqliteDatabase(":memory:")
+    with pytest.raises(RuntimeError), database.transaction() as outer:
+        outer.execute(
+            "INSERT INTO conversations (conversation_id, title, created_at, updated_at) "
+            "VALUES ('outer', 'T', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        with database.transaction() as inner:
+            inner.execute(
+                "INSERT INTO conversations (conversation_id, title, created_at, updated_at) "
+                "VALUES ('inner', 'T', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+            )
+        raise RuntimeError("roll back outer transaction")
     with database.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 0
     database.dispose()
@@ -285,7 +311,7 @@ def test_event_row_mapping_restores_full_run_event() -> None:
             "FROM run_events WHERE event_id = 'e1'"
         ).fetchone()
     restored = row_to_run_event(database_row)
-    assert restored == original
+    assert restored == original.model_copy(update={"sequence": 1})
     assert restored.timestamp == original.timestamp
     database.dispose()
 

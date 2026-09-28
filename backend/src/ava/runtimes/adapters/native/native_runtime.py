@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+from ava.contracts.conversations import RunContext, execution_context_messages
 from ava.contracts.models import ModelMessage, ModelRequest, ModelResponse
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
@@ -15,6 +16,20 @@ from ava.workspaces.contracts import RuntimeWorkspaceBinding
 
 logger = logging.getLogger(__name__)
 _FAILURE_CONTENT = "Model provider request failed"
+
+
+def _model_messages(context: RunContext | None, prompt: str) -> list[ModelMessage]:
+    """Translate the AVA-constructed context into provider message shape.
+
+    This is a pure role/text translation. The runtime does not choose, order,
+    or drop messages: it renders exactly the sequence AVA handed it. When no
+    durable context exists, the shared contract resolves the sequence to the
+    run's single prompt, preserving the legacy single-turn behavior.
+    """
+    return [
+        ModelMessage(role=message.role.value, content=message.content)
+        for message in execution_context_messages(context, prompt)
+    ]
 
 
 class NativeRuntime(AgentRuntimePort):
@@ -43,12 +58,14 @@ class NativeRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        """Translate a prompt and normalize outcomes without emitting events.
+        """Translate the run's context and normalize outcomes without events.
 
         When a binding is supplied, the provider is asked for exactly the
         bound provider-native model name; otherwise the provider's bootstrap
-        name is used. The runtime never chooses a model.
+        name is used. The runtime never chooses a model and never selects
+        history: ``context`` is translated as given.
         """
         del workspace
         if run_id in self._run_tasks:
@@ -60,9 +77,7 @@ class NativeRuntime(AgentRuntimePort):
         if model_binding is not None and model_binding.provider_model_name.strip():
             model_name = model_binding.provider_model_name
         try:
-            model_request = ModelRequest(
-                messages=[ModelMessage(role="user", content=request.prompt)]
-            )
+            model_request = ModelRequest(messages=_model_messages(context, request.prompt))
             task = asyncio.create_task(
                 model_provider.generate(model_request, model_name=model_name)
             )
@@ -95,5 +110,5 @@ class NativeRuntime(AgentRuntimePort):
                 task.cancel()
             return RuntimeRunResult(status=RunStatus.CANCELLED)
         return RuntimeRunResult(
-            status=self._final_status.get(run_id, RunStatus.CANCELLED),
+            status=self._final_status.get(run_id, RunStatus.RUNNING),
         )

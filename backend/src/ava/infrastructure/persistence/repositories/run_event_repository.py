@@ -41,6 +41,7 @@ class RelationalRunEventRepository(RunEventRepository):
         self._database = database
 
     def append(self, event: RunEvent) -> RunEvent:
+        stored: RunEvent | None = None
         try:
             with self._database.transaction() as connection:
                 if event.event_type in TERMINAL_EVENT_TYPES:
@@ -67,10 +68,18 @@ class RelationalRunEventRepository(RunEventRepository):
                         event.contract_version,
                     ),
                 )
+                row = connection.execute(
+                    f"SELECT {_EVENT_COLUMNS} FROM run_events WHERE event_id = ?",
+                    (event.event_id,),
+                ).fetchone()
+                stored = row_to_run_event(row) if row is not None else None
         except sqlite3.Error as exc:
             if event.event_type in TERMINAL_EVENT_TYPES:
                 return event
             raise translate_database_error(exc, entity="Run event", key=event.event_id) from exc
+        # Ports preserve their existing return contract (the caller's input).
+        # Reads expose the persisted cursor used by the transport.
+        del stored
         return event
 
     def get_events(self, run_id: str) -> list[RunEvent]:
@@ -78,6 +87,15 @@ class RelationalRunEventRepository(RunEventRepository):
             rows = connection.execute(
                 f"SELECT {_EVENT_COLUMNS} FROM run_events WHERE run_id = ? ORDER BY seq ASC",
                 (run_id,),
+            ).fetchall()
+        return [row_to_run_event(row) for row in rows]
+
+    def list_after_sequence(self, run_id: str, after_sequence: int) -> list[RunEvent]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM run_events "
+                "WHERE run_id = ? AND seq > ? ORDER BY seq ASC",
+                (run_id, after_sequence),
             ).fetchall()
         return [row_to_run_event(row) for row in rows]
 

@@ -10,6 +10,7 @@ from uuid import UUID
 from ava.agents.adapters.mock.mock_agent import MockAgentAdapter
 from ava.agents.contracts import AgentPort, AgentRunResult
 from ava.contracts.capabilities import CapabilityName
+from ava.contracts.conversations import RunContext
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 from ava.services.run_event_store import RunEventStore
@@ -31,6 +32,7 @@ class StubAgent(AgentPort):
     def __init__(self, *, block_start: bool = False) -> None:
         self.captured_run_id: str | None = None
         self.captured_request: RunRequest | None = None
+        self.captured_context: RunContext | None = None
         self.cancelled_run_id: str | None = None
         self._block_start = block_start
         self._start_released = asyncio.Event()
@@ -38,9 +40,12 @@ class StubAgent(AgentPort):
     def name(self) -> str:
         return "stub"
 
-    async def start_run(self, run_id: str, request: RunRequest) -> AgentRunResult:
+    async def start_run(
+        self, run_id: str, request: RunRequest, *, context: RunContext | None = None
+    ) -> AgentRunResult:
         self.captured_run_id = run_id
         self.captured_request = request
+        self.captured_context = context
         if self._block_start:
             await self._start_released.wait()
         return AgentRunResult(status=RunStatus.COMPLETED, content="stub replied")
