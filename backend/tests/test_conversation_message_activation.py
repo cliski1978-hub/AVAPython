@@ -487,6 +487,8 @@ def test_one_relational_application_stores_runs_and_conversations_together(
     with _client(settings) as client:
         run = client.post("/runs", json={"prompt": "cross-domain"}).json()
         run_id = run["run_id"]
+        assert run["status"] == "running"
+        run = client.get(f"/runs/{run_id}").json()
         assert run["status"] == "completed"
 
         conversation_id = client.post("/conversations", json={"title": "Shared DB"}).json()[

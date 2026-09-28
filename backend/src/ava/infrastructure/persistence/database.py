@@ -20,6 +20,7 @@ connections, transactions, and disposal only:
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from threading import RLock
 
 from ava.infrastructure.persistence.errors import PersistenceError
 
@@ -41,6 +42,8 @@ class SqliteDatabase:
         self._url = url
         self._auto_migrate = auto_migrate
         self._connection: sqlite3.Connection | None = None
+        self._savepoint_sequence = 0
+        self._transaction_lock = RLock()
 
     @property
     def url(self) -> str:
@@ -86,7 +89,22 @@ class SqliteDatabase:
         On the single shared connection this keeps ordering-sensitive writes
         (event sequences, terminal-event sealing, status updates) atomic.
         """
-        with self.connect() as connection:
+        with self._transaction_lock, self.connect() as connection:
+            if connection.in_transaction:
+                # Repository operations can participate in one startup unit of
+                # work without committing its enclosing transaction.
+                self._savepoint_sequence += 1
+                name = f"ava_nested_{self._savepoint_sequence}"
+                connection.execute(f"SAVEPOINT {name}")
+                try:
+                    yield connection
+                except BaseException:
+                    connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
+                    connection.execute(f"RELEASE SAVEPOINT {name}")
+                    raise
+                else:
+                    connection.execute(f"RELEASE SAVEPOINT {name}")
+                return
             try:
                 connection.execute("BEGIN IMMEDIATE")
             except sqlite3.Error as exc:

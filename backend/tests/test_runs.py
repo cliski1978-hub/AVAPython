@@ -36,7 +36,7 @@ def make_client() -> TestClient:
 def start_run(client: TestClient, prompt: str) -> dict[str, Any]:
     """Start a run and return the parsed response body."""
     response = client.post("/runs", json={"prompt": prompt})
-    assert response.status_code == 200
+    assert response.status_code == 202
     return dict(response.json())
 
 
@@ -50,12 +50,17 @@ def start_run(client: TestClient, prompt: str) -> dict[str, Any]:
 # ============================================================
 
 
-def test_start_run_returns_200_and_run_response_shape() -> None:
-    """A valid request should return a 200 with the AVA RunResponse."""
+def test_start_run_returns_early_run_response_shape() -> None:
+    """A valid request returns an accepted response with an AVA-owned id."""
     with make_client() as client:
         body = start_run(client, "Hello AVA")
-    assert set(body) == {"run_id", "status", "contract_version", "execution_selection"}
-    assert body["status"] == "completed"
+    assert set(body) == {
+        "run_id", "status", "contract_version", "execution_selection",
+        "conversation_id", "source_user_message_id", "assistant_message_id",
+        "cancellation_requested_at",
+    }
+    assert body["cancellation_requested_at"] is None
+    assert body["status"] in {"running", "completed"}
     assert body["contract_version"] == CONTRACT_VERSION
 
 
@@ -82,8 +87,8 @@ def test_start_run_does_not_require_provider_specific_input() -> None:
     """Only the AVA RunRequest fields are needed — no provider settings."""
     with make_client() as client:
         response = client.post("/runs", json={"prompt": "Plain request"})
-    assert response.status_code == 200
-    assert response.json()["status"] == "completed"
+    assert response.status_code == 202
+    assert response.json()["status"] in {"running", "completed"}
 
 
 def test_start_run_response_roundtrips_through_run_response_contract() -> None:
@@ -204,6 +209,13 @@ def test_get_run_returns_404_for_unknown_run() -> None:
     assert body["message"]
 
 
+def test_get_run_events_with_cursor_returns_404_for_unknown_run() -> None:
+    with make_client() as client:
+        response = client.get("/runs/never-existed/events?after_sequence=7")
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "run_not_found"
+
+
 def test_get_run_reports_cancelled_status() -> None:
     """A cancelled run must snapshot as cancelled."""
 
@@ -257,6 +269,7 @@ def test_get_run_events_returns_completed_lifecycle() -> None:
     assert set(events[0]) == {
         "event_id",
         "run_id",
+        "sequence",
         "event_type",
         "timestamp",
         "payload",
@@ -287,6 +300,18 @@ def test_get_run_events_returns_404_for_unknown_run() -> None:
     assert body["category"] == "not_found"
 
 
+def test_get_run_events_replays_strictly_after_the_sequence_cursor() -> None:
+    """The HTTP event snapshot is an exclusive, ordered persisted replay."""
+    with make_client() as client:
+        body = start_run(client, "Replay")
+        response = client.get(f"/runs/{body['run_id']}/events?after_sequence=2")
+        ahead = client.get(f"/runs/{body['run_id']}/events?after_sequence=99")
+        negative = client.get(f"/runs/{body['run_id']}/events?after_sequence=-1")
+    assert [event["sequence"] for event in response.json()] == [3, 4]
+    assert ahead.json() == []
+    assert negative.status_code == 422
+
+
 def test_get_run_events_for_cancelled_run() -> None:
     """A cancelled run must expose only run_started → run_cancelled."""
 
@@ -308,7 +333,12 @@ def test_get_run_events_for_cancelled_run() -> None:
     run_id = asyncio.run(cancel_during_run())
     with TestClient(app) as client:
         events = client.get(f"/runs/{run_id}/events").json()
-    assert [e["event_type"] for e in events] == ["run_started", "run_cancelled"]
+    assert [e["event_type"] for e in events] == [
+        "run_started",
+        "message_started",
+        "run_cancel_requested",
+        "run_cancelled",
+    ]
 
 
 def test_get_run_events_for_failed_run() -> None:
@@ -333,7 +363,9 @@ def test_get_run_events_for_failed_run() -> None:
         events = client.get(f"/runs/{run_id}/events").json()
 
     assert run["status"] == "failed"
-    assert [e["event_type"] for e in events] == ["run_started", "run_failed"]
+    assert [e["event_type"] for e in events] == [
+        "run_started", "message_started", "run_failed",
+    ]
     assert events[-1]["payload"]["error_code"] == "agent_failed"
     assert events[-1]["payload"]["recoverable"] is False
 
@@ -359,8 +391,8 @@ def test_composed_application_resolves_mock_agent_for_runs() -> None:
     """The configured mock agent must be reachable through the API path."""
     with make_client() as client:
         response = client.post("/runs", json={"prompt": "Composition check"})
-    assert response.status_code == 200
-    assert response.json()["status"] == "completed"
+    assert response.status_code == 202
+    assert response.json()["status"] in {"running", "completed"}
 
 
 # ============================================================
@@ -424,7 +456,7 @@ def test_openapi_exposes_run_endpoints_with_ava_schemas() -> None:
     assert "/runs/{run_id}/events" in paths
     assert "get" in spec["paths"]["/runs/{run_id}"]
     assert "get" in spec["paths"]["/runs/{run_id}/events"]
-    assert spec["paths"]["/runs"]["post"]["responses"]["200"]["content"][
+    assert spec["paths"]["/runs"]["post"]["responses"]["202"]["content"][
         "application/json"
     ]["schema"]["$ref"].endswith("RunResponse")
 

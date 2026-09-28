@@ -86,8 +86,8 @@ def test_result_translation_cleanup_and_terminal_cancel(error: Exception | None)
         assert result.content == ("Model provider request failed" if error else "Native answer")
         assert _agent_runtime._run_tasks == {}
         assert (await agent.cancel_run("run")).status == expected
-        assert (await agent.cancel_run("unknown")).status == RunStatus.CANCELLED
-        assert (await agent.cancel_run("unknown")).status == RunStatus.CANCELLED
+        assert (await agent.cancel_run("unknown")).status == RunStatus.RUNNING
+        assert (await agent.cancel_run("unknown")).status == RunStatus.RUNNING
         assert agent.name() == "native"
         assert agent.get_capabilities() == {CapabilityName.RUNS, CapabilityName.CANCELLATION}
 
@@ -117,7 +117,12 @@ def test_cancellation_and_single_terminal_lifecycle(external_cancel: bool) -> No
         assert (await agent.cancel_run(run_id)).status == RunStatus.CANCELLED
         events = service.get_run_events(run_id)
         assert events is not None
-        assert [e.event_type for e in events] == ["run_started", "run_cancelled"]
+        assert [e.event_type for e in events] == [
+            "run_started",
+            "message_started",
+            *([] if external_cancel else ["run_cancel_requested"]),
+            "run_cancelled",
+        ]
         assert service.get_run(run_id).status == RunStatus.CANCELLED
 
     asyncio.run(scenario())
@@ -135,15 +140,18 @@ def test_http_native_lifecycle(monkeypatch: pytest.MonkeyPatch, error: Exception
     app = create_app()
     with TestClient(app) as client:
         response = client.post("/runs", json={"prompt": "Hello"})
-        assert response.status_code == 200
-        run = response.json()
+        assert response.status_code == 202
+        accepted = response.json()
+        assert accepted["status"] == "running"
+        run = client.get(f"/runs/{accepted['run_id']}").json()
         assert run["status"] == ("failed" if error else "completed")
-        assert client.get(f"/runs/{run['run_id']}").json() == run
         events_response = client.get(f"/runs/{run['run_id']}/events")
         events = events_response.json()
         assert "secret" not in events_response.text
         if error:
-            assert [e["event_type"] for e in events] == ["run_started", "run_failed"]
+            assert [e["event_type"] for e in events] == [
+                "run_started", "message_started", "run_failed",
+            ]
             assert events[-1]["payload"]["error_code"] == "agent_failed"
         else:
             assert [e["event_type"] for e in events] == [
@@ -202,3 +210,15 @@ def test_cancel_wins_when_provider_suppresses_cancellation(fail_after_cancel: bo
         assert _agent_runtime._run_tasks == {}
 
     asyncio.run(scenario())
+
+
+def test_persisted_running_run_without_native_handle_keeps_durable_intent() -> None:
+    agent = NativeAgentAdapter(NativeRuntime(), TestProvider())
+    runs = RunStore()
+    runs.create("stranded")
+    runs.update_status("stranded", RunStatus.RUNNING)
+    service = RunService(agent, run_repository=runs, run_event_repository=RunEventStore())
+    response = asyncio.run(service.cancel_run("stranded"))
+    assert response.status == RunStatus.RUNNING
+    assert response.cancellation_requested_at is not None
+    assert runs.get("stranded").cancellation_requested_at == response.cancellation_requested_at

@@ -20,18 +20,26 @@ from ava.infrastructure.persistence.repositories import (
     RelationalDocumentRepository,
     RelationalDocumentRevisionRepository,
     RelationalDocumentWriteCoordinator,
+    RelationalExecutionDefaultsRepository,
     RelationalMessageRepository,
+    RelationalModelConfigurationRepository,
+    RelationalProviderConnectionRepository,
     RelationalRunEventRepository,
     RelationalRunRepository,
+    RelationalRuntimeConfigurationRepository,
 )
 from ava.repositories import (
     AttachmentRepository,
     ConversationRepository,
     DocumentRepository,
     DocumentRevisionRepository,
+    ExecutionDefaultsRepository,
     MessageRepository,
+    ModelConfigurationRepository,
+    ProviderConnectionRepository,
     RunEventRepository,
     RunRepository,
+    RuntimeConfigurationRepository,
 )
 
 # ============================================================
@@ -57,10 +65,14 @@ class PersistenceRepositories:
     run_event_repository: RunEventRepository
     conversation_repository: ConversationRepository
     message_repository: MessageRepository
+    model_configuration_repository: ModelConfigurationRepository
+    provider_connection_repository: ProviderConnectionRepository
+    runtime_configuration_repository: RuntimeConfigurationRepository
     document_repository: DocumentRepository
     document_revision_repository: DocumentRevisionRepository
     attachment_repository: AttachmentRepository
     document_write_coordinator: RelationalDocumentWriteCoordinator
+    execution_defaults_repository: ExecutionDefaultsRepository
 
     def dispose(self) -> None:
         """Close the shared database connection backing these adapters."""
@@ -90,12 +102,18 @@ def create_relational_repositories(
         database.ensure_schema()
     document_repository = RelationalDocumentRepository(database=database)
     document_revision_repository = RelationalDocumentRevisionRepository(database=database)
+    provider_connection_repository = RelationalProviderConnectionRepository(database=database)
+    model_configuration_repository = RelationalModelConfigurationRepository(database=database)
+    runtime_configuration_repository = RelationalRuntimeConfigurationRepository(database=database)
     return PersistenceRepositories(
         database=database,
         run_repository=RelationalRunRepository(database=database),
         run_event_repository=RelationalRunEventRepository(database=database),
         conversation_repository=RelationalConversationRepository(database=database),
         message_repository=RelationalMessageRepository(database=database),
+        model_configuration_repository=model_configuration_repository,
+        provider_connection_repository=provider_connection_repository,
+        runtime_configuration_repository=runtime_configuration_repository,
         document_repository=document_repository,
         document_revision_repository=document_revision_repository,
         attachment_repository=RelationalAttachmentRepository(database=database),
@@ -103,6 +121,12 @@ def create_relational_repositories(
             database=database,
             document_repository=document_repository,
             revision_repository=document_revision_repository,
+        ),
+        execution_defaults_repository=RelationalExecutionDefaultsRepository(
+            database=database,
+            provider_connections=provider_connection_repository,
+            model_configurations=model_configuration_repository,
+            runtime_configurations=runtime_configuration_repository,
         ),
     )
 

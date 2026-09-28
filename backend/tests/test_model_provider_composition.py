@@ -201,7 +201,9 @@ def test_mock_never_resolves_model(monkeypatch: pytest.MonkeyPatch, model_id: st
     app = create_app()
     assert isinstance(app.state.agent_port, MockAgentAdapter)
     with TestClient(app) as client:
-        assert client.post("/runs", json={"prompt": "Offline"}).json()["status"] == "completed"
+        run = client.post("/runs", json={"prompt": "Offline"})
+        assert run.status_code == 202
+        assert client.get(f"/runs/{run.json()['run_id']}").json()["status"] == "completed"
 
 
 def test_native_shares_registered_provider_without_startup_io(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,8 +239,10 @@ def test_native_unknown_model_fails_at_execution_time(monkeypatch: pytest.Monkey
     app = create_app()
     with TestClient(app) as client:
         response = client.post("/runs", json={"prompt": "Hello"})
-        assert response.status_code == 200
+        assert response.status_code == 202
         body = response.json()
+        assert body["status"] == "running"
+        body = client.get(f"/runs/{body['run_id']}").json()
         assert body["status"] == "failed"
         events = client.get(f"/runs/{body['run_id']}/events").json()
         assert events[-1]["payload"]["error_code"] == "agent_failed"

@@ -6,9 +6,11 @@ by the runtime. No production execution uses this boundary yet.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
+from ava.contracts.conversations import RunContext
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeInfo
@@ -52,6 +54,7 @@ class AgentRuntimePort(ABC):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
         """Execute with the selected provider under an AVA-generated run id.
 
@@ -59,10 +62,40 @@ class AgentRuntimePort(ABC):
         replacement run id. ``model_binding`` carries the stable AVA ``model_id``
         and the provider-native ``provider_model_name`` the runtime must target;
         when omitted, a runtime falls back to the provider's bootstrap identity.
-        Normalize completion, failure, and cancellation into AVA results;
-        framework-specific handles and raw errors must not cross the boundary.
+        ``context`` carries the AVA-constructed durable message sequence; a
+        runtime translates it into its own request shape and never selects,
+        re-orders, or drops messages itself. Normalize completion, failure, and
+        cancellation into AVA results; framework-specific handles and raw errors
+        must not cross the boundary.
         """
         raise NotImplementedError
+
+    async def execute_streaming(
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        model_provider: ModelProviderPort,
+        on_content: Callable[[str], None],
+        workspace: RuntimeWorkspaceBinding | None = None,
+        model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
+    ) -> RuntimeRunResult:
+        """Execute with optional full-content snapshot notifications.
+
+        Final-only runtimes inherit this implementation. A runtime that can
+        surface genuine updates overrides it and reports normalized AVA text
+        snapshots through ``on_content`` without leaking SDK objects.
+        """
+        del on_content
+        return await self.execute(
+            run_id=run_id,
+            request=request,
+            model_provider=model_provider,
+            workspace=workspace,
+            model_binding=model_binding,
+            context=context,
+        )
 
     @abstractmethod
     async def cancel_run(self, run_id: str) -> RuntimeRunResult:
@@ -71,6 +104,7 @@ class AgentRuntimePort(ABC):
         Implementations keep task/session mappings internal. Cancellation is
         cooperative and should report CANCELLED when it takes effect, or the
         recorded terminal outcome when execution already finished. Repeated
-        cancellation is idempotent; unknown ids are a cancelled no-op.
+        cancellation is idempotent. Report RUNNING while the outcome is
+        unknown, including missing handles; absence is not proof of a stop.
         """
         raise NotImplementedError

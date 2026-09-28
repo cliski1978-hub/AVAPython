@@ -20,8 +20,11 @@ import type {
 import {
   ApiError,
   cancelRun,
+  getRun,
   getRunEvents,
+  listMessages,
   startRun,
+  streamRun,
   type ApiClient,
 } from "@ava/api-client";
 
@@ -35,11 +38,26 @@ import {
   messageStatusForRunStatus,
   uiPhaseForBackendStatus,
 } from "./runEventProcessor";
+import { observeRunWithResume } from "./runStreamResume";
+import { selectTranscriptMessages } from "../lib/transcript";
+import type { Conversation } from "../types";
 
 /** Minimal backend client surface the orchestrator depends on. */
 export interface RunAgent {
   startRun(request: RunRequest): Promise<RunResponse>;
   getRunEvents(runId: string): Promise<RunEvent[]>;
+  getRun?(runId: string): Promise<RunResponse>;
+  listMessages?(conversationId: string): Promise<{
+    messages: Array<{ message_id: string; content: string }>;
+  }>;
+  streamRun(
+    runId: string,
+    options: {
+      signal?: AbortSignal;
+      afterSequence?: number;
+      onEvent(event: RunEvent): void | Promise<void>;
+    },
+  ): Promise<void>;
   cancelRun(runId: string): Promise<RunResponse>;
 }
 
@@ -48,6 +66,9 @@ export function clientRunAgent(client: ApiClient): RunAgent {
   return {
     startRun: (request) => startRun(client, request),
     getRunEvents: (runId) => getRunEvents(client, runId),
+    getRun: (runId) => getRun(client, runId),
+    listMessages: (conversationId) => listMessages(client, conversationId),
+    streamRun: (runId, options) => streamRun(client, runId, options),
     cancelRun: (runId) => cancelRun(client, runId),
   };
 }
@@ -69,6 +90,11 @@ export interface RunCommands {
     messageId: string,
     patch: MessagePatch,
   ): void;
+  associateAssistantMessage?(
+    conversationId: string,
+    placeholderId: string,
+    messageId: string,
+  ): void;
   persistAssistantMessage?(
     conversationId: string,
     placeholderId: string,
@@ -86,8 +112,149 @@ export interface RunCommands {
 /** Run commands used when applying events (subset used after run start). */
 export type RunEventCommands = Pick<
   RunCommands,
-  "setRunState" | "updateMessage" | "getRunState"
+  "setRunState" | "updateMessage" | "getRunState" | "associateAssistantMessage"
 >;
+
+const ACTIVE_RUN_STATUSES = new Set<RunResponse["status"]>([
+  "pending",
+  "running",
+  "waiting_for_approval",
+]);
+
+/**
+ * Finds the one assistant response that is visible under the existing
+ * transcript projection and can therefore own refresh recovery. This is
+ * deliberately conversation-scoped: hidden regenerated answers are never
+ * candidates, and no global run scan is involved.
+ */
+export function visibleRecoveryCandidate(conversation: Conversation): {
+  assistantMessageId: string;
+  sourceRunId: string;
+  sourceUserMessageId: string | null;
+  durableContent: string;
+} | null {
+  const visible = selectTranscriptMessages(conversation.messages);
+  const assistant = [...visible].reverse().find(
+    (message) => message.role === "assistant" && message.sourceRunId != null,
+  );
+  if (assistant == null || assistant.sourceRunId == null) return null;
+  return {
+    assistantMessageId: assistant.id,
+    sourceRunId: assistant.sourceRunId,
+    sourceUserMessageId: assistant.sourceUserMessageId ?? null,
+    durableContent: assistant.content,
+  };
+}
+
+/**
+ * Rebuild local observer ownership after a frontend refresh. All inputs are
+ * durable snapshots; this function never creates a run or a message.
+ */
+export async function recoverRunForConversation(options: {
+  conversation: Conversation;
+  agent: RunAgent;
+  commands: RunEventCommands;
+  streamSignal?: AbortSignal;
+}): Promise<boolean> {
+  const candidate = visibleRecoveryCandidate(options.conversation);
+  if (candidate == null || options.agent.getRun == null) return false;
+
+  const snapshot = await options.agent.getRun(candidate.sourceRunId);
+  if (
+    snapshot.assistant_message_id !== candidate.assistantMessageId
+    || !ACTIVE_RUN_STATUSES.has(snapshot.status)
+  ) {
+    return false;
+  }
+
+  // A refresh starts a new frontend session. Epoch is intentionally new and
+  // local; the durable ids above remain the ownership authority.
+  const runEpoch = createEntityId();
+  options.commands.setRunState(options.conversation.id, {
+    runEpoch,
+    runId: snapshot.run_id,
+    backendStatus: snapshot.status,
+    cancellationRequestedAt: snapshot.cancellation_requested_at ?? null,
+    uiPhase: uiPhaseForBackendStatus(snapshot.status),
+    runError: null,
+    pendingMessageId: candidate.assistantMessageId,
+  });
+  options.commands.updateMessage(options.conversation.id, candidate.assistantMessageId, {
+    status: messageStatusForRunStatus(snapshot.status),
+  });
+
+  // The conversation snapshot is the durable current-content authority. The
+  // replay starts at zero to rebuild event identity/cursor state, but older
+  // full-content facts must not roll this rendered snapshot backwards.
+  let bootstrapContent: string | null = candidate.durableContent;
+  await observeRunWithResume({
+    agent: options.agent,
+    runId: snapshot.run_id,
+    signal: options.streamSignal,
+    isCurrent: () => isRunCurrent(options.commands, options.conversation.id, runEpoch),
+    applyEvent: async (event) => {
+      if (
+        event.run_id !== snapshot.run_id
+        || (event.event_type === "message_content"
+          && event.payload.message_id != null
+          && event.payload.message_id !== candidate.assistantMessageId)
+      ) {
+        throw new Error("Run stream event does not own the recovered assistant message.");
+      }
+      if (event.event_type === "message_content" && bootstrapContent != null) {
+        const content = event.payload.content;
+        if (typeof content === "string" && !content.startsWith(bootstrapContent)) {
+          // Historical snapshot: consume it for the cursor, but retain the
+          // newer durable message snapshot already rendered at bootstrap.
+          return;
+        }
+        bootstrapContent = null;
+      }
+      if (
+        bootstrapContent != null
+        && event.event_type !== "run_completed"
+        && event.event_type !== "run_failed"
+        && event.event_type !== "run_cancelled"
+      ) {
+        // Current RunResponse already projects lifecycle state. Historical
+        // run_started/message_started facts only rebuild transport state.
+        return;
+      }
+      await applyRunEvents([event], options.conversation.id, candidate.assistantMessageId, options.commands, {
+        sourceUserMessageId: candidate.sourceUserMessageId,
+        runEpoch,
+        assistantResponseIsDurable: true,
+      });
+    },
+    reconcileSnapshot: async () => {
+      const current = await options.agent.getRun?.(snapshot.run_id);
+      if (current == null || !isRunCurrent(options.commands, options.conversation.id, runEpoch)) return false;
+      options.commands.setRunState(options.conversation.id, {
+        backendStatus: current.status,
+        cancellationRequestedAt: current.cancellation_requested_at ?? null,
+        uiPhase: uiPhaseForBackendStatus(current.status),
+      });
+      if (current.assistant_message_id != null && options.agent.listMessages != null) {
+        const messages = await options.agent.listMessages(options.conversation.id);
+        const message = messages.messages.find(({ message_id }) => message_id === current.assistant_message_id);
+        if (message != null) {
+          options.commands.updateMessage(options.conversation.id, candidate.assistantMessageId, {
+            content: message.content,
+            status: messageStatusForRunStatus(current.status),
+          });
+        }
+      }
+      return !ACTIVE_RUN_STATUSES.has(current.status);
+    },
+    onExhausted: (error) => {
+      if (!isRunCurrent(options.commands, options.conversation.id, runEpoch)) return;
+      options.commands.setRunState(options.conversation.id, {
+        runError: `Live updates disconnected: ${runErrorMessage(error)}`,
+      });
+    },
+  });
+  return true;
+}
 
 /** Map an unknown failure to a user-readable message (never raw payloads). */
 export function runErrorMessage(error: unknown): string {
@@ -132,6 +299,7 @@ export async function startRunForPrompt(options: {
   prompt: string;
   execution?: RunRequest["execution"];
   workspaceId?: string | null;
+  streamSignal?: AbortSignal;
   agent: RunAgent;
   commands: RunEventCommands;
 }): Promise<void> {
@@ -145,6 +313,7 @@ export async function startRunForPrompt(options: {
     runEpoch,
     runId: null,
     backendStatus: null,
+    cancellationRequestedAt: null,
     uiPhase: "starting",
     runError: null,
     pendingMessageId: options.assistantMessageId,
@@ -157,6 +326,8 @@ export async function startRunForPrompt(options: {
   try {
     const run = await agent.startRun({
       prompt: options.prompt,
+      conversation_id: options.conversationId,
+      ...(options.sourceUserMessageId ? { source_user_message_id: options.sourceUserMessageId } : {}),
       ...(options.execution ? { execution: options.execution } : {}),
       ...(options.workspaceId ? { workspace_id: options.workspaceId } : {}),
     });
@@ -168,12 +339,74 @@ export async function startRunForPrompt(options: {
     commands.setRunState(options.conversationId, {
       runId: run.run_id,
       backendStatus: run.status,
+      cancellationRequestedAt: run.cancellation_requested_at ?? null,
     });
 
-    const events = await agent.getRunEvents(run.run_id);
-    await applyRunEvents(events, options.conversationId, options.assistantMessageId, commands, {
-      sourceUserMessageId: options.sourceUserMessageId,
-      runEpoch,
+    const durableMessageId = run.assistant_message_id ?? options.assistantMessageId;
+    if (
+      run.assistant_message_id != null &&
+      run.assistant_message_id !== options.assistantMessageId
+    ) {
+      commands.associateAssistantMessage?.(
+        options.conversationId,
+        options.assistantMessageId,
+        run.assistant_message_id,
+      );
+      commands.setRunState(options.conversationId, {
+        pendingMessageId: run.assistant_message_id,
+      });
+    }
+
+    await observeRunWithResume({
+      agent,
+      runId: run.run_id,
+      signal: options.streamSignal,
+      isCurrent: () => isRunCurrent(commands, options.conversationId, runEpoch),
+      applyEvent: async (event) => {
+        if (
+          event.run_id !== run.run_id
+          || (event.event_type === "message_content"
+            && event.payload.message_id != null
+            && event.payload.message_id !== durableMessageId)
+        ) {
+          throw new Error("Run stream event does not own the active assistant message.");
+        }
+        await applyRunEvents([event], options.conversationId, durableMessageId, commands, {
+          sourceUserMessageId: options.sourceUserMessageId,
+          runEpoch,
+          assistantResponseIsDurable: run.assistant_message_id != null,
+        });
+      },
+      reconcileSnapshot: async () => {
+        const snapshot = await agent.getRun?.(run.run_id);
+        if (snapshot == null || !isRunCurrent(commands, options.conversationId, runEpoch)) return false;
+        commands.setRunState(options.conversationId, {
+          backendStatus: snapshot.status,
+          cancellationRequestedAt: snapshot.cancellation_requested_at ?? null,
+          uiPhase: uiPhaseForBackendStatus(snapshot.status),
+        });
+        if (snapshot.assistant_message_id != null && agent.listMessages != null) {
+          const messages = await agent.listMessages(options.conversationId);
+          const message = messages.messages.find(
+            ({ message_id }) => message_id === snapshot.assistant_message_id,
+          );
+          if (message != null) {
+            commands.updateMessage(options.conversationId, durableMessageId, {
+              content: message.content,
+              status: messageStatusForRunStatus(snapshot.status),
+            });
+          }
+        }
+        return snapshot.status === "completed"
+          || snapshot.status === "failed"
+          || snapshot.status === "cancelled";
+      },
+      onExhausted: (error) => {
+        if (!isRunCurrent(commands, options.conversationId, runEpoch)) return;
+        commands.setRunState(options.conversationId, {
+          runError: `Live updates disconnected: ${runErrorMessage(error)}`,
+        });
+      },
     });
   } catch (error) {
     if (!isRunCurrent(commands, options.conversationId, runEpoch)) return;
@@ -206,6 +439,7 @@ export async function submitPrompt(
   commands: RunCommands,
   execution?: RunRequest["execution"],
   workspaceId?: string | null,
+  streamSignal?: AbortSignal,
 ): Promise<void> {
   const created = await commands.addUserMessage(conversationId, prompt);
   const assistantMessageId = createEntityId();
@@ -222,6 +456,7 @@ export async function submitPrompt(
     prompt,
     execution,
     workspaceId,
+    streamSignal,
     agent,
     commands,
   });
@@ -239,6 +474,8 @@ export async function applyRunEvents(
      *  the conversation's current run, the events are stale and are not
      *  applied (and are never persisted). */
     runEpoch?: string;
+    /** The backend already created the assistant response linked to this run. */
+    assistantResponseIsDurable?: boolean;
   },
 ): Promise<void> {
   let completed = false;
@@ -260,6 +497,13 @@ export async function applyRunEvents(
           commands.setRunState(conversationId, { uiPhase: effect.phase });
           break;
         case "setMessageContent":
+          if (
+            effect.messageId != null &&
+            assistantMessageId != null &&
+            effect.messageId !== assistantMessageId
+          ) {
+            break;
+          }
           content = effect.content;
           if (assistantMessageId != null) {
             commands.updateMessage(conversationId, assistantMessageId, {
@@ -286,6 +530,7 @@ export async function applyRunEvents(
   }
   if (
     completed &&
+    !options?.assistantResponseIsDurable &&
     assistantMessageId != null &&
     (options?.runEpoch == null ||
       isRunCurrent(commands, conversationId, options.runEpoch))
@@ -343,9 +588,14 @@ export async function cancelActiveRun(options: {
     return;
   }
 
+  commands.setRunState(options.conversationId, {
+    backendStatus: cancelled.status,
+    cancellationRequestedAt: cancelled.cancellation_requested_at ?? null,
+    uiPhase: uiPhaseForBackendStatus(cancelled.status),
+  });
   try {
     const events = await agent.getRunEvents(options.runId);
-    applyRunEvents(events, options.conversationId, options.assistantMessageId, commands);
+    await applyRunEvents(events, options.conversationId, options.assistantMessageId, commands);
   } catch {
     // Event retrieval failed after a successful cancel; close the loop using
     // the returned run state so the UI reaches a terminal state.

@@ -9,9 +9,11 @@ import type { MessagePatch } from "../state/conversationReducer";
 import {
   applyRunEvents,
   cancelActiveRun,
+  recoverRunForConversation,
   runErrorMessage,
   startRunForPrompt,
   submitPrompt,
+  visibleRecoveryCandidate,
   type RunAgent,
   type RunCommands,
 } from "./conversationRun";
@@ -57,6 +59,9 @@ function makeAgent(overrides: Partial<RunAgent> = {}): RunAgent {
   return {
     startRun: vi.fn(async () => completed),
     getRunEvents: vi.fn(async () => successfulEvents),
+    streamRun: vi.fn(async (_runId, options) => {
+      successfulEvents.forEach((event, index) => options.onEvent({ ...event, sequence: index + 1 }));
+    }),
     cancelRun: vi.fn(async () => cancelled),
     ...overrides,
   };
@@ -71,6 +76,7 @@ interface CommandEntry {
   patch?: MessagePatch;
   update?: Partial<ConversationRunState>;
   sourceUserMessageId?: string | null;
+  placeholderId?: string;
 }
 
 function makeCommands() {
@@ -118,6 +124,9 @@ function makeCommands() {
     }),
     updateMessage: vi.fn((conversationId, messageId, patch) => {
       log.push({ op: "updateMessage", conversationId, messageId, patch });
+    }),
+    associateAssistantMessage: vi.fn((conversationId, placeholderId, messageId) => {
+      log.push({ op: "associateAssistantMessage", conversationId, placeholderId, messageId });
     }),
     persistAssistantMessage: vi.fn(
       async (
@@ -176,8 +185,8 @@ describe("submitPrompt", () => {
     expect(assistant[0].conversationId).toBe("created-conv");
     expect(assistant[0].sourceUserMessageId).toBe("user-msg-created");
 
-    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "Hello AVA" });
-    expect(agent.getRunEvents).toHaveBeenCalledWith("run-001");
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "Hello AVA", conversation_id: "created-conv", source_user_message_id: "user-msg-created" });
+    expect(agent.streamRun).toHaveBeenCalledWith("run-001", expect.any(Object));
 
     const phases = entries(log, "setRunState").map(
       (e) => e.update?.uiPhase,
@@ -205,6 +214,8 @@ describe("submitPrompt", () => {
 
     expect(agent.startRun).toHaveBeenCalledWith({
       prompt: "Hello AVA",
+      conversation_id: "created-conv",
+      source_user_message_id: "user-msg-created",
       workspace_id: "workspace-a",
     });
   });
@@ -218,7 +229,7 @@ describe("submitPrompt", () => {
     expect(agent.startRun).not.toHaveBeenCalledWith(
       expect.objectContaining({ workspace_id: expect.anything() }),
     );
-    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "Hello AVA" });
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "Hello AVA", conversation_id: "created-conv", source_user_message_id: "user-msg-created" });
   });
 
   it("sets starting state before the backend call", async () => {
@@ -269,9 +280,9 @@ describe("submitPrompt", () => {
     });
   });
 
-  it("marks the assistant message failed when event retrieval rejects", async () => {
+  it("keeps backend status intact when the live stream is interrupted", async () => {
     const agent = makeAgent({
-      getRunEvents: vi.fn(async () => {
+      streamRun: vi.fn(async () => {
         throw new Error("network down");
       }),
     });
@@ -279,15 +290,11 @@ describe("submitPrompt", () => {
 
     await submitPrompt("ok", "conv-a", agent, commands);
 
+    expect(hasRunStateUpdate(log, { backendStatus: "completed" })).toBe(true);
     expect(lastSetRunState(log)).toMatchObject({
-      backendStatus: "failed",
-      uiPhase: "failed",
-      runError: "AVA is unavailable. Please try again.",
+      runError: "Live updates disconnected: AVA is unavailable. Please try again.",
     });
-    const failed = entries(log, "updateMessage").find(
-      (e) => e.patch?.status === "failed",
-    );
-    expect(failed?.messageId).toBeTruthy();
+    expect(entries(log, "updateMessage").some((e) => e.patch?.status === "failed")).toBe(false);
   });
 
   it("associates events with the conversation that started the run", async () => {
@@ -391,6 +398,8 @@ describe("startRunForPrompt", () => {
 
     expect(agent.startRun).toHaveBeenCalledWith({
       prompt: "explain",
+      conversation_id: "conv-x",
+      source_user_message_id: "user-1",
       workspace_id: "approved-workspace",
     });
   });
@@ -408,7 +417,7 @@ describe("startRunForPrompt", () => {
       commands,
     });
 
-    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain" });
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain", conversation_id: "conv-x", source_user_message_id: "user-1" });
   });
 
   it("omits workspace_id from the run request when it is null", async () => {
@@ -428,7 +437,7 @@ describe("startRunForPrompt", () => {
     expect(agent.startRun).not.toHaveBeenCalledWith(
       expect.objectContaining({ workspace_id: "" }),
     );
-    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain" });
+    expect(agent.startRun).toHaveBeenCalledWith({ prompt: "explain", conversation_id: "conv-x", source_user_message_id: "user-1" });
   });
 
   it("combines execution and workspace in the run request", async () => {
@@ -448,6 +457,8 @@ describe("startRunForPrompt", () => {
 
     expect(agent.startRun).toHaveBeenCalledWith({
       prompt: "explain",
+      conversation_id: "conv-x",
+      source_user_message_id: "user-1",
       execution: { mode: "auto" },
       workspace_id: "approved-workspace",
     });
@@ -463,6 +474,12 @@ describe("applyRunEvents", () => {
     expect(hasRunStateUpdate(log, { uiPhase: "cancelled" })).toBe(true);
     expect(hasRunStateUpdate(log, { backendStatus: "cancelled" })).toBe(true);
     expect(entries(log, "updateMessage")).toEqual([
+      {
+        op: "updateMessage",
+        conversationId: "conv-x",
+        messageId: "asm-x",
+        patch: { status: "streaming" },
+      },
       {
         op: "updateMessage",
         conversationId: "conv-x",
@@ -538,6 +555,12 @@ describe("cancelActiveRun", () => {
         op: "updateMessage",
         conversationId: "conv-a",
         messageId: "asm-a",
+        patch: { status: "streaming" },
+      },
+      {
+        op: "updateMessage",
+        conversationId: "conv-a",
+        messageId: "asm-a",
         patch: { status: "cancelled" },
       },
     ]);
@@ -591,6 +614,12 @@ describe("cancelActiveRun", () => {
     expect(agent.getRunEvents).toHaveBeenCalledWith("run-001");
     expect(hasRunStateUpdate(log, { uiPhase: "cancelled" })).toBe(true);
     expect(entries(log, "updateMessage")).toEqual([
+      {
+        op: "updateMessage",
+        conversationId: "conv-a",
+        messageId: "asm-a",
+        patch: { status: "streaming" },
+      },
       {
         op: "updateMessage",
         conversationId: "conv-a",
@@ -657,6 +686,109 @@ describe("cancelActiveRun", () => {
       (e) => e.update?.uiPhase === "stopping",
     );
     expect(stoppings.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("streamed run events", () => {
+  it("renders a persisted partial snapshot before the stream closes and binds the backend message id", async () => {
+    const { commands, log } = makeCommands();
+    let emit!: (event: RunEvent) => void;
+    let close!: () => void;
+    const stream = new Promise<void>((resolve) => { close = resolve; });
+    const agent = makeAgent({
+      startRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-001", status: "running", assistant_message_id: "backend-assistant",
+        contract_version: "v1",
+      })),
+      streamRun: vi.fn(async (_runId, options) => {
+        emit = options.onEvent;
+        await stream;
+      }),
+    });
+    const running = startRunForPrompt({
+      conversationId: "conv-x", assistantMessageId: "local-assistant",
+      sourceUserMessageId: "user-x", prompt: "hello", agent, commands,
+    });
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+    emit({ ...evt("run_started", "started"), sequence: 1 });
+    emit({ ...evt("message_started", "message-started", { message_id: "backend-assistant" }), sequence: 2 });
+    emit({ ...evt("message_content", "partial", {
+      message_id: "backend-assistant", content: "**bold",
+    }), sequence: 3 });
+    expect(entries(log, "associateAssistantMessage")).toEqual([
+      expect.objectContaining({
+        placeholderId: "local-assistant", messageId: "backend-assistant",
+      }),
+    ]);
+    await vi.waitFor(() => expect(entries(log, "updateMessage")).toContainEqual(expect.objectContaining({
+      messageId: "backend-assistant", patch: { content: "**bold" },
+    })));
+    close();
+    await running;
+  });
+
+  it("deduplicates and sequence-orders partial snapshots and rejects wrong ownership", async () => {
+    const { commands, log } = makeCommands();
+    const agent = makeAgent({
+      startRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-001", status: "running", assistant_message_id: "backend-assistant",
+        contract_version: "v1",
+      })),
+      streamRun: vi.fn(async (_runId, options) => {
+        options.onEvent({ ...evt("run_started", "started"), sequence: 1 });
+        options.onEvent({ ...evt("message_started", "message-started", {
+          message_id: "backend-assistant",
+        }), sequence: 2 });
+        options.onEvent({ ...evt("message_content", "accepted", {
+          message_id: "backend-assistant", content: "Hello",
+        }), sequence: 3 });
+        options.onEvent({ ...evt("message_content", "accepted", {
+          message_id: "backend-assistant", content: "duplicate",
+        }), sequence: 3 });
+        options.onEvent({ ...evt("message_content", "older", {
+          message_id: "backend-assistant", content: "older",
+        }), sequence: 2 });
+        options.onEvent({ ...evt("message_content", "wrong-message", {
+          message_id: "another-message", content: "wrong",
+        }), sequence: 4 });
+        options.onEvent({ ...evt("message_content", "wrong-run", {
+          message_id: "backend-assistant", content: "wrong run",
+        }), run_id: "other-run", sequence: 5 });
+      }),
+    });
+    await startRunForPrompt({
+      conversationId: "conv-x", assistantMessageId: "local-assistant",
+      sourceUserMessageId: "user-x", prompt: "hello", agent, commands,
+    });
+    await vi.waitFor(() => {
+      const content = entries(log, "updateMessage").filter((entry) => entry.patch?.content != null);
+      expect(content).toEqual([
+        expect.objectContaining({ messageId: "backend-assistant", patch: { content: "Hello" } }),
+      ]);
+    });
+  });
+
+  it("drops an old run stream after a newer epoch becomes current", async () => {
+    const { commands, log, runStateRecord } = makeCommands();
+    const agent = makeAgent({
+      startRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "old-run",
+        status: "running",
+        contract_version: "v1",
+      })),
+      streamRun: vi.fn(async (_runId, options) => {
+        commands.setRunState("conv-x", { runEpoch: "newer-run" });
+        options.onEvent({ ...evt("run_completed", "old-terminal"), sequence: 2 });
+      }),
+    });
+
+    await startRunForPrompt({
+      conversationId: "conv-x", assistantMessageId: "assistant-x", sourceUserMessageId: "user-x",
+      prompt: "hello", agent, commands,
+    });
+
+    expect(runStateRecord["conv-x"]?.runEpoch).toBe("newer-run");
+    expect(log.some((entry) => entry.patch?.status === "complete")).toBe(false);
   });
 });
 
@@ -885,5 +1017,119 @@ describe("regenerate reconciliation and stale-run protection", () => {
         (entry) => entry.patch?.status === "failed",
       ),
     ).toBe(false);
+  });
+});
+
+describe("durable cancellation intent", () => {
+  it.each([false, true])("keeps an accepted request active when events unavailable=%s", async (unavailable) => {
+    const timestamp = "2026-09-27T12:00:00Z";
+    const agent = makeAgent({
+      cancelRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-001", status: "running", contract_version: "v1",
+        cancellation_requested_at: timestamp,
+      })),
+      getRunEvents: vi.fn(async () => {
+        if (unavailable) throw new Error("offline");
+        return [evt("run_started", "start"), evt("run_cancel_requested", "request")];
+      }),
+    });
+    const { commands, log } = makeCommands();
+    for (let i = 0; i < 2; i++) {
+      await cancelActiveRun({ conversationId: "conv-x", runId: "run-001",
+        assistantMessageId: "asm-x", agent, commands });
+    }
+    expect(hasRunStateUpdate(log, { cancellationRequestedAt: timestamp, backendStatus: "running" })).toBe(true);
+    expect(hasRunStateUpdate(log, { backendStatus: "cancelled" })).toBe(false);
+    expect(log.some((entry) => entry.patch?.status === "cancelled")).toBe(false);
+  });
+
+  it("allows completion to win despite durable cancellation intent", async () => {
+    const { commands, log } = makeCommands();
+    const agent = makeAgent({
+      cancelRun: vi.fn(async (): Promise<RunResponse> => ({ run_id: "run-001", status: "completed", contract_version: "v1",
+        cancellation_requested_at: "2026-09-27T12:00:00Z" })),
+    });
+    await cancelActiveRun({ conversationId: "conv-x", runId: "run-001",
+      assistantMessageId: "asm-x", agent, commands });
+    expect(hasRunStateUpdate(log, { backendStatus: "completed" })).toBe(true);
+    expect(hasRunStateUpdate(log, { backendStatus: "cancelled" })).toBe(false);
+  });
+});
+
+describe("refresh recovery", () => {
+  const recoveredConversation = {
+    id: "conversation-1",
+    title: "Durable conversation",
+    messages: [
+      { id: "user-1", role: "user" as const, content: "Explain", status: "complete" as const },
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        content: "Hello world",
+        status: "streaming" as const,
+        sourceUserMessageId: "user-1",
+        sourceRunId: "run-recovered",
+      },
+    ],
+  };
+
+  it("selects only the visible regenerated assistant response", () => {
+    const candidate = visibleRecoveryCandidate({
+      ...recoveredConversation,
+      messages: [
+        recoveredConversation.messages[0],
+        { ...recoveredConversation.messages[1], id: "assistant-old", sourceRunId: "run-old" },
+        recoveredConversation.messages[1],
+      ],
+    });
+    expect(candidate).toMatchObject({
+      assistantMessageId: "assistant-1",
+      sourceRunId: "run-recovered",
+    });
+  });
+
+  it("recovers the durable run from cursor zero without creating a run or message", async () => {
+    const { commands, log, runStateRecord } = makeCommands();
+    const streamRun = vi.fn(async (_runId: string, options: { afterSequence?: number; onEvent(event: RunEvent): void | Promise<void> }) => {
+      await options.onEvent({ ...evt("run_started", "event-1"), run_id: "run-recovered", sequence: 1 });
+      await options.onEvent({ ...evt("message_content", "event-2", { message_id: "assistant-1", content: "Hel" }), run_id: "run-recovered", sequence: 2 });
+      await options.onEvent({ ...evt("message_content", "event-3", { message_id: "assistant-1", content: "Hello" }), run_id: "run-recovered", sequence: 3 });
+      await options.onEvent({ ...evt("message_content", "event-4", { message_id: "assistant-1", content: "Hello world!" }), run_id: "run-recovered", sequence: 4 });
+      await options.onEvent({ ...evt("run_completed", "event-5"), run_id: "run-recovered", sequence: 5 });
+    });
+    const agent = makeAgent({
+      startRun: vi.fn(),
+      streamRun,
+      getRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-recovered", status: "running", assistant_message_id: "assistant-1", contract_version: "v1",
+      })),
+    });
+
+    await recoverRunForConversation({ conversation: recoveredConversation, agent, commands });
+
+    expect(agent.startRun).not.toHaveBeenCalled();
+    expect(entries(log, "addAssistantMessage")).toHaveLength(0);
+    expect(streamRun).toHaveBeenCalledWith("run-recovered", expect.objectContaining({ afterSequence: 0 }));
+    expect(runStateRecord["conversation-1"]).toMatchObject({
+      runId: "run-recovered",
+      pendingMessageId: "assistant-1",
+      backendStatus: "completed",
+    });
+    expect(runStateRecord["conversation-1"].runEpoch).toEqual(expect.any(String));
+    expect(entries(log, "updateMessage").some((entry) => entry.patch?.content === "Hel" || entry.patch?.content === "Hello")).toBe(false);
+    expect(entries(log, "updateMessage").some((entry) => entry.patch?.content === "Hello world!")).toBe(true);
+  });
+
+  it("does not observe a terminal durable run", async () => {
+    const { commands } = makeCommands();
+    const agent = makeAgent({
+      getRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-recovered", status: "completed", assistant_message_id: "assistant-1", contract_version: "v1",
+      })),
+    });
+
+    await expect(recoverRunForConversation({ conversation: recoveredConversation, agent, commands })).resolves.toBe(false);
+    expect(agent.streamRun).not.toHaveBeenCalled();
+    expect(agent.startRun).not.toHaveBeenCalled();
   });
 });

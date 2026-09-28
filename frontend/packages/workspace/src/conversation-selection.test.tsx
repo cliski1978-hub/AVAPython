@@ -62,6 +62,8 @@ let nextRunId = 1;
 let nextMessageId = 1;
 let serverConversations: MockConversationResponse[] = [];
 let serverMessages: Record<string, MockMessageResponse[]> = {};
+const assistantMessageByRun = new Map<string, string>();
+const conversationByRun = new Map<string, string>();
 
 vi.mock("@ava/api-client", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@ava/api-client")>();
@@ -136,12 +138,59 @@ vi.mock("@ava/api-client", async (importOriginal) => {
         return message;
       },
     ),
-    startRun: vi.fn().mockImplementation(async () => ({
-      run_id: `run-${nextRunId++}`,
-      status: "completed",
-      contract_version: "v1",
-    })),
+    startRun: vi.fn().mockImplementation(async (_client: unknown, request: { conversation_id?: string }) => {
+      const runId = `run-${nextRunId++}`;
+      const assistantMessageId = `assistant-${runId}`;
+      assistantMessageByRun.set(runId, assistantMessageId);
+      if (request.conversation_id != null) {
+        conversationByRun.set(runId, request.conversation_id);
+        const placeholder: MockMessageResponse = {
+          message_id: assistantMessageId,
+          conversation_id: request.conversation_id,
+          role: "assistant",
+          content: "",
+          status: "pending",
+          created_at: TS,
+          updated_at: TS,
+          contract_version: "v1",
+        };
+        serverMessages[request.conversation_id] = [
+          ...(serverMessages[request.conversation_id] ?? []),
+          placeholder,
+        ];
+      }
+      return {
+        run_id: runId,
+        status: "running",
+        assistant_message_id: assistantMessageId,
+        contract_version: "v1",
+      };
+    }),
     getRunEvents: vi.fn().mockResolvedValue([]),
+    streamRun: vi.fn().mockImplementation(
+      async (
+        client: ApiClient,
+        runId: string,
+        options: { onEvent(event: TestRunEvent & { sequence: number }): void },
+      ) => {
+        const events = await getRunEvents(client, runId);
+        events.forEach((event, index) => {
+          const messageId = assistantMessageByRun.get(runId);
+          const payload = event.event_type === "message_started" || event.event_type === "message_content"
+            ? { ...event.payload, message_id: messageId ?? "" }
+            : event.payload;
+          const conversationId = conversationByRun.get(runId);
+          if (conversationId != null && messageId != null && event.event_type === "message_content") {
+            serverMessages[conversationId] = (serverMessages[conversationId] ?? []).map((message) =>
+              message.message_id === messageId
+                ? { ...message, content: String(payload["content"] ?? ""), status: "complete" }
+                : message,
+            );
+          }
+          options.onEvent({ ...event, run_id: runId, payload, sequence: event.sequence ?? index + 1 });
+        });
+      },
+    ),
     cancelRun: vi.fn().mockResolvedValue({
       run_id: "run-1",
       status: "cancelled",
@@ -271,6 +320,8 @@ describe("conversation selection and message hydration", () => {
   beforeEach(() => {
     nextConversationId = 1;
     nextRunId = 1;
+    assistantMessageByRun.clear();
+    conversationByRun.clear();
     nextMessageId = 1;
     serverConversations = [];
     serverMessages = {};
@@ -323,11 +374,33 @@ describe("conversation selection and message hydration", () => {
         return message;
       },
     );
-    vi.mocked(startRun).mockImplementation(async () => ({
-      run_id: `run-${nextRunId++}`,
-      status: "completed",
-      contract_version: "v1",
-    }));
+    vi.mocked(startRun).mockImplementation(async (_client: unknown, request: { conversation_id?: string | null }) => {
+      const runId = `run-${nextRunId++}`;
+      const assistantMessageId = `assistant-${runId}`;
+      assistantMessageByRun.set(runId, assistantMessageId);
+      if (request.conversation_id != null) {
+        conversationByRun.set(runId, request.conversation_id);
+        serverMessages[request.conversation_id] = [
+          ...(serverMessages[request.conversation_id] ?? []),
+          {
+            message_id: assistantMessageId,
+            conversation_id: request.conversation_id,
+            role: "assistant",
+            content: "",
+            status: "pending",
+            created_at: TS,
+            updated_at: TS,
+            contract_version: "v1",
+          },
+        ];
+      }
+      return {
+        run_id: runId,
+        status: "running",
+        assistant_message_id: assistantMessageId,
+        contract_version: "v1",
+      };
+    });
     vi.mocked(getRunEvents).mockResolvedValue([]);
     vi.mocked(cancelRun).mockResolvedValue({
       run_id: "run-1",
@@ -461,10 +534,6 @@ describe("conversation selection and message hydration", () => {
     seedConversation("conversation-1", "Running Thread", []);
     vi.mocked(getRunEvents).mockResolvedValue(answerEvents("Answer A"));
 
-    let resolveAssistantSave!: (message: MockMessageResponse) => void;
-    const assistantSaveGate = new Promise<MockMessageResponse>((resolve) => {
-      resolveAssistantSave = resolve;
-    });
     vi.mocked(createMessage).mockImplementation(
       async (
         _client: unknown,
@@ -482,9 +551,6 @@ describe("conversation selection and message hydration", () => {
           updated_at: TS,
           contract_version: "v1",
         };
-        if (role === "assistant") {
-          await assistantSaveGate;
-        }
         serverMessages[conversationId] = [
           ...(serverMessages[conversationId] ?? []),
           message,
@@ -540,29 +606,9 @@ describe("conversation selection and message hydration", () => {
     expect(messageElements("assistant")).toHaveLength(1);
     expect(messageElements("user")).toHaveLength(1);
 
-    await act(async () => {
-      resolveAssistantSave({
-        message_id: "assistant-1",
-        conversation_id: "conversation-1",
-        role: "assistant",
-        content: "Answer A",
-        status: "complete",
-        created_at: TS,
-        updated_at: TS,
-        contract_version: "v1",
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Answer A")).toHaveLength(1);
-    });
-    expect(messageElements("assistant")).toHaveLength(1);
-    expect(messageElements("user")).toHaveLength(1);
-    expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
-      client,
-      "conversation-1",
-      expect.objectContaining({ role: "assistant", content: "Answer A" }),
-    );
+    expect(serverMessages["conversation-1"]?.some(
+      (message) => message.role === "assistant" && message.content === "Answer A",
+    )).toBe(true);
   });
 
   it("shows the same persisted history after a remount (refresh)", async () => {
@@ -581,16 +627,9 @@ describe("conversation selection and message hydration", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Persisted Answer")).toHaveLength(1);
     });
-    await waitFor(() => {
-      expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
-        client,
-        "conversation-1",
-        expect.objectContaining({
-          role: "assistant",
-          content: "Persisted Answer",
-        }),
-      );
-    });
+    expect(serverMessages["conversation-1"]?.some(
+      (message) => message.role === "assistant" && message.content === "Persisted Answer",
+    )).toBe(true);
     expect(messageElements("assistant")).toHaveLength(1);
 
     first.unmount();

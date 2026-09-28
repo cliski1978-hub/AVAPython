@@ -20,12 +20,14 @@ from ava.contracts.conversations import (
     MessageResponse,
     MessageRole,
     MessageStatus,
+    assistant_status_for_run,
 )
 from ava.repositories.conversation_repository import (
     ConversationRecord,
     ConversationRepository,
 )
 from ava.repositories.message_repository import MessageRecord, MessageRepository
+from ava.repositories.run_repository import RunRepository
 
 DEFAULT_CONVERSATION_TITLE = "New Conversation"
 
@@ -74,9 +76,11 @@ class ConversationService:
         *,
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository,
+        run_repository: RunRepository | None = None,
     ) -> None:
         self._conversation_repository = conversation_repository
         self._message_repository = message_repository
+        self._run_repository = run_repository
 
     def create_conversation(self, title: str | None = None) -> ConversationResponse:
         """Create a new conversation, returning its response contract.
@@ -183,7 +187,7 @@ class ConversationService:
             self._message_repository.append(message)
         except ValueError as exc:
             raise DuplicateMessageError(f"Message already exists: {exc}") from exc
-        return _message_to_response(message)
+        return self._message_to_response(message)
 
     def get_message(self, conversation_id: str, message_id: str) -> MessageResponse | None:
         """Return a message within a conversation, or ``None`` if unknown.
@@ -195,7 +199,7 @@ class ConversationService:
         record = self._message_repository.get(conversation_id, message_id)
         if record is None:
             return None
-        return _message_to_response(record)
+        return self._message_to_response(record)
 
     def list_messages(self, conversation_id: str) -> ConversationMessagesResponse | None:
         """Return a conversation's messages in stable append order.
@@ -208,8 +212,16 @@ class ConversationService:
         records = self._message_repository.list_for_conversation(conversation_id)
         return ConversationMessagesResponse(
             conversation_id=conversation_id,
-            messages=[_message_to_response(record) for record in records],
+            messages=[self._message_to_response(record) for record in records],
         )
+
+    def _message_to_response(self, record: MessageRecord) -> MessageResponse:
+        status = record.status
+        if record.role == MessageRole.ASSISTANT and record.source_run_id and self._run_repository:
+            run = self._run_repository.get(record.source_run_id)
+            if run is not None:
+                status = assistant_status_for_run(run.status)
+        return _message_to_response(record, status=status)
 
 
 # ============================================================
@@ -231,13 +243,13 @@ def _conversation_to_response(record: ConversationRecord) -> ConversationRespons
     )
 
 
-def _message_to_response(record: MessageRecord) -> MessageResponse:
+def _message_to_response(record: MessageRecord, *, status: MessageStatus | None = None) -> MessageResponse:
     return MessageResponse(
         message_id=record.message_id,
         conversation_id=record.conversation_id,
         role=record.role,
         content=record.content,
-        status=record.status,
+        status=status or record.status,
         source_run_id=record.source_run_id,
         created_at=record.created_at,
         updated_at=record.updated_at,

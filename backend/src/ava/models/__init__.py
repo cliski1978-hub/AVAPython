@@ -25,6 +25,19 @@ from ava.models.bindings import (
     bind_model_provider,
     model_binding_from_profile,
 )
+from ava.models.credentials import (
+    ENVIRONMENT_CREDENTIAL_SCHEME,
+    BlankCredentialError,
+    CredentialError,
+    CredentialNotFoundError,
+    CredentialReference,
+    CredentialReferenceError,
+    CredentialResolver,
+    SecretValue,
+    UnsupportedCredentialSchemeError,
+    resolve_connection_credential,
+)
+from ava.models.model_configurations import ModelConfiguration
 from ava.models.model_registry import (
     ModelDisabledError,
     ModelProfile,
@@ -36,8 +49,17 @@ from ava.models.registry import ModelProviderRegistry
 from ava.models.resolver import ModelProviderResolver, UnknownModelProviderError
 
 __all__ = [
+    "ENVIRONMENT_CREDENTIAL_SCHEME",
+    "BlankCredentialError",
     "ConfiguredModelBinding",
+    "CredentialError",
+    "CredentialNotFoundError",
+    "CredentialReference",
+    "CredentialReferenceError",
+    "CredentialResolver",
+    "SecretValue",
     "ModelBindingResolver",
+    "ModelConfiguration",
     "ModelDisabledError",
     "ModelProfile",
     "ModelProviderRegistry",
@@ -51,7 +73,9 @@ __all__ = [
     "RuntimeModelBindingPort",
     "UnknownModelError",
     "UnknownModelProviderError",
+    "UnsupportedCredentialSchemeError",
     "UnsupportedRuntimeModelBindingError",
     "bind_model_provider",
     "model_binding_from_profile",
+    "resolve_connection_credential",
 ]

@@ -79,6 +79,24 @@ describe("AssistantMessage", () => {
     expect(html).not.toContain('aria-label="Retry response"');
   });
 
+  it("renders incomplete partial text in the existing streaming bubble", () => {
+    const html = renderToStaticMarkup(
+      <AssistantMessage status="streaming" content={"**bold\n`code\n[link\nこんにちは🙂"} />,
+    );
+    expect(html).toContain('data-message-state="streaming"');
+    expect(html).toContain("**bold");
+    expect(html).toContain("こんにちは🙂");
+  });
+
+  it("retains partial text after failure or cancellation", () => {
+    for (const status of ["failed", "cancelled"] as const) {
+      const html = renderToStaticMarkup(
+        <AssistantMessage status={status} content="partial answer" />,
+      );
+      expect(html).toContain("partial answer");
+    }
+  });
+
   it("uses overflow-wrap to prevent horizontal overflow in the bubble", () => {
     const html = renderToStaticMarkup(
       <AssistantMessage status="complete" content="Hi" />,

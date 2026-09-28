@@ -7,6 +7,7 @@ from typing import get_args, get_type_hints
 import pytest
 from test_model_provider_port import FakeModelProvider
 
+from ava.contracts.conversations import RunContext
 from ava.contracts.models import ModelMessage, ModelRequest
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
@@ -35,8 +36,9 @@ class StubRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del workspace, model_binding
+        del workspace, model_binding, context
         self.calls.append((run_id, request, model_provider))
         response = await model_provider.generate(
             ModelRequest(messages=[ModelMessage(role="user", content=request.prompt)])

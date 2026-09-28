@@ -15,7 +15,7 @@ registered into the AVA ``ModelProviderRegistry``.
 """
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -26,9 +26,11 @@ from ava.agents.contracts import AgentPort
 from ava.configuration.settings import Settings
 from ava.contracts.models import ModelCapabilities
 from ava.execution.command_policy import SandboxedCommandExecutionPolicy
+from ava.execution.configuration_resolver import ConfigurationRepositories, ExecutionConfigurationResolver
 from ava.execution.hosting import ModelHostingRequirement
 from ava.execution.model_orchestrator import ModelOrchestrator
 from ava.execution.model_resources import (
+    DefaultResourceDescriptor,
     ModelResourceAdapterRegistry,
     ModelResourceDescriptor,
     ModelResourceManager,
@@ -37,10 +39,20 @@ from ava.execution.model_resources import (
 from ava.execution.selector import ExecutionSelector
 from ava.execution.tool_security import ToolAuthorizationPolicy
 from ava.infrastructure.attachment_content_store import LocalAttachmentContentStore
+from ava.infrastructure.configuration_bootstrap import BootstrapStatus, seed_execution_configuration
+from ava.infrastructure.credentials import EnvironmentCredentialResolver
+from ava.infrastructure.model_provider_factory import (
+    BUILTIN_PROVIDER_IDS,
+    ConfiguredModelProviderFactory,
+    construct_compatible_provider,
+    installed_provider_adapter_ids,
+)
 from ava.infrastructure.persistence import SqliteDatabase, create_relational_repositories
 from ava.infrastructure.sandbox import BubblewrapSandboxedCommandRunner
 from ava.models.bindings import ModelBindingResolver
+from ava.models.credentials import CredentialResolver
 from ava.models.model_registry import ModelProfile, ModelRegistry
+from ava.models.provider_factory import ModelProviderFactory
 from ava.models.providers.openai_compatible.provider import OpenAICompatibleModelProvider
 from ava.models.qualifications import ModelQualification, ModelQualificationStore
 from ava.models.registry import ModelProviderRegistry
@@ -51,9 +63,13 @@ from ava.repositories import (
     ConversationRepository,
     DocumentRepository,
     DocumentRevisionRepository,
+    ExecutionDefaultsRepository,
     MessageRepository,
+    ModelConfigurationRepository,
+    ProviderConnectionRepository,
     RunEventRepository,
     RunRepository,
+    RuntimeConfigurationRepository,
 )
 from ava.runtimes import RuntimeRegistry
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
@@ -68,9 +84,13 @@ from ava.services.document_write_coordinator import (
     DocumentWriteCoordinator,
     InMemoryDocumentWriteCoordinator,
 )
+from ava.services.execution_defaults_store import ExecutionDefaultsStore
 from ava.services.message_store import MessageStore
+from ava.services.model_configuration_store import ModelConfigurationStore
+from ava.services.provider_connection_store import ProviderConnectionStore
 from ava.services.run_event_store import RunEventStore
 from ava.services.run_store import RunStore
+from ava.services.runtime_configuration_store import RuntimeConfigurationStore
 from ava.workspaces import WorkspaceRegistry, WorkspaceResolver
 
 logger = logging.getLogger(__name__)
@@ -95,6 +115,7 @@ def create_agent_adapter(
     model_resource_manager: ModelResourceManager | None = None,
     workspace_resolver: WorkspaceResolver | None = None,
     hosting_requirement: ModelHostingRequirement | None = None,
+    persisted_configuration_resolver: ExecutionConfigurationResolver | None = None,
 ) -> AgentPort:
     """Construct the agent adapter for the configured provider name.
 
@@ -109,6 +130,11 @@ def create_agent_adapter(
         hosting_requirement: Optional server-owned placement policy (Step 39).
             ``None`` (the default) leaves hosting unconstrained; clients never
             supply this through a run request.
+        persisted_configuration_resolver: Optional resolver over persisted
+            application defaults. When supplied, the native agent prefers
+            persisted defaults over bootstrap configuration. The selector
+            receives only the capability, never the repositories, so no
+            configuration storage is named here.
 
     Returns:
         A concrete ``AgentPort`` implementation for the provider.
@@ -131,6 +157,7 @@ def create_agent_adapter(
                 eligible_runtime_ids=frozenset({"native"}),
                 model_orchestrator=model_orchestrator,
                 hosting_requirement=hosting_requirement,
+                persisted_configuration_resolver=persisted_configuration_resolver,
             ),
             workspace_resolver=workspace_resolver,
             hosting_requirement=hosting_requirement,
@@ -216,6 +243,11 @@ def create_model_registry(
     Returns:
         A ``ModelRegistry`` indexing the configured profiles by stable identity.
     """
+    if profiles is None and any(not value.strip() for value in (
+        settings.resolved_model_id, settings.model_name, settings.model_provider,
+    )):
+        # Keep Settings reachable when legacy execution is unconfigured.
+        return ModelRegistry(())
     return ModelRegistry(profiles if profiles is not None else create_configured_model_profiles(settings))
 
 
@@ -254,10 +286,18 @@ def create_model_orchestrator(
 
 
 def create_model_resource_manager(registry: ModelRegistry) -> ModelResourceManager:
-    """Compose provider-managed v1 resource leases for configured models.
+    """Compose provider-managed v1 resource leases for selected models.
 
     Resource estimates remain unknown until a provider-specific lifecycle adapter
     supplies them. This intentionally performs no startup preload or inference.
+
+    A default descriptor stands in for models AVA did not catalog, which
+    Phase 5.16 made selectable: a persisted ``ModelConfiguration`` names a
+    configured model with no startup descriptor, and refusing to lease it would
+    fail every persisted run — including remote models that need no AVA-local
+    lifecycle at all. Leasing is downstream of selection, so the default only
+    ever describes a model that was already chosen; it cannot introduce one, and
+    it supplies no capabilities, hosting mode, or capacity estimates.
     """
     adapter_id = "provider-managed"
     return ModelResourceManager(
@@ -267,6 +307,7 @@ def create_model_resource_manager(registry: ModelRegistry) -> ModelResourceManag
             for profile in registry.list()
         ),
         adapters=ModelResourceAdapterRegistry({adapter_id: ProviderManagedResourceAdapter()}),
+        default_descriptor=DefaultResourceDescriptor(resource_adapter_id=adapter_id),
     )
 
 
@@ -332,11 +373,10 @@ def _create_local_model_provider(settings: Settings) -> OpenAICompatibleModelPro
     the default conservative capabilities; model and endpoint both come from
     ``Settings``.
     """
-    return OpenAICompatibleModelProvider(
-        base_url=settings.local_model_base_url,
+    return construct_compatible_provider(
+        endpoint=settings.local_model_base_url,
         model_name=settings.model_name,
-        provider_name="local",
-        api_key=None,
+        provider_id="local",
     )
 
 
@@ -390,10 +430,14 @@ class ApplicationPersistence:
     run_event_repository: RunEventRepository
     conversation_repository: ConversationRepository
     message_repository: MessageRepository
+    model_configuration_repository: ModelConfigurationRepository
+    provider_connection_repository: ProviderConnectionRepository
+    runtime_configuration_repository: RuntimeConfigurationRepository
     document_repository: DocumentRepository
     document_revision_repository: DocumentRevisionRepository
     attachment_repository: AttachmentRepository
     document_write_coordinator: DocumentWriteCoordinator
+    execution_defaults_repository: ExecutionDefaultsRepository
     database: SqliteDatabase | None = None
 
     def dispose(self) -> None:
@@ -426,11 +470,22 @@ def create_application_persistence(
     if provider == "memory":
         documents = DocumentStore()
         revisions = InMemoryDocumentRevisionStore()
+        provider_connections = ProviderConnectionStore()
+        model_configurations = ModelConfigurationStore(provider_connections=provider_connections)
+        runtime_configurations = RuntimeConfigurationStore()
         return ApplicationPersistence(
             run_repository=RunStore(),
             run_event_repository=RunEventStore(),
             conversation_repository=ConversationStore(),
             message_repository=MessageStore(),
+            provider_connection_repository=provider_connections,
+            model_configuration_repository=model_configurations,
+            runtime_configuration_repository=runtime_configurations,
+            execution_defaults_repository=ExecutionDefaultsStore(
+                provider_connections=provider_connections,
+                model_configurations=model_configurations,
+                runtime_configurations=runtime_configurations,
+            ),
             document_repository=documents,
             document_revision_repository=revisions,
             attachment_repository=InMemoryAttachmentRepository(),
@@ -449,6 +504,10 @@ def create_application_persistence(
             run_event_repository=bundle.run_event_repository,
             conversation_repository=bundle.conversation_repository,
             message_repository=bundle.message_repository,
+            provider_connection_repository=bundle.provider_connection_repository,
+            model_configuration_repository=bundle.model_configuration_repository,
+            runtime_configuration_repository=bundle.runtime_configuration_repository,
+            execution_defaults_repository=bundle.execution_defaults_repository,
             document_repository=bundle.document_repository,
             document_revision_repository=bundle.document_revision_repository,
             attachment_repository=bundle.attachment_repository,
@@ -462,6 +521,107 @@ def create_application_persistence(
 
 # ============================================================
 # END: Application Persistence Selection
+# ============================================================
+
+
+# ============================================================
+# ============================================================
+# BEGIN: Persisted Execution Configuration
+# ============================================================
+
+
+def create_credential_resolver(
+    environment: Mapping[str, str] | None = None,
+) -> CredentialResolver:
+    """Select the secret backend that resolves persisted credential references.
+
+    ``env:NAME`` is the only scheme Phase 5.9 defines, so the environment
+    backend is the only implementation and the choice is closed: an unsupported
+    scheme is reported by the resolver as a typed error, never served by a
+    different backend.
+
+    Args:
+        environment: Optional variable mapping to resolve against, defaulting to
+            the process environment. Injectable so a test or a later
+            process-scoped snapshot never has to mutate the real environment.
+
+    Returns:
+        The application's credential resolver.
+    """
+    return EnvironmentCredentialResolver(environment)
+
+
+def create_configured_model_provider_factory(
+    settings: Settings,
+    model_provider_registry: ModelProviderRegistry,
+) -> ModelProviderFactory:
+    """Compose the factory that builds adapters for configured connections.
+
+    Built-in constructor support remains installed even when the legacy
+    default provider differs. Compatible registry aliases are included, while
+    unrelated provider protocols are never reinterpreted as OpenAI-compatible.
+
+    The factory is created once and lives for the application, so every adapter
+    it builds shares one HTTP connection pool. ``close_configured_model_provider_factory``
+    releases that pool at shutdown.
+    """
+    return ConfiguredModelProviderFactory(
+        installed_provider_ids=BUILTIN_PROVIDER_IDS | installed_provider_adapter_ids(model_provider_registry),
+        default_endpoint=settings.local_model_base_url,
+    )
+
+
+async def close_configured_model_provider_factory(factory: ModelProviderFactory) -> None:
+    """Release the connection pool shared by configured-connection adapters.
+
+    Adapters built for persisted connections share one injected HTTP client that
+    the adapters themselves never close, so the factory is where that client is
+    released. Safe to call more than once, and a no-op for a factory that owns no
+    client.
+    """
+    aclose: Callable[[], Awaitable[None]] | None = cast(
+        "Callable[[], Awaitable[None]] | None",
+        getattr(factory, "aclose", None),
+    )
+    if aclose is None:
+        return
+    await aclose()
+
+
+def create_execution_configuration_resolver(
+    persistence: ApplicationPersistence,
+    *,
+    runtime_resolver: RuntimeResolver,
+    provider_factory: ModelProviderFactory,
+    credential_resolver: CredentialResolver,
+    model_orchestrator: ModelOrchestrator,
+    hosting_requirement: ModelHostingRequirement | None = None,
+) -> ExecutionConfigurationResolver:
+    """Compose persisted execution configuration resolution.
+
+    The four configuration repositories are bundled from the already-selected
+    persistence set rather than constructed here, so resolution reads the same
+    repository instances the Settings API writes to. The resolver is the only
+    component that sees all four; the agent adapter and the run service receive
+    only the resolution capability.
+    """
+    return ExecutionConfigurationResolver(
+        ConfigurationRepositories(
+            execution_defaults=persistence.execution_defaults_repository,
+            provider_connections=persistence.provider_connection_repository,
+            model_configurations=persistence.model_configuration_repository,
+            runtime_configurations=persistence.runtime_configuration_repository,
+        ),
+        runtime_resolver=runtime_resolver,
+        provider_factory=provider_factory,
+        credential_resolver=credential_resolver,
+        model_orchestrator=model_orchestrator,
+        hosting_requirement=hosting_requirement,
+    )
+
+
+# ============================================================
+# END: Persisted Execution Configuration
 # ============================================================
 
 
@@ -500,3 +660,20 @@ def create_attachment_content_store(settings: Settings) -> AttachmentContentStor
 # ============================================================
 # END: Attachment Content Selection
 # ============================================================
+
+
+def bootstrap_execution_configuration(
+    settings: Settings, persistence: ApplicationPersistence, runtime_registry: RuntimeRegistry,
+) -> BootstrapStatus:
+    """Materialize legacy settings once, using the application's own stores."""
+    return seed_execution_configuration(
+        settings,
+        ConfigurationRepositories(
+            execution_defaults=persistence.execution_defaults_repository,
+            provider_connections=persistence.provider_connection_repository,
+            model_configurations=persistence.model_configuration_repository,
+            runtime_configurations=persistence.runtime_configuration_repository,
+        ),
+        transaction=persistence.database.transaction if persistence.database is not None else None,
+        runtime_registry=runtime_registry,
+    )

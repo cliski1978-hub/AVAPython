@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from ava.agents.adapters.native.native_agent import NativeAgentAdapter
 from ava.api.app import create_app
+from ava.contracts.conversations import RunContext
 from ava.contracts.models import (
     ModelCapabilities,
     ModelHostingMode,
@@ -106,8 +107,9 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del model_provider, model_binding
+        del model_provider, model_binding, context
         self.calls += 1
         self.received.append(workspace)
         safe = "none"
@@ -236,8 +238,9 @@ def test_selected_workspace_resolves_to_non_none_runtime_binding_over_http() -> 
             "/runs",
             json={"prompt": "check the ephemeral workspace", "workspace_id": "ephemeral-validation"},
         )
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
+    body = TestClient(app).get(f"/runs/{body['run_id']}").json()
     assert body["status"] == "completed"
 
     runtime = app.state.runtime_registry.get("native")
@@ -263,8 +266,8 @@ def test_no_workspace_reaches_runtime_as_none_over_http() -> None:
     app = make_offline_app("ephemeral-validation")
     with TestClient(app) as client:
         response = client.post("/runs", json={"prompt": "plain prompt"})
-    assert response.status_code == 200
-    assert response.json()["status"] == "completed"
+    assert response.status_code == 202
+    assert TestClient(app).get(f"/runs/{response.json()['run_id']}").json()["status"] == "completed"
 
     runtime = app.state.runtime_registry.get("native")
     assert runtime is not None and isinstance(runtime, RecordingRuntime)
@@ -290,8 +293,8 @@ def test_unknown_or_path_like_workspace_fails_closed_over_http(workspace_id: str
 
     with TestClient(app) as client:
         response = client.post("/runs", json={"prompt": "hello", "workspace_id": workspace_id})
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed"
+    assert response.status_code == 202
+    assert TestClient(app).get(f"/runs/{response.json()['run_id']}").json()["status"] == "failed"
     assert runtime.calls == 0
 
     with TestClient(app) as client:
@@ -317,8 +320,9 @@ def test_explicit_runtime_and_workspace_coexist_independently_over_http() -> Non
                 "workspace_id": "ephemeral-validation",
             },
         )
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
+    body = TestClient(app).get(f"/runs/{body['run_id']}").json()
     assert body["status"] == "completed"
     assert body["execution_selection"]["runtime_id"] == "openhands"
     assert body["execution_selection"]["model_provider_id"] == "local"
@@ -337,8 +341,9 @@ def test_auto_execution_does_not_grant_workspace_over_http() -> None:
             "/runs",
             json={"prompt": "auto prompt", "execution": {"mode": "auto"}, "workspace_id": "ephemeral-validation"},
         )
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
+    body = TestClient(app).get(f"/runs/{body['run_id']}").json()
     assert body["status"] == "completed"
     assert body["execution_selection"]["runtime_id"] == "native"
 
@@ -354,7 +359,7 @@ def test_public_runtime_failure_hides_host_paths_and_secrets(monkeypatch: pytest
     monkeypatch.setattr(RecordingRuntime, "execute", fail)
     with TestClient(make_offline_app()) as client:
         response = client.post("/runs", json={"prompt": "offline security test"})
-        assert response.status_code == 200
+        assert response.status_code == 202
         run_id = response.json()["run_id"]
         events = client.get(f"/runs/{run_id}/events")
         combined = response.text + events.text

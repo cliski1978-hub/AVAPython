@@ -6,6 +6,8 @@ export { Button, type ButtonProps, type ButtonVariant } from "./Button";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export { Panel, type PanelProps } from "./Panel";
 export { Input, type InputProps } from "./Input";
+export { Select, type SelectOption, type SelectProps } from "./Select";
+export { Checkbox, type CheckboxProps } from "./Checkbox";
 export { Textarea, type TextareaProps } from "./Textarea";
 export { Divider, type DividerProps } from "./Divider";
 export {
@@ -19,3 +21,4 @@ export {
   type LoadingIndicatorProps,
 } from "./LoadingIndicator";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
+export { Modal, type ModalProps } from "./Modal";

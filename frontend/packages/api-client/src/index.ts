@@ -11,3 +11,4 @@ export * from "./runs";
 export * from "./runtimes";
 export * from "./execution-profiles";
 export * from "./workspaces";
+export * from "./settings";

@@ -2,7 +2,7 @@ import type { RunStatus } from "@ava/contracts";
 
 export type MessageRole = "user" | "assistant" | "system";
 
-export type MessageStatus = "pending" | "complete" | "failed" | "cancelled";
+export type MessageStatus = "pending" | "streaming" | "complete" | "failed" | "cancelled";
 
 export interface ConversationMessage {
   id: string;
@@ -20,6 +20,12 @@ export interface ConversationMessage {
    * previous array element.
    */
   sourceUserMessageId?: string;
+  /**
+   * Durable run that produced this assistant response. This comes directly
+   * from the conversation snapshot; it is never inferred from message order
+   * or content. It lets a fresh frontend session recover an active observer.
+   */
+  sourceRunId?: string | null;
   /**
    * User-readable failure detail for failed assistant messages. Never raw
    * payloads, stack traces, or HTTP bodies.
@@ -48,6 +54,8 @@ export interface ConversationRunState {
   runId: string | null;
   /** Latest AVA run status observed. Null before a run exists. */
   backendStatus: RunStatus | null;
+  /** Last observed durable cancellation intent; never a terminal outcome. */
+  cancellationRequestedAt?: string | null;
   /** Frontend-only phase driving the composer and message UI. */
   uiPhase: UIRunPhase;
   /** User-readable error from the most recent transport/API failure. */

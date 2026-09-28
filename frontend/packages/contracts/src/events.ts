@@ -9,6 +9,7 @@ import type { ContractVersion } from "./version";
 
 export type EventType =
   | "run_started"
+  | "run_cancel_requested"
   | "message_started"
   | "message_content"
   | "tool_started"
@@ -24,6 +25,8 @@ export type EventType =
 export interface RunEvent {
   event_id: string;
   run_id: string;
+  /** Stable monotonic order within a run when supplied by event persistence. */
+  sequence?: number;
   event_type: EventType;
   timestamp: string;
   payload: Record<string, JsonValue>;

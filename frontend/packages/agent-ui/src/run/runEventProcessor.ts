@@ -16,7 +16,7 @@ export type RunEventEffect =
   | { kind: "setBackendStatus"; backendStatus: UIRunStatus }
   | { kind: "setPhase"; phase: UIRunPhase }
   | { kind: "setMessageStatus"; messageStatus: MessageStatus }
-  | { kind: "setMessageContent"; content: string }
+  | { kind: "setMessageContent"; messageId: string | null; content: string }
   | { kind: "associateMessage"; messageId: string }
   | { kind: "ignore" };
 
@@ -40,13 +40,18 @@ export function applyRunEvent(event: RunEvent): RunEventEffect[] {
       return [
         { kind: "setPhase", phase: "running" },
         { kind: "setBackendStatus", backendStatus: "running" },
+        { kind: "setMessageStatus", messageStatus: "streaming" },
       ];
     case "message_started":
       return [
         { kind: "associateMessage", messageId: payloadString(event.payload, "message_id") },
       ];
     case "message_content":
-      return [{ kind: "setMessageContent", content: payloadString(event.payload, "content") }];
+      return [{
+        kind: "setMessageContent",
+        messageId: payloadString(event.payload, "message_id") || null,
+        content: payloadString(event.payload, "content"),
+      }];
     case "run_completed":
       return [
         { kind: "setPhase", phase: "completed" },

@@ -7,6 +7,8 @@ import {
   getRun,
   getRunEvents,
   startRun,
+  streamRun,
+  RunStreamProtocolError,
 } from "./index";
 
 function makeClient(fetchImpl: typeof fetch): ApiClient {
@@ -25,6 +27,24 @@ const runResponse = {
   status: "completed",
   contract_version: "v1",
 };
+
+function sseResponse(frames: string[], contentType = "text/event-stream"): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  }), { headers: { "Content-Type": contentType } });
+}
+
+function sseEvent(eventId = "event-1", type = "run_completed"): string {
+  const event = {
+    event_id: eventId, run_id: "run-001", sequence: 4, event_type: type,
+    timestamp: "2026-09-27T00:00:00Z", payload: {}, contract_version: "v1",
+  };
+  return `id: ${eventId}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
 
 describe("startRun", () => {
   it("POSTs the serialized RunRequest to /runs and parses RunResponse", async () => {
@@ -125,6 +145,72 @@ describe("getRunEvents", () => {
     expect(url).toBe("http://localhost:8000/runs/run-001/events");
     expect(result).toEqual(events);
     expect(result[0].event_type).toBe("run_started");
+  });
+});
+
+describe("getRunEvents replay cursor", () => {
+  it("serializes an exclusive after-sequence cursor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    await getRunEvents(makeClient(fetchMock), "run-001", 7);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8000/runs/run-001/events?after_sequence=7");
+  });
+
+  it("rejects a negative cursor before issuing a request", async () => {
+    const fetchMock = vi.fn();
+    await expect(getRunEvents(makeClient(fetchMock), "run-001", -1)).rejects.toBeInstanceOf(RangeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("streamRun", () => {
+  it("serializes an exclusive resume cursor and rejects an invalid cursor locally", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([sseEvent()]));
+    await streamRun(makeClient(fetchMock), "run-001", {
+      afterSequence: 4,
+      onEvent: vi.fn(),
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8000/runs/run-001/stream?after_sequence=4");
+
+    const invalid = vi.fn();
+    await expect(streamRun(makeClient(invalid), "run-001", {
+      afterSequence: -1,
+      onEvent: vi.fn(),
+    })).rejects.toBeInstanceOf(RangeError);
+    expect(invalid).not.toHaveBeenCalled();
+  });
+
+  it("parses typed AVA SSE envelopes and sends the SSE accept header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([sseEvent()]));
+    const received: unknown[] = [];
+    await streamRun(makeClient(fetchMock), "run-001", { onEvent: (event) => { received.push(event); } });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://localhost:8000/runs/run-001/stream");
+    expect(init.signal).toBeUndefined();
+    expect((init.headers as HeadersInit)).toEqual({ Accept: "text/event-stream" });
+    expect(received).toEqual([{
+      event_id: "event-1", run_id: "run-001", sequence: 4, event_type: "run_completed",
+      timestamp: "2026-09-27T00:00:00Z", payload: {}, contract_version: "v1",
+    }]);
+  });
+
+  it("ignores heartbeat frames and rejects malformed envelopes", async () => {
+    const heartbeatClient = makeClient(vi.fn().mockResolvedValue(sseResponse([": heartbeat\n\n"])));
+    await expect(streamRun(heartbeatClient, "run-001", { onEvent: vi.fn() })).resolves.toBeUndefined();
+
+    const brokenClient = makeClient(vi.fn().mockResolvedValue(sseResponse([
+      "id: broken\nevent: run_completed\ndata: not-json\n\n",
+    ])));
+    await expect(streamRun(brokenClient, "run-001", { onEvent: vi.fn() }))
+      .rejects.toBeInstanceOf(RunStreamProtocolError);
+  });
+
+  it("honors AbortSignal without sending a cancellation command", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([sseEvent()]));
+    await streamRun(makeClient(fetchMock), "run-001", { signal: controller.signal, onEvent: vi.fn() });
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

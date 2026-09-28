@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any, cast
 
+from ava.contracts.conversations import MessageRole, RunContext, execution_context_messages
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
@@ -21,6 +22,18 @@ from ava.workspaces.contracts import RuntimeWorkspaceBinding
 
 logger = logging.getLogger(__name__)
 _LOCAL_PLACEHOLDER_API_KEY = "local-ava"
+
+#: Neutral label that introduces replayed AVA context to the SDK agent. The
+#: pinned SDK 1.47.0 ``Conversation.send_message`` asserts ``role == "user"``
+#: and offers no public way to seed prior turns, so a multi-turn AVA context
+#: is rendered as one labelled transcript. Fidelity limit, documented in
+#: ``docs/AVA_Phase_5_21_Context_Construction_Service.md``: message order and
+#: text are preserved exactly, but prior assistant turns reach the model as
+#: transcript text inside a single user message instead of SDK assistant
+#: events. Which messages belong in the transcript is AVA's decision, made
+#: before this adapter runs; nothing here inspects status, visibility, or
+#: conversation state.
+_TRANSCRIPT_HEADER = "Earlier messages in this conversation (oldest first):"
 
 
 def _openhands_api_key(api_key: str | None) -> str:
@@ -69,6 +82,21 @@ def _legacy_model_binding(provider: ModelProviderPort) -> ConfiguredModelBinding
     )
 
 
+def _conversation_prompt(context: RunContext | None, prompt: str) -> str:
+    """Render the AVA-constructed context as the SDK's single user message.
+
+    A single user message is forwarded unchanged, which keeps unlinked and
+    single-turn runs byte-identical to the pre-5.21 behavior. Anything longer
+    keeps its order and text but loses per-message role structure, because the
+    SDK accepts only a user message here.
+    """
+    messages = execution_context_messages(context, prompt)
+    if len(messages) == 1 and messages[0].role == MessageRole.USER:
+        return messages[0].content
+    turns = "\n\n".join(f"{message.role.value.capitalize()}: {message.content}" for message in messages)
+    return f"{_TRANSCRIPT_HEADER}\n\n{turns}"
+
+
 class OpenHandsRuntime(AgentRuntimePort):
     """Execute an OpenHands conversation with policy-controlled file access."""
 
@@ -106,10 +134,11 @@ class OpenHandsRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
         tools: list[Any] = []
-        context = ToolRunContext(run_id, self.get_runtime_info().runtime_id, self._audit_sink)
-        self._contexts[run_id] = context
+        tool_context = ToolRunContext(run_id, self.get_runtime_info().runtime_id, self._audit_sink)
+        self._contexts[run_id] = tool_context
         try:
             try:
                 identity = model_binding or _legacy_model_binding(model_provider)
@@ -125,7 +154,7 @@ class OpenHandsRuntime(AgentRuntimePort):
                 return RuntimeRunResult(status=RunStatus.FAILED, content="OpenHands runtime is unavailable")
             tools = build_openhands_tools(
                 workspace, authorization_policy=self._authorization_policy,
-                capabilities=self.get_runtime_info().capabilities, context=context,
+                capabilities=self.get_runtime_info().capabilities, context=tool_context,
                 command_policy=self._command_policy, command_runner=self._command_runner,
             )
             if tools:
@@ -144,13 +173,13 @@ class OpenHandsRuntime(AgentRuntimePort):
                 ControlledConversation, agent=agent, workspace=_workspace_path(workspace),
                 persistence_dir=None, visualizer=None,
             ))
-            if context.revoked.is_set():
+            if tool_context.revoked.is_set():
                 return RuntimeRunResult(status=RunStatus.CANCELLED)
-            await asyncio.to_thread(conversation.send_message, request.prompt)
-            if context.revoked.is_set():
+            await asyncio.to_thread(conversation.send_message, _conversation_prompt(context, request.prompt))
+            if tool_context.revoked.is_set():
                 return RuntimeRunResult(status=RunStatus.CANCELLED)
             await asyncio.to_thread(conversation.run)
-            if context.revoked.is_set():
+            if tool_context.revoked.is_set():
                 return RuntimeRunResult(status=RunStatus.CANCELLED)
             content = _final_agent_text(conversation)
             if not content:
@@ -162,7 +191,7 @@ class OpenHandsRuntime(AgentRuntimePort):
             logger.exception("OpenHands execution failed for run %s", run_id)
             return RuntimeRunResult(status=RunStatus.FAILED, content="OpenHands execution failed")
         finally:
-            context.revoked.set()
+            tool_context.revoked.set()
             self._contexts.pop(run_id, None)
             from ava.runtimes.adapters.openhands.tool_context import discard_context
 
@@ -181,4 +210,5 @@ class OpenHandsRuntime(AgentRuntimePort):
         context = self._contexts.get(run_id)
         if context is not None:
             context.revoked.set()
-        return RuntimeRunResult(status=RunStatus.CANCELLED)
+        # The SDK worker thread can still be running. execute() reports its outcome.
+        return RuntimeRunResult(status=RunStatus.RUNNING)

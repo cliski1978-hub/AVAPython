@@ -31,9 +31,9 @@ class MessageRecord:
     ``created_at`` and ``updated_at`` are timezone-aware UTC timestamps
     (``datetime.now(UTC)`` semantics); durable adapters must preserve
     aware-UTC round-tripping. ``source_run_id`` optionally links the message
-    to the AVA run that produced it — the minimum message/run linkage
-    established in Step 4.4. No attachment/streaming machinery exists yet:
-    both are deliberately out of Step 4.4 scope.
+    to the AVA run that produced it. ``content`` is the durable current
+    assistant snapshot and may advance through ``update_content`` while that
+    owning run remains active; lifecycle legality is enforced above this port.
     """
 
     message_id: str
@@ -66,9 +66,9 @@ class MessageRepository(ABC):
     * ``list_for_conversation`` — enumerate a conversation's messages in
       stable append order.
 
-    Deliberately not part of this port: message identity generation,
-    message update/removal semantics, conversation existence checks, query
-    language, and observability helpers (``clear``).
+    Deliberately not part of this port: message identity generation, removal,
+    lifecycle policy, conversation existence checks, query language, and
+    observability helpers (``clear``).
     """
 
     @abstractmethod
@@ -105,6 +105,15 @@ class MessageRepository(ABC):
             conversation-agnostic; the service filters existence).
         """
         raise NotImplementedError
+
+    def update_content(self, conversation_id: str, message_id: str, content: str) -> MessageRecord | None:
+        """Replace the durable current assistant-content snapshot.
+
+        The application layer validates ownership and active lifecycle before
+        calling. Replacement supports monotonic partial snapshots and final
+        reconciliation without read/concatenate/write races.
+        """
+        return None
 
 
 # ============================================================

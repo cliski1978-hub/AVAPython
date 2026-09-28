@@ -70,6 +70,30 @@ class MemoryRunRepository(RunRepository):
         self._runs[run_id] = updated
         return updated
 
+    def compare_and_set_status(
+        self,
+        run_id: str,
+        *,
+        expected_status: RunStatus,
+        status: RunStatus,
+    ) -> RunRecord | None:
+        record = self._runs.get(run_id)
+        if record is None or record.status is not expected_status:
+            return None
+        return self.update_status(run_id, status)
+
+    def request_cancellation(self, run_id: str, *, requested_at: datetime) -> RunRecord | None:
+        record = self._runs.get(run_id)
+        if record is None or not record.status.is_active:
+            return None
+        if record.cancellation_requested_at is not None:
+            return None
+        updated = replace(
+            record, cancellation_requested_at=requested_at, updated_at=datetime.now(UTC)
+        )
+        self._runs[run_id] = updated
+        return updated
+
     def set_execution_selection(
         self,
         run_id: str,
@@ -104,6 +128,9 @@ class MemoryRunEventRepository(RunEventRepository):
 
     def get_events(self, run_id: str) -> list[RunEvent]:
         return list(self._events.get(run_id, []))
+
+    def list_after_sequence(self, run_id: str, after_sequence: int) -> list[RunEvent]:
+        return [event for event in self._events.get(run_id, []) if event.sequence > after_sequence]
 
     def get_latest(self, run_id: str) -> RunEvent | None:
         events = self._events.get(run_id)

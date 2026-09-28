@@ -102,6 +102,34 @@ export class ApiClient {
   }
 
   /**
+   * Open a long-lived response without applying the ordinary request timeout.
+   * The caller owns abort through the supplied signal; a stream ending is a
+   * transport fact, never a run lifecycle outcome.
+   */
+  async stream(path: string, signal?: AbortSignal): Promise<Response> {
+    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+    try {
+      const response = await this.fetchImpl(url, {
+        method: "GET",
+        signal,
+        headers: { Accept: "text/event-stream" },
+      });
+      reportConnectivity("reachable");
+      if (!response.ok) {
+        throw new ApiError(
+          `Request failed: ${response.status}`,
+          response.status,
+          await parseErrorBody(response),
+        );
+      }
+      return response;
+    } catch (error) {
+      if (!(error instanceof ApiError)) reportConnectivity("unavailable");
+      throw error;
+    }
+  }
+
+  /**
    * Issue a request and return the binary response body as a Blob.
    *
    * Explicit response mode for binary endpoints: non-2xx responses are

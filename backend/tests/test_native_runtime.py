@@ -80,7 +80,7 @@ def test_cancellation_and_reuse(external: bool) -> None:
         assert runtime._run_tasks == {}
         assert (await runtime.cancel_run("run")).status == RunStatus.CANCELLED
         for _ in range(2):
-            assert (await runtime.cancel_run("unknown")).status == RunStatus.CANCELLED
+            assert (await runtime.cancel_run("unknown")).status == RunStatus.RUNNING
         result = await runtime.execute(run_id="run", request=RunRequest(prompt="Again"), model_provider=TestProvider())
         assert result.status == RunStatus.COMPLETED
         assert (await runtime.cancel_run("run")).status == RunStatus.COMPLETED

@@ -21,6 +21,7 @@ import pytest
 from ava.agents.adapters.mock.mock_agent import MockAgentAdapter
 from ava.api.app import create_app
 from ava.configuration.settings import Settings
+from ava.contracts.conversations import RunContext
 from ava.contracts.events import EventType, RunEvent
 from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.models import ModelHostingMode
@@ -28,12 +29,16 @@ from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 from ava.infrastructure.composition import ApplicationPersistence, create_application_persistence
 from ava.infrastructure.persistence.repositories import (
+    RelationalProviderConnectionRepository,
     RelationalRunEventRepository,
     RelationalRunRepository,
+    RelationalRuntimeConfigurationRepository,
 )
+from ava.services.provider_connection_store import ProviderConnectionStore
 from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
 from ava.services.run_store import RunStore
+from ava.services.runtime_configuration_store import RuntimeConfigurationStore
 
 PROMPT = "Hello AVA"
 
@@ -91,8 +96,10 @@ class SelectionMockAgent(MockAgentAdapter):
         super().__init__()
         self._selection = selection
 
-    async def start_run(self, run_id: str, request: RunRequest):
-        result = await super().start_run(run_id, request)
+    async def start_run(
+        self, run_id: str, request: RunRequest, *, context: RunContext | None = None
+    ):
+        result = await super().start_run(run_id, request, context=context)
         return result.model_copy(update={"execution_selection": self._selection})
 
 
@@ -111,6 +118,8 @@ def test_default_persistence_provider_selects_the_in_memory_stores() -> None:
     persistence = create_application_persistence(memory_settings())
     assert isinstance(persistence.run_repository, RunStore)
     assert isinstance(persistence.run_event_repository, RunEventStore)
+    assert isinstance(persistence.provider_connection_repository, ProviderConnectionStore)
+    assert isinstance(persistence.runtime_configuration_repository, RuntimeConfigurationStore)
     assert persistence.database is None
 
 
@@ -130,6 +139,8 @@ def test_relational_settings_select_the_relational_adapters(tmp_path) -> None:
     )
     assert isinstance(persistence.run_repository, RelationalRunRepository)
     assert isinstance(persistence.run_event_repository, RelationalRunEventRepository)
+    assert isinstance(persistence.provider_connection_repository, RelationalProviderConnectionRepository)
+    assert isinstance(persistence.runtime_configuration_repository, RelationalRuntimeConfigurationRepository)
     assert persistence.database is not None
     persistence.dispose()
 
@@ -141,6 +152,8 @@ def test_relational_application_wires_the_relational_adapters(tmp_path) -> None:
     persistence = app.state.persistence
     assert isinstance(persistence.run_repository, RelationalRunRepository)
     assert isinstance(persistence.run_event_repository, RelationalRunEventRepository)
+    assert isinstance(persistence.provider_connection_repository, RelationalProviderConnectionRepository)
+    assert isinstance(persistence.runtime_configuration_repository, RelationalRuntimeConfigurationRepository)
     assert persistence.database is not None
     persistence.dispose()
 
@@ -186,6 +199,8 @@ def test_run_persists_across_application_restarts(tmp_path) -> None:
 
     with _client(settings) as client:
         body = client.post("/runs", json={"prompt": PROMPT}).json()
+        assert body["status"] == "running"
+        body = client.get(f"/runs/{body['run_id']}").json()
         assert body["status"] == "completed"
         run_id = body["run_id"]
         first_events = [e["event_type"] for e in client.get(f"/runs/{run_id}/events").json()]
@@ -228,7 +243,9 @@ def test_failed_run_persists_across_application_restarts(tmp_path) -> None:
         assert run.status_code == 200
         assert run.json()["status"] == "failed"
         events = client.get(f"/runs/{run_id}/events").json()
-        assert [e["event_type"] for e in events] == ["run_started", "run_failed"]
+        assert [e["event_type"] for e in events] == [
+            "run_started", "message_started", "run_failed",
+        ]
         assert events[-1]["payload"]["error_code"] == "agent_failed"
         assert events[-1]["payload"]["recoverable"] is False
 
@@ -261,7 +278,9 @@ def test_cancelled_run_persists_across_application_restarts(tmp_path) -> None:
         assert run.status_code == 200
         assert run.json()["status"] == "cancelled"
         events = client.get(f"/runs/{run_id}/events").json()
-        assert [e["event_type"] for e in events] == ["run_started", "run_cancelled"]
+        assert [e["event_type"] for e in events] == [
+            "run_started", "message_started", "run_cancel_requested", "run_cancelled",
+        ]
 
 
 def test_multiple_run_event_streams_persist_isolated(tmp_path) -> None:
@@ -328,6 +347,7 @@ def test_failed_run_lifecycle_matches_in_both_modes(mode, tmp_path) -> None:
             assert response.status == RunStatus.FAILED
             assert run_event_types(service, response.run_id) == [
                 EventType.RUN_STARTED,
+                EventType.MESSAGE_STARTED,
                 EventType.RUN_FAILED,
             ]
 
@@ -338,7 +358,7 @@ def test_failed_run_lifecycle_matches_in_both_modes(mode, tmp_path) -> None:
 
 @pytest.mark.parametrize("mode", ["memory", "relational"])
 def test_cancelled_run_lifecycle_matches_in_both_modes(mode, tmp_path) -> None:
-    """A cancelled run emits run_started → run_cancelled in both modes."""
+    """A cancelled run emits started → cancel_requested → cancelled in both modes."""
 
     adapter = MockAgentAdapter(run_delay=0.1)
     service, persistence = compose_service(mode, tmp_path, adapter)
@@ -353,6 +373,8 @@ def test_cancelled_run_lifecycle_matches_in_both_modes(mode, tmp_path) -> None:
             assert start_response.status == RunStatus.CANCELLED
             assert run_event_types(service, run_id) == [
                 EventType.RUN_STARTED,
+                EventType.MESSAGE_STARTED,
+                EventType.RUN_CANCEL_REQUESTED,
                 EventType.RUN_CANCELLED,
             ]
 

@@ -49,8 +49,9 @@ class RunEventStore(RunEventRepository):
             other.event_type in TERMINAL_EVENT_TYPES for other in existing
         ):
             return event
-        self._events.setdefault(event.run_id, []).append(event)
-        return event
+        stored = event.model_copy(update={"sequence": len(existing) + 1})
+        self._events.setdefault(event.run_id, []).append(stored)
+        return stored
 
     def get_events(self, run_id: str) -> list[RunEvent]:
         """Return the events for ``run_id`` in append order.
@@ -59,6 +60,10 @@ class RunEventStore(RunEventRepository):
         concern (see the run store).
         """
         return list(self._events.get(run_id, []))
+
+    def list_after_sequence(self, run_id: str, after_sequence: int) -> list[RunEvent]:
+        """Return the run's ordered facts strictly after an exclusive cursor."""
+        return [event for event in self._events.get(run_id, []) if event.sequence > after_sequence]
 
     def get_latest(self, run_id: str) -> RunEvent | None:
         """Return the most recently appended event for ``run_id``, if any."""

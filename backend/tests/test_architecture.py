@@ -22,6 +22,7 @@ CONTRACTS_DIR = SRC_DIR / "contracts"
 SERVICES_DIR = SRC_DIR / "services"
 API_DIR = SRC_DIR / "api"
 AGENTS_DIR = SRC_DIR / "agents"
+EXECUTION_DIR = SRC_DIR / "execution"
 AGENT_ADAPTERS_DIR = SRC_DIR / "agents" / "adapters"
 MOCK_ADAPTER_DIR = AGENT_ADAPTERS_DIR / "mock"
 MODELS_DIR = SRC_DIR / "models"
@@ -380,6 +381,7 @@ def test_provider_construction_is_localized_to_infrastructure() -> None:
     allowed = (
         OPENAI_COMPATIBLE_PROVIDER_DIR,  # the adapter's own package
         INFRASTRUCTURE_DIR / "composition.py",  # provider construction site
+        INFRASTRUCTURE_DIR / "model_provider_factory.py",  # per-run connection construction
     )
     violations: list[str] = []
     for path in _iter_python_files(SRC_DIR):
@@ -443,6 +445,11 @@ def test_internal_dependency_direction_is_respected() -> None:
         for path in _iter_python_files(directory):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for name in _ava_sibling_imports(tree):
+                if (
+                    path.name in {"provider_connection_repository.py", "model_configuration_repository.py"}
+                    and name == "models"
+                ):
+                    continue
                 if name in forbidden:
                     violations.append(f"{path}: imports 'ava.{name}'")
     assert not violations, "Internal boundary violations:\n" + "\n".join(violations)
@@ -561,8 +568,9 @@ def test_runtime_contract_layer_depends_only_on_ava_abstractions() -> None:
             )
             if path.name == "__init__.py":
                 allowed = allowed or name in {
-                    "ava.runtimes.contracts",
-                    "ava.runtimes.registry",
+                        "ava.runtimes.contracts",
+                        "ava.runtimes.configurations",
+                        "ava.runtimes.registry",
                     "ava.runtimes.resolver",
                 }
             assert allowed, (path, name)
@@ -1033,6 +1041,21 @@ def test_repository_ports_depend_only_on_contracts_and_each_other() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for name in _ava_imports(tree):
             parts = name.split(".")
+            if (
+                path.name in {"provider_connection_repository.py", "model_configuration_repository.py"}
+                and parts[:2] == ["ava", "models"]
+            ):
+                continue
+            if (
+                path.name == "runtime_configuration_repository.py"
+                and parts[:2] == ["ava", "runtimes"]
+            ):
+                continue
+            if (
+                path.name == "execution_defaults_repository.py"
+                and parts[:2] == ["ava", "configuration"]
+            ):
+                continue
             if len(parts) >= 2 and parts[1] not in allowed_siblings:
                 violations.append(f"{path}: imports '{name}'")
     assert not violations, "Outward imports in repository ports:\n" + "\n".join(violations)
@@ -1202,20 +1225,15 @@ def test_conversation_service_depends_on_repository_ports_not_concrete_stores() 
     assert not any(name.startswith(forbidden) for name in imports)
 
 
-def test_run_service_stays_free_of_conversation_persistence() -> None:
-    """RunService must not know the conversation/message domain.
-
-    Step 4.4 introduces conversation persistence next to run persistence
-    without coupling the two: RunService keeps no imports of conversation
-    repositories, stores, or the conversation service. If run/message
-    linkage is ever needed, it is exercised through the conversation domain,
-    never inside RunService.
-    """
+def test_run_service_uses_only_conversation_repository_ports_for_relationships() -> None:
+    """Phase 5.19 permits stable-ID relationship validation, never services/stores."""
     tree = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
     imports = _ava_imports(tree)
-    forbidden = (
+    assert {
         "ava.repositories.conversation_repository",
         "ava.repositories.message_repository",
+    } <= imports
+    forbidden = (
         "ava.services.conversation_service",
         "ava.services.conversation_store",
         "ava.services.message_store",
@@ -1443,6 +1461,15 @@ def test_persistence_layer_imports_only_repositories_and_contracts() -> None:
             if name != "ava" and name not in sys.stdlib_module_names:
                 violations.append(f"{path}: top-level import '{name}'")
         for name in _ava_sibling_imports(tree):
+            if (
+                path.name in {"provider_connection_repository.py", "model_configuration_repository.py"}
+                and name == "models"
+            ):
+                continue
+            if path.name == "runtime_configuration_repository.py" and name == "runtimes":
+                continue
+            if path.name == "execution_defaults_repository.py" and name == "configuration":
+                continue
             if name not in allowed_siblings:
                 violations.append(f"{path}: imports 'ava.{name}'")
     assert not violations, "Persistence layer dependency violations:\n" + "\n".join(violations)
@@ -1456,6 +1483,7 @@ def test_relational_repositories_conform_to_their_ports() -> None:
         RelationalDocumentRepository,
         RelationalDocumentRevisionRepository,
         RelationalMessageRepository,
+        RelationalProviderConnectionRepository,
         RelationalRunEventRepository,
         RelationalRunRepository,
     )
@@ -1465,6 +1493,7 @@ def test_relational_repositories_conform_to_their_ports() -> None:
         DocumentRepository,
         DocumentRevisionRepository,
         MessageRepository,
+        ProviderConnectionRepository,
         RunEventRepository,
         RunRepository,
     )
@@ -1476,10 +1505,190 @@ def test_relational_repositories_conform_to_their_ports() -> None:
     assert issubclass(RelationalDocumentRepository, DocumentRepository)
     assert issubclass(RelationalDocumentRevisionRepository, DocumentRevisionRepository)
     assert issubclass(RelationalAttachmentRepository, AttachmentRepository)
+    assert issubclass(RelationalProviderConnectionRepository, ProviderConnectionRepository)
+
+
+def test_secret_backends_are_infrastructure_only() -> None:
+    """Secret material lives in infrastructure and is never imported by AVA layers.
+
+    Phase 5.9 keeps the credential vocabulary (``SecretValue``,
+    ``CredentialReference``, the ``CredentialResolver`` port) in
+    ``ava.models.credentials``, but the only backend that actually touches
+    secret storage belongs to infrastructure. Core, contracts, models,
+    services, repositories, runtimes, and agents must not import it, so no
+    domain or contract module can reach process-environment or vault state.
+    """
+    backend = INFRASTRUCTURE_DIR / "credentials.py"
+    assert backend.exists(), "the environment credential backend must be infrastructure-side"
+    for directory in (
+        CORE_DIR,
+        CONTRACTS_DIR,
+        MODELS_DIR,
+        SERVICES_DIR,
+        REPOSITORIES_DIR,
+        SRC_DIR / "runtimes",
+        AGENTS_DIR,
+    ):
+        for path in _iter_python_files(directory):
+            assert "infrastructure.credentials" not in path.read_text(encoding="utf-8"), path
+
+
+def test_settings_routes_depend_only_on_contracts_and_services() -> None:
+    """The Settings transport layer reaches no repository, domain, or adapter type.
+
+    Settings routes are a transport shim: they translate contracts and service
+    errors, and nothing else. Reaching a repository or a domain dataclass
+    directly from a route would bypass the immutability, credential-reference,
+    and cross-record validation the service owns.
+    """
+    path = API_DIR / "routes" / "settings.py"
+    assert path.exists(), "the Settings API must have its own route module"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    ava_imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("ava."):
+            ava_imports.add(node.module)
+    allowed_prefixes = ("ava.contracts.", "ava.services.")
+    for imported in ava_imports:
+        assert imported.startswith(allowed_prefixes), f"settings route imports '{imported}'"
+    assert "ava.contracts.settings" in ava_imports
+    assert "ava.services.settings_service" in ava_imports
+
+
+def test_settings_layers_import_no_runtime_or_provider_implementation() -> None:
+    """Neither the Settings routes nor the Settings service touch a runtime.
+
+    Persisted runtime configuration is a configuration record. Resolving one to
+    a constructed ``AgentRuntimePort`` is execution's job (Phase 5.16), so an
+    import of any runtime implementation from the Settings boundary would be
+    configuration quietly acquiring execution behavior.
+    """
+    for path in (API_DIR / "routes" / "settings.py", SERVICES_DIR / "settings_service.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for import_path in _ava_imports(tree):
+            assert not import_path.startswith("ava.runtimes.adapters"), path
+            assert not import_path.startswith("ava.models.providers"), path
+            assert not import_path.startswith("ava.agents.adapters"), path
+
+
+def test_settings_expose_credential_reference_and_never_a_secret() -> None:
+    """No Settings contract may carry resolved secret material.
+
+    ``credential_reference`` is configuration metadata and is allowed. A field
+    for an API key, token, password, or the ``SecretValue`` wrapper is not, and
+    neither is a reference to that wrapper anywhere in the contract module.
+    """
+    import ava.contracts.settings as settings_contracts
+
+    forbidden = {
+        "api_key",
+        "credential",
+        "credential_value",
+        "password",
+        "token",
+        "secret",
+        "secret_value",
+    }
+    for name in dir(settings_contracts):
+        attribute = getattr(settings_contracts, name)
+        if not hasattr(attribute, "model_fields"):
+            continue
+        assert forbidden & set(attribute.model_fields) == set(), name
+    assert "credential_reference" in settings_contracts.ProviderConnectionResponse.model_fields
+
+    # Checked by AST rather than substring: the module docstring deliberately
+    # names what is absent, and prose about an omission is not a reference to
+    # the thing omitted.
+    tree = ast.parse((CONTRACTS_DIR / "settings.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert not node.module.startswith(("ava.models", "ava.infrastructure")), node.module
+        if isinstance(node, ast.Name):
+            assert node.id != "SecretValue", node.id
+        if isinstance(node, ast.Attribute):
+            assert node.attr != "SecretValue", node.attr
+
+
+def test_settings_defaults_contract_has_no_adapter_identity_field() -> None:
+    """Defaults reference configured identity only, never adapter or registry keys."""
+    from ava.contracts.settings import ApplicationExecutionDefaultsResponse
+
+    assert set(ApplicationExecutionDefaultsResponse.model_fields) == {
+        "default_provider_connection_id",
+        "default_model_id",
+        "default_runtime_configuration_id",
+        "contract_version",
+    }
+
+
+def test_settings_service_does_not_resolve_credentials() -> None:
+    """Managing configuration must never resolve a secret.
+
+    ``SettingsService`` is on a request path. Resolving a credential there would
+    put secret material in a service that returns HTTP contracts, which is
+    exactly the boundary Phase 5.9 kept secret-free.
+    """
+    source = (SERVICES_DIR / "settings_service.py").read_text(encoding="utf-8")
+    for forbidden in ("CredentialResolver", "SecretValue", "resolve_connection_credential", "reveal("):
+        assert forbidden not in source, f"settings_service.py must not use {forbidden}"
+    assert "CredentialReference" in source, "credential-reference syntax is still validated"
+
+
+def test_settings_routes_do_not_shadow_discovery_routes() -> None:
+    """``/settings/*`` is persisted configuration; discovery keeps its own paths.
+
+    Discovery answers "what is available and healthy?" and discovery must not
+    become a view of the configuration tables, nor configuration a view of the
+    live registries. The path prefixes are disjoint, which is what keeps the
+    two concepts separate on the wire.
+    """
+    for path in sorted(_iter_python_files(API_DIR / "routes")):
+        if path.name == "settings.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert '"/settings' not in text, f"{path.name} must not serve the Settings prefix"
+    settings_text = (API_DIR / "routes" / "settings.py").read_text(encoding="utf-8")
+    for discovery_path in ('"/runtimes"', '"/models"', '"/model-providers"', '"/capabilities"'):
+        assert discovery_path not in settings_text, discovery_path
+
+
+def test_run_service_remains_independent_of_credential_resolution() -> None:
+    """``RunService → AgentPort`` must not gain a credential dependency."""
+    text = (SERVICES_DIR / "run_service.py").read_text(encoding="utf-8")
+    for forbidden in ("CredentialResolver", "SecretValue", "CredentialReference", "reveal("):
+        assert forbidden not in text, f"run_service.py must not reference {forbidden}"
+
+
+def test_persisted_configuration_declares_no_resolved_secret_column() -> None:
+    """No migration may introduce a secret-bearing column for provider connections."""
+    forbidden = re.compile(r"\b(credential_value|api_key|password|token|secret_value)\b\s+(TEXT|VARCHAR|BLOB)")
+    versions = INFRASTRUCTURE_DIR / "persistence" / "migrations" / "versions"
+    for path in _iter_python_files(versions):
+        assert not forbidden.search(path.read_text(encoding="utf-8")), path
+
+
+def test_runtime_configuration_adapters_conform_to_their_ports() -> None:
+    """Phase 5.7's runtime-configuration adapters implement the AVA port."""
+    from ava.infrastructure.persistence.repositories import RelationalRuntimeConfigurationRepository
+    from ava.repositories import RuntimeConfigurationRepository
+    from ava.services.runtime_configuration_store import RuntimeConfigurationStore
+
+    assert issubclass(RelationalRuntimeConfigurationRepository, RuntimeConfigurationRepository)
+    assert issubclass(RuntimeConfigurationStore, RuntimeConfigurationRepository)
+
+
+def test_execution_defaults_adapters_conform_to_their_port() -> None:
+    """Phase 5.8's defaults adapters implement the singular AVA port."""
+    from ava.infrastructure.persistence.repositories import RelationalExecutionDefaultsRepository
+    from ava.repositories import ExecutionDefaultsRepository
+    from ava.services.execution_defaults_store import ExecutionDefaultsStore
+
+    assert issubclass(RelationalExecutionDefaultsRepository, ExecutionDefaultsRepository)
+    assert issubclass(ExecutionDefaultsStore, ExecutionDefaultsRepository)
 
 
 def test_persistence_schema_introduces_no_later_phase_tables() -> None:
-    """The migrations create only the approved framework + Phase 4 tables.
+    """The migrations create only the approved framework + Phase 5.3 tables.
 
     The default migrations create ``runs``, ``run_events``, ``conversations``,
     ``messages``, ``documents`` (Step 4.7), ``document_revisions``
@@ -1498,6 +1707,7 @@ def test_persistence_schema_introduces_no_later_phase_tables() -> None:
         created.extend(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", text))
         created.extend(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", text))
     assert sorted(created) == [
+        "application_execution_defaults",
         "attachments",
         "conversations",
         "document_revisions",
@@ -1505,9 +1715,16 @@ def test_persistence_schema_introduces_no_later_phase_tables() -> None:
         "idx_attachments_owner",
         "idx_messages_conversation_order",
         "idx_run_events_one_terminal",
+        "idx_runs_assistant_message",
+        "idx_runs_cancellation_requested",
+        "idx_runs_conversation",
+        "idx_runs_source_user_message",
         "messages",
+        "model_configurations",
+        "provider_connections",
         "run_events",
         "runs",
+        "runtime_configurations",
     ]
     forbidden = ("approval", "audit", "model_invocation", "qualification")
     for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
@@ -1647,6 +1864,7 @@ def test_application_persistence_carries_all_activated_ports() -> None:
     """ApplicationPersistence selects every activated port through one seam.
 
     ``ApplicationPersistence`` carries run, run-event, conversation, message,
+    provider-connection,
     and document state plus the Step 4.13 document revision history repository,
     the Step 4.14.C attachment metadata repository, and the document write
     coordinator. The API factory receives only the composed ports, never
@@ -1660,6 +1878,10 @@ def test_application_persistence_carries_all_activated_ports() -> None:
         "run_event_repository",
         "conversation_repository",
         "message_repository",
+        "model_configuration_repository",
+        "provider_connection_repository",
+        "runtime_configuration_repository",
+        "execution_defaults_repository",
         "document_repository",
         "document_revision_repository",
         "attachment_repository",
@@ -1675,6 +1897,10 @@ def test_application_persistence_carries_all_activated_ports() -> None:
     composition_text = (INFRASTRUCTURE_DIR / "composition.py").read_text(encoding="utf-8")
     assert "conversation_repository=bundle.conversation_repository" in composition_text
     assert "message_repository=bundle.message_repository" in composition_text
+    assert "model_configuration_repository=bundle.model_configuration_repository" in composition_text
+    assert "provider_connection_repository=bundle.provider_connection_repository" in composition_text
+    assert "runtime_configuration_repository=bundle.runtime_configuration_repository" in composition_text
+    assert "execution_defaults_repository=bundle.execution_defaults_repository" in composition_text
     assert "document_repository=bundle.document_repository" in composition_text
     assert "document_revision_repository=bundle.document_revision_repository" in composition_text
     assert "attachment_repository=bundle.attachment_repository" in composition_text
@@ -1695,13 +1921,16 @@ def test_conversation_routes_remain_persistence_neutral() -> None:
     assert not any(name.startswith(forbidden) for name in imports)
 
 
-def test_migration_versions_are_only_the_initial_and_revision_schemas() -> None:
-    """The codebase ships exactly the initial, revision, and attachment schemas.
+def test_migration_versions_include_execution_defaults_and_run_relationships() -> None:
+    """The codebase ships Phase 4 schemas plus Phase 5.3–5.8 configuration.
 
     Steps 4.8/4.9/4.10/4.11/4.12 activate existing schema only — no migrations
     are added — Step 4.13.C adds exactly one (the document revision history,
     v0002), and Step 4.14.C adds exactly one more (the attachment metadata
-    table, v0003).
+    table, v0003); Phase 5.3 adds provider connections (v0004), Phase 5.5
+    adds model configurations (v0005), Phase 5.7 adds runtime
+    configurations (v0006), and Phase 5.8 adds application execution
+    defaults (v0007), and Phase 5.19 adds durable run relationship ids (v0008).
     """
     version_files = sorted(
         path.name
@@ -1712,6 +1941,12 @@ def test_migration_versions_are_only_the_initial_and_revision_schemas() -> None:
         "v0001_initial_schema.py",
         "v0002_document_revisions.py",
         "v0003_attachments.py",
+        "v0004_provider_connections.py",
+        "v0005_model_configurations.py",
+        "v0006_runtime_configurations.py",
+        "v0007_application_execution_defaults.py",
+        "v0008_run_conversation_relationships.py",
+        "v0009_run_cancellation_request.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)
@@ -1796,3 +2031,577 @@ def test_document_repository_port_stays_revision_free() -> None:
 # ============================================================
 # END: Step 4.13 Document Revision Boundary Tests
 # ============================================================
+
+
+def test_execution_configuration_repository_fanout_stays_in_resolver() -> None:
+    """Selection and execution consume a resolution port, never four stores."""
+    forbidden = {
+        "ava.repositories.execution_defaults_repository",
+        "ava.repositories.provider_connection_repository",
+        "ava.repositories.model_configuration_repository",
+        "ava.repositories.runtime_configuration_repository",
+    }
+    for relative in (
+        "services/run_service.py", "agents/contracts.py", "agents/adapters/native/native_agent.py",
+        "execution/selector.py", "execution/persisted_execution.py",
+    ):
+        tree = ast.parse((SRC_DIR / relative).read_text())
+        assert not (set(_ava_imports(tree)) & forbidden), relative
+        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert not names & {
+            "ExecutionDefaultsRepository", "ProviderConnectionRepository", "ModelConfigurationRepository",
+            "RuntimeConfigurationRepository", "CredentialResolver", "SecretValue",
+        }, relative
+    resolver = ast.parse((SRC_DIR / "execution/configuration_resolver.py").read_text())
+    assert forbidden <= set(_ava_imports(resolver))
+    for imported in _ava_imports(resolver):
+        assert not imported.startswith(("ava.infrastructure", "ava.models.providers", "ava.runtimes.adapters"))
+    calls = {
+        node.func.attr for node in ast.walk(resolver)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert not calls & {"generate", "execute", "acquire", "load", "reveal"}
+
+
+def test_settings_remain_independent_of_execution_resolution() -> None:
+    for relative in ("api/routes/settings.py", "services/settings_service.py", "contracts/settings.py"):
+        tree = ast.parse((SRC_DIR / relative).read_text())
+        assert not any(name.startswith("ava.execution") for name in _ava_imports(tree))
+
+
+def test_configuration_records_remain_sdk_free() -> None:
+    for relative in ("models/model_configurations.py", "runtimes/configurations.py"):
+        tree = ast.parse((SRC_DIR / relative).read_text())
+        assert all(name.startswith("ava.contracts") for name in _ava_imports(tree))
+
+
+def test_execution_results_hide_ports_and_runtime_binding_hides_secret() -> None:
+    from dataclasses import fields
+
+    from ava.execution.persisted_execution import PersistedExecutionConfiguration
+    from ava.execution.selector import ResolvedExecution
+    from ava.models.bindings import RuntimeModelBinding
+
+    for result in (PersistedExecutionConfiguration, ResolvedExecution):
+        shape = {field.name: field for field in fields(result)}
+        assert not shape["model_provider"].repr
+        assert not shape["runtime"].repr
+        assert not {"api_key", "credential", "secret_value"} & shape.keys()
+    assert not next(field for field in fields(RuntimeModelBinding) if field.name == "api_key").repr
+
+
+def test_run_and_event_contracts_gain_no_credential_fields() -> None:
+    from ava.agents.contracts import AgentRunResult
+    from ava.contracts.events import RunEvent
+    from ava.contracts.execution import RunExecutionSelection
+    from ava.contracts.responses import RunResponse
+
+    forbidden = {"api_key", "credential", "credential_reference", "secret_value", "endpoint", "model_provider"}
+    for contract in (AgentRunResult, RunEvent, RunExecutionSelection, RunResponse):
+        assert not forbidden & contract.model_fields.keys()
+
+
+def test_bootstrap_stays_in_composition_and_out_of_execution_domains() -> None:
+    for relative in (
+        "services/run_service.py", "agents/contracts.py", "models/model_configurations.py",
+        "models/provider_connections.py", "runtimes/configurations.py", "runtimes/registry.py",
+        "configuration/execution_defaults.py", "api/routes/settings.py",
+    ):
+        tree = ast.parse((SRC_DIR / relative).read_text())
+        imports = set(_ava_imports(tree))
+        assert "ava.configuration.settings" not in imports, relative
+        assert "ava.infrastructure.configuration_bootstrap" not in imports, relative
+    source = (INFRASTRUCTURE_DIR / "configuration_bootstrap.py").read_text()
+    assert "uuid" not in source
+    assert "credential_reference=None" in source
+    tree = ast.parse(source)
+    assert not any(name.startswith("ava.infrastructure.persistence") for name in _ava_imports(tree))
+
+
+def test_frontend_does_not_read_execution_environment() -> None:
+    frontend = SRC_DIR.parents[2] / "frontend" / "packages"
+    assert frontend.is_dir()
+    for package in ("workspace", "settings-core", "agent-ui"):
+        for path in (frontend / package / "src").rglob("*"):
+            if path.suffix not in {".ts", ".tsx"} or ".test." in path.name:
+                continue
+            source = path.read_text()
+            assert not any(name in source for name in (
+                "AVA_AGENT_RUNTIME", "AVA_MODEL_PROVIDER", "AVA_MODEL_NAME", "AVA_MODEL_ID",
+                "AVA_MODEL_HOSTING_MODE", "AVA_LOCAL_MODEL_BASE_URL",
+            )), path
+
+
+# ============================================================
+# BEGIN: Execution Context Boundary Tests
+# ============================================================
+
+
+def test_context_construction_service_depends_only_on_contracts_and_repositories() -> None:
+    """Context construction is a pure policy over durable records.
+
+    The service answers "which messages may this run send?" from repository
+    ports and the neutral contract vocabulary only. It may not reach agents,
+    runtimes, models, providers, the API, or infrastructure, so no execution
+    or transport concern can leak into the context policy.
+    """
+    file = SERVICES_DIR / "context_construction_service.py"
+    allowed_prefixes = ("ava.contracts", "ava.repositories")
+    violations: list[str] = []
+    for import_path in _ava_imports(ast.parse(file.read_text(encoding="utf-8"))):
+        if not import_path.startswith(allowed_prefixes):
+            violations.append(f"{file}: imports '{import_path}'")
+    assert not violations, "Context construction outside contracts/repositories:\n" + "\n".join(violations)
+
+
+def test_runtimes_and_adapters_must_not_read_persistence_or_services() -> None:
+    """A runtime receives context; it never assembles or queries it.
+
+    Agent adapters and runtimes may import contracts, ports, and execution
+    policy, but never conversation/message/run repositories or the services
+    that own them. This keeps a second, runtime-specific transcript policy from
+    being possible at all.
+    """
+    forbidden = (
+        "ava.repositories",
+        "ava.services",
+        "ava.api",
+        "ava.infrastructure",
+    )
+    violations: list[str] = []
+    for directory in (AGENTS_DIR, SRC_DIR / "runtimes"):
+        for path in _iter_python_files(directory):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for import_path in _ava_imports(tree):
+                if import_path.startswith(forbidden):
+                    violations.append(f"{path}: imports '{import_path}'")
+    assert not violations, "Persistence or service imports in execution layers:\n" + "\n".join(violations)
+
+
+def test_run_service_delegates_context_construction() -> None:
+    """RunService consumes the context capability, never building history.
+
+    The run lifecycle service may hold the context service and forward its
+    result, but it must not read message records to assemble a transcript, and
+    it must not import the runtimes that will consume the context.
+    """
+    file = SERVICES_DIR / "run_service.py"
+    tree = ast.parse(file.read_text(encoding="utf-8"))
+    for import_path in _ava_imports(tree):
+        assert not import_path.startswith("ava.runtimes"), import_path
+    source = file.read_text(encoding="utf-8")
+    assert "list_for_conversation" not in source
+    assert "ava.services.context_construction_service" in _ava_imports(tree)
+
+
+def test_execution_context_contracts_stay_free_of_sdks_and_persistence() -> None:
+    """The neutral context vocabulary is a leaf contract.
+
+    ``ContextMessage``/``RunContext`` cross the agent, runtime, and service
+    boundaries, so they must carry no vendor SDK, transport, or persistence
+    type.
+    """
+    file = CONTRACTS_DIR / "conversations.py"
+    tree = ast.parse(file.read_text(encoding="utf-8"))
+    for import_path in _ava_imports(tree):
+        assert import_path.startswith("ava.contracts") or import_path == "ava.workspaces.contracts", import_path
+    for name in _top_level_imports(tree):
+        assert name not in FORBIDDEN_IMPORTS, name
+
+
+# ============================================================
+# END: Execution Context Boundary Tests
+# ============================================================
+# ============================================================
+# BEGIN: Context Window Boundary Tests
+# ============================================================
+
+
+def test_context_window_manager_depends_only_on_neutral_contracts() -> None:
+    """The window policy is a pure function of messages and a limit.
+
+    A tokenizer, provider, runtime, or repository would make the budget depend
+    on I/O or on a specific model's vocabulary, which is exactly the coupling
+    this module exists to avoid. Only the neutral message vocabulary is allowed
+    in, and only the standard library.
+    """
+    file = EXECUTION_DIR / "context_window.py"
+    tree = ast.parse(file.read_text(encoding="utf-8"))
+    for import_path in _ava_imports(tree):
+        assert import_path == "ava.contracts.conversations", import_path
+    for name in _top_level_imports(tree):
+        assert name not in FORBIDDEN_IMPORTS, name
+
+
+def test_context_windowing_depends_on_no_provider_or_runtime() -> None:
+    """The limit arrives as data; AVA never discovers a model window itself.
+
+    The manager sees only the limit it is handed. The agent adapter may hold
+    the resolved execution — that is where a limit legitimately enters — but it
+    may not reach for a concrete provider implementation or a model registry,
+    so the window can only come from the already-selected model.
+    """
+    for import_path in _ava_imports(
+        ast.parse((EXECUTION_DIR / "context_window.py").read_text(encoding="utf-8"))
+    ):
+        assert not import_path.startswith(("ava.models", "ava.infrastructure")), import_path
+    agent = AGENTS_DIR / "adapters" / "native" / "native_agent.py"
+    for import_path in _ava_imports(ast.parse(agent.read_text(encoding="utf-8"))):
+        assert not import_path.startswith(
+            ("ava.infrastructure", "ava.models.registry")
+        ), f"{agent}: windowing must not discover model metadata: {import_path}"
+
+
+def test_runtimes_never_import_the_context_window_manager() -> None:
+    """Windowing happens once, above the runtime boundary.
+
+    If a runtime could import the manager it could trim independently, and the
+    two runtimes would send different histories for the same conversation. The
+    guard makes a second trimming site impossible rather than merely unused.
+    """
+    for path in _iter_python_files(SRC_DIR / "runtimes"):
+        for import_path in _ava_imports(ast.parse(path.read_text(encoding="utf-8"))):
+            assert import_path != "ava.execution.context_window", (
+                f"{path}: runtime-level windowing would diverge between runtimes: {import_path}"
+            )
+
+
+def test_context_window_lives_outside_the_service_layer() -> None:
+    """The window policy is execution policy, not a lifecycle service.
+
+    Placing it in ``ava.services`` would make it reachable from the run
+    lifecycle and would let context assembly depend on execution, reversing the
+    Phase 5.21 direction. ``ava.execution`` is the only home that keeps
+    construction upstream of windowing.
+    """
+    assert (EXECUTION_DIR / "context_window.py").exists()
+    assert not list(SERVICES_DIR.glob("*context_window*"))
+    assert not list(CONTRACTS_DIR.glob("*context_window*"))
+
+
+# ============================================================
+# END: Context Window Boundary Tests
+# ============================================================
+# ============================================================
+# BEGIN: Run Lifecycle Authority Tests
+# ============================================================
+
+
+def _called_attribute_names(tree: ast.Module, attribute: str) -> set[str]:
+    """Collect the source files that call ``<something>.<attribute>(...)``."""
+    files: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == attribute
+        ):
+            files.add(getattr(node.func.value, "id", ""))
+    return files
+
+
+def test_only_the_lifecycle_authority_writes_run_status() -> None:
+    """Exactly one production path may change a run's durable status.
+
+    Phase 5.23 moved the transition rules out of ``RunService`` and into
+    ``RunLifecycleService``. If a second caller could reach
+    ``RunRepository.update_status`` the state machine would stop being
+    enforceable: a caller could move a completed run back to running and no
+    test of the table would notice. The repository keeps the primitive, because
+    the primitive is what the lifecycle authority uses.
+    """
+    allowed = {
+        "run_lifecycle_service.py",
+        # Persistence adapters and the in-memory store implement the port.
+        "run_repository.py",
+        "run_store.py",
+    }
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path.name in allowed:
+            continue
+        if "update_status" in _called_attribute_names(
+            ast.parse(path.read_text(encoding="utf-8")), "update_status"
+        ):
+            violations.append(str(path.relative_to(SRC_DIR)))
+    assert not violations, (
+        "run status may only be written by the lifecycle authority:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_only_the_lifecycle_authority_guards_a_run_status_write() -> None:
+    """The compare-and-swap is as centralized as the plain write.
+
+    A guarded write anywhere else would be a second race-resolution policy, and
+    the two could disagree about which writer wins.
+    """
+    allowed = {
+        "run_lifecycle_service.py",
+        "run_repository.py",
+        "run_store.py",
+    }
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path.name in allowed:
+            continue
+        if "compare_and_set_status" in _called_attribute_names(
+            ast.parse(path.read_text(encoding="utf-8")), "compare_and_set_status"
+        ):
+            violations.append(str(path.relative_to(SRC_DIR)))
+    assert not violations, (
+        "guarded run status writes belong to the lifecycle authority:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_the_run_service_holds_no_transition_policy() -> None:
+    """``RunService`` coordinates a run; it does not decide what a run may become.
+
+    The service legitimately still *asks* for a state — it cannot orchestrate an
+    execution without saying "start" and "complete" — and it may read the shared
+    ``is_terminal`` classification. What it must not own is a rule: a local
+    table or status collection, its own transition helpers, or a hand-written
+    legality check. Any of those would be a second state machine that could
+    drift from the authority.
+    """
+    path = SERVICES_DIR / "run_service.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert "ava.services.run_lifecycle_service" in _ava_imports(tree)
+    for token in ("ALLOWED_TRANSITIONS", "LIFECYCLE_EVENT_FOR_STATUS"):
+        assert token not in source, f"RunService must not restate the {token} table"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "start",
+            "complete",
+            "fail",
+            "cancel",
+            "transition",
+        }:
+            assert node.name not in {"start", "complete"}, (
+                f"RunService defines its own {node.name}(): transitions belong to the authority"
+            )
+        if isinstance(node, (ast.Set, ast.Dict, ast.List, ast.Tuple)):
+            statuses = {
+                element.attr
+                for element in ast.walk(node)
+                if isinstance(element, ast.Attribute)
+                and isinstance(element.value, ast.Name)
+                and element.value.id == "RunStatus"
+            }
+            assert len(statuses) < 2, (
+                f"RunService line {node.lineno} collects {sorted(statuses)}: "
+                "a local status set is a second state machine"
+            )
+
+
+def _calls_attribute(tree: ast.Module, attribute: str) -> bool:
+    """Whether the module calls ``<anything>.<attribute>(...)`` anywhere.
+
+    ``_called_attribute_names`` answers a different question: it reports the
+    *receivers* of such calls, so testing an attribute name against its result
+    is always false. This returns the answer these guards actually need.
+    """
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == attribute
+        for node in ast.walk(tree)
+    )
+
+
+def _imports_symbol(tree: ast.Module, symbol: str) -> bool:
+    """Whether the module imports a named symbol from anywhere in ``ava``."""
+    return any(name == symbol for name in _ava_imports(tree)) or any(
+        (node.module or "").startswith("ava") and symbol in {a.name for a in node.names}
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    )
+
+
+def test_agents_and_runtimes_cannot_reach_the_lifecycle_authority() -> None:
+    """Only orchestration may settle a run.
+
+    An agent adapter or runtime reports an *outcome*; letting either import the
+    lifecycle authority would let execution code invent durable state, and the
+    two runtimes or a future adapter could settle the same run differently.
+
+    The application factory is the one API-layer exception: it is composition
+    root, not request handling, and Phase 5.30 required it to hold the authority
+    so cold-start reconciliation can settle stranded runs before readiness. A
+    *route* must still never import it -- an HTTP handler that settles a run
+    would be a second place where lifecycle policy is decided.
+    """
+    composition_roots = {"app.py"}
+    for directory in (AGENTS_DIR, SRC_DIR / "runtimes", API_DIR):
+        for path in _iter_python_files(directory):
+            if directory == API_DIR and path.name in composition_roots:
+                continue
+            for import_path in _ava_imports(ast.parse(path.read_text(encoding="utf-8"))):
+                assert import_path != "ava.services.run_lifecycle_service", (
+                    f"{path}: only orchestration may move a run's durable state: {import_path}"
+                )
+
+
+def test_cold_start_recovery_delegates_every_settlement_to_the_authority() -> None:
+    """Recovery converges state; it must not own a second way to settle a run.
+
+    ``RunRecoveryService`` decides *which* runs are stranded, but the actual
+    status write and lifecycle fact belong to ``RunLifecycleService``. A direct
+    ``update_status`` or ``compare_and_set_status`` call would give recovery a
+    private path around the authority and its guards.
+    """
+    path = SERVICES_DIR / "run_recovery_service.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert "ava.services.run_lifecycle_service" in _ava_imports(tree)
+    for method in ("update_status", "compare_and_set_status", "request_cancellation"):
+        assert not _calls_attribute(tree, method), (
+            f"recovery must not call {method}(): the lifecycle authority owns run state writes"
+        )
+    # Recovery asks which runs are active; it must not keep its own status set.
+    assert not _imports_symbol(tree, "RunStatus"), (
+        "recovery reads active runs through RunRepository.list_active, not its own status set"
+    )
+
+
+def test_repositories_stay_blind_persistence() -> None:
+    """A repository stores a status; it never decides whether one is legal.
+
+    Lifecycle legality lives in the authority. If a repository refused an
+    illegal transition it would be enforcing a rule it does not own, and the
+    same rule would have to be written again for every future storage backend.
+    """
+    forbidden = ("ALLOWED_TRANSITIONS", "LIFECYCLE_EVENT_FOR_STATUS", "is_terminal")
+    paths = [
+        *_iter_python_files(REPOSITORIES_DIR),
+        *_iter_python_files(PERSISTENCE_DIR),
+        SERVICES_DIR / "run_store.py",
+    ]
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in source, (
+                f"{path}: repositories stay blind, so they must not encode lifecycle rules ({token})"
+            )
+
+
+def test_lifecycle_events_are_facts_not_authority() -> None:
+    """A run's status is read from the run, never reconstructed from its events.
+
+    The lifecycle appends its event *after* the status write, so events describe
+    transitions rather than grant them. A reader that rebuilt a status from the
+    event log would make the log authoritative and invert the guarantee the
+    ordering exists to provide.
+    """
+    for path in _iter_python_files(SRC_DIR):
+        if path.name in {"run_lifecycle_service.py", "run_event_repository.py", "run_event_store.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert "def status_from_events" not in source, path
+        assert "def current_status_from_events" not in source, path
+
+
+# ============================================================
+# END: Run Lifecycle Authority Tests
+# ============================================================
+
+
+def test_cancellation_intent_is_not_a_lifecycle_status() -> None:
+    from ava.contracts.events import EventType
+    from ava.contracts.responses import RunStatus
+    from ava.repositories.run_event_repository import TERMINAL_EVENT_TYPES
+
+    assert set(RunStatus) == {
+        RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED,
+    }
+    assert EventType.RUN_CANCEL_REQUESTED not in TERMINAL_EVENT_TYPES
+
+
+def test_cancellation_intent_writes_stay_at_the_lifecycle_boundary() -> None:
+    for path in _iter_python_files(SRC_DIR):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "request_cancellation"):
+                assert path.name in {"run_service.py", "run_lifecycle_service.py"}, path
+    # Startup and execution adapters must not interpret intent as an outcome.
+    for directory in (AGENTS_DIR, SRC_DIR / "runtimes"):
+        for path in _iter_python_files(directory):
+            assert "cancellation_requested_at" not in path.read_text(encoding="utf-8"), path
+    assert "request_cancellation" not in (API_DIR / "app.py").read_text(encoding="utf-8")
+
+
+def test_stream_route_is_an_event_observer_not_a_lifecycle_writer() -> None:
+    """SSE may read persisted facts but cannot mutate a run because of I/O."""
+    source = (API_DIR / "routes" / "runs.py").read_text(encoding="utf-8")
+    stream_start = source.index("async def stream_run")
+    stream_end = source.index(
+        "# ============================================================\n# END: Stream Run Events"
+    )
+    stream_source = source[stream_start:stream_end]
+    for forbidden in ("cancel_run(", "prepare_run(", "execute_prepared_run(", "_lifecycle"):
+        assert forbidden not in stream_source, forbidden
+
+
+def test_stream_contract_has_no_provider_or_runtime_dependency() -> None:
+    """The transport envelope stays in the leaf contracts package."""
+    source = (CONTRACTS_DIR / "events.py").read_text(encoding="utf-8")
+    for forbidden in ("provider", "runtime", "fastapi", "StreamingResponse"):
+        assert forbidden not in source.lower(), forbidden
+
+
+def test_run_event_repository_is_append_only_and_owns_replay_boundary() -> None:
+    """The event port exposes append/read operations without history mutation."""
+    from ava.repositories.run_event_repository import RunEventRepository
+
+    methods = {
+        name for name, value in vars(RunEventRepository).items()
+        if callable(value) and not name.startswith("_")
+    }
+    assert methods == {"append", "get_events", "get_latest", "list_after_sequence"}
+
+
+def test_replay_route_is_an_event_observer_not_a_lifecycle_writer() -> None:
+    """History reads cannot infer, append, or mutate lifecycle facts."""
+    source = (API_DIR / "routes" / "runs.py").read_text(encoding="utf-8")
+    replay_start = source.index("async def get_run_events")
+    replay_end = source.index(
+        "# ============================================================\n# END: Get Run Events"
+    )
+    replay_source = source[replay_start:replay_end]
+    for forbidden in ("cancel_run(", "prepare_run(", "execute_prepared_run(", "append(", "_lifecycle"):
+        assert forbidden not in replay_source, forbidden
+
+
+def test_assistant_content_has_one_application_write_path() -> None:
+    """Only the focused output module may update messages and author content facts."""
+    allowed = SERVICES_DIR / "assistant_response_service.py"
+    offenders: list[str] = []
+    for path in _iter_python_files(SRC_DIR):
+        if path == allowed or path.name in {"message_repository.py", "message_store.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if ".update_content(" in source and "document" not in path.name:
+            offenders.append(str(path.relative_to(SRC_DIR)))
+    assert offenders == []
+    source = allowed.read_text(encoding="utf-8")
+    assert "EventType.MESSAGE_CONTENT" in source
+    assert "self._messages.update_content" in source
+
+
+def test_runtime_and_agent_adapters_do_not_own_partial_content_persistence() -> None:
+    forbidden = (
+        "ava.repositories.message_repository",
+        "ava.repositories.run_event_repository",
+        "ava.services.assistant_response_service",
+    )
+    for directory in (AGENTS_DIR / "adapters", SRC_DIR / "runtimes" / "adapters"):
+        for path in _iter_python_files(directory):
+            imports = _ava_imports(ast.parse(path.read_text(encoding="utf-8")))
+            assert not any(name.startswith(forbidden) for name in imports), path

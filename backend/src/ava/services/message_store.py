@@ -1,9 +1,12 @@
 """In-memory AVA message store.
 
-Holds messages keyed per conversation in stable append order. This is Step
-4.4 in-memory state only: no database, cache, or queue. No message update or
-removal semantics exist yet — a message is immutable once appended.
+Holds messages keyed per conversation in stable append order. Assistant
+content can be replaced with the latest durable snapshot through the repository
+port; identity, role, ownership, creation time, and append order stay fixed.
 """
+
+from dataclasses import replace
+from datetime import UTC, datetime
 
 from ava.repositories.message_repository import (
     MessageRecord,
@@ -60,6 +63,14 @@ class MessageStore(MessageRepository):
         conversation-agnostic; the service filters existence).
         """
         return list(self._messages.get(conversation_id, {}).values())
+
+    def update_content(self, conversation_id: str, message_id: str, content: str) -> MessageRecord | None:
+        message = self._messages.get(conversation_id, {}).get(message_id)
+        if message is None:
+            return None
+        updated = replace(message, content=content, updated_at=datetime.now(UTC))
+        self._messages[conversation_id][message_id] = updated
+        return updated
 
     def clear(self) -> None:
         """Remove all message records (test/observability helper)."""

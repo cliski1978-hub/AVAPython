@@ -109,9 +109,18 @@ class ModelOrchestrator:
         self._qualifications = qualification_store
         self._default_model_id = default_model_id
 
-    def select(self, request: ModelSelectionRequest) -> ModelSelectionDecision:
+    def select(
+        self, request: ModelSelectionRequest, *, registry: ModelRegistry | None = None
+    ) -> ModelSelectionDecision:
+        """Apply the same policy to the startup catalog or a per-run snapshot.
+
+        A snapshot lets persisted settings supply profiles without mutating the
+        shared bootstrap catalog. Qualification and eligibility policy remain
+        owned by this orchestrator, including exact-model rejection semantics.
+        """
+        registry = registry if registry is not None else self._registry
         if request.explicit_model_id is not None:
-            profile = self._registry.get(request.explicit_model_id)
+            profile = registry.get(request.explicit_model_id)
             if profile is None:
                 raise ExplicitModelNotFoundError("Explicit model is not configured")
             rejection = self._rejection_for(profile, request)
@@ -126,7 +135,7 @@ class ModelOrchestrator:
 
         eligible: list[ModelProfile] = []
         rejected: list[ModelRejection] = []
-        for profile in sorted(self._registry.list(), key=lambda item: item.model_id):
+        for profile in sorted(registry.list(), key=lambda item: item.model_id):
             rejection = self._rejection_for(profile, request)
             if rejection is None:
                 eligible.append(profile)
