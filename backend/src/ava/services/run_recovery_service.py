@@ -8,9 +8,16 @@ from ava.services.run_lifecycle_service import (
     RunLifecycleService,
 )
 
-
+#: The durable body of a restart-interrupted ``run_failed`` fact.
+#:
+#: The key is ``error_code`` because that is the canonical classification key
+#: for a run failure: ``RunService`` writes it for every other failure, the
+#: conversation projection reads it back to hydrate ``error_code`` after a
+#: reload, and the frontend event processor reads it to choose the user-facing
+#: wording. A restart interruption is a failure like any other, so it uses the
+#: same key; anything else would persist a classification the UI can never see.
 RESTART_INTERRUPTION_PAYLOAD = {
-    "code": "execution_interrupted",
+    "error_code": "execution_interrupted",
     "message": "The backend restarted before this run completed.",
 }
 

@@ -8,14 +8,16 @@ import {
   useAgentRun,
   useConversationState,
   type RuntimeDiscoveryItem,
+  type ModelInfo,
   type ModelProviderDiscoveryItem,
   type ExecutionProfile,
   type WorkspaceInfo,
 } from "@ava/agent-ui";
 import type { ApiClient } from "@ava/api-client";
-import { getHealth, getModelProviders, getRuntimes, getExecutionProfiles, getWorkspaces, subscribeConnectivity } from "@ava/api-client";
+import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getWorkspaces, subscribeConnectivity } from "@ava/api-client";
 import { DocumentProvider, DocumentWorkspace } from "@ava/document-core";
 import { SettingsWorkspace } from "@ava/settings-core";
+import type { SettingsSectionId } from "@ava/ui-core";
 import {
   AppShell,
   StatusIndicator,
@@ -114,10 +116,16 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   const [workspace, setWorkspace] = useState<WorkspaceId>("chat");
   const [documentOpened, setDocumentOpened] = useState(false);
   const [settingsOpened, setSettingsOpened] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("providers");
   const [status, setStatus] = useState<AppStatus>("checking");
   const connectivityVersion = useRef(0);
   const [runtimes, setRuntimes] = useState<RuntimeDiscoveryItem[]>([]);
   const [providers, setProviders] = useState<ModelProviderDiscoveryItem[]>([]);
+  // Configured models are the catalog the composer offers. `/models` reports
+  // persisted ModelConfiguration records alongside bootstrap profiles, so a
+  // model added in Settings is selectable without a restart.
+  const [configuredModels, setConfiguredModels] = useState<ModelInfo[]>([]);
+  const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
   const [runtimeId, setRuntimeId] = useState<string>();
   const [providerId, setProviderId] = useState<string>();
   const [profileId, setProfileId] = useState("application-default");
@@ -165,6 +173,21 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       // Discovery offers explicit choices; it never expresses user intent.
     }).catch(() => undefined);
 
+    // The model catalog is isolated for the same reason as workspaces: a
+    // `/models` failure must not blind runtime/provider/profile selection. An
+    // empty catalog degrades the Model control to the legacy provider list
+    // rather than removing the choice.
+    getModels(client)
+      .then(catalog => {
+        if (cancelled) return;
+        setConfiguredModels(catalog.models);
+        setDefaultModelId(catalog.default_model_id ?? null);
+        // A selection the catalog no longer contains is dropped rather than sent
+        // as a stale identity.
+        setProviderId(previous => previous != null && catalog.models.some(m => m.model_id === previous) ? previous : undefined);
+      })
+      .catch(() => undefined);
+
     // Workspace discovery is isolated: a /workspaces failure must not block
     // runtime/provider/profile selection or the prompt composer.
     getWorkspaces(client)
@@ -196,15 +219,51 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       setSettingsOpened(true);
     }
   };
+  const openSettings = (section: SettingsSectionId) => {
+    setSettingsSection(section);
+    setSettingsOpened(true);
+    setWorkspace("settings");
+  };
+
+  // The session's current execution selection, resolved once and shared by a
+  // first submission and by retry/regenerate. A new attempt resolves its own
+  // configuration at creation time from this same selection, so an explicit
+  // choice is neither dropped nor silently turned into a default — and the
+  // prior run's resolved runtime and credentials are never copied.
+  // "Application default" resolves to one concrete configured model, so the
+  // option can name it instead of hiding what will actually run.
+  const defaultModelDisplayName = defaultModelId == null
+    ? undefined
+    : (configuredModels.find(m => m.model_id === defaultModelId)?.display_name ?? defaultModelId);
+  // A configured model is addressed by its stable AVA `model_id`; the backend
+  // resolves it to the exact ModelConfiguration and its provider connection. An
+  // execution profile pins a provider instead, so that value belongs on the
+  // legacy `model_provider_id` axis. The two id spaces are never mixed, which is
+  // why the catalog decides the field rather than the caller.
+  const providerIdIsModel = providerId != null && configuredModels.some(m => m.model_id === providerId);
+  const modelAxis = providerId == null
+    ? {}
+    : providerIdIsModel ? { model_id: providerId } : { model_provider_id: providerId };
+  const currentExecution = profileId === "application-default" ? undefined : profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...modelAxis } : undefined);
+
+  const currentWorkspaceId =
+    selectedWorkspaceId != null &&
+    workspaces.some(w => w.workspace_id === selectedWorkspaceId)
+      ? selectedWorkspaceId
+      : null;
 
   const handleComposerSubmit = (prompt: string) => {
-    const execution = profileId === "application-default" ? undefined : profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...(providerId ? { model_provider_id: providerId } : {}) } : undefined);
-    const workspaceId =
-      selectedWorkspaceId != null &&
-      workspaces.some(w => w.workspace_id === selectedWorkspaceId)
-        ? selectedWorkspaceId
-        : null;
-    void submitPrompt(prompt, execution, workspaceId);
+    void submitPrompt(prompt, currentExecution, currentWorkspaceId);
+  };
+
+  // A retry or regenerate creates a new run for the same source user message,
+  // so it carries the same explicit selection a fresh submit would.
+  const handleRetryMessage = (messageId: string) => {
+    retryMessage(messageId, currentExecution, currentWorkspaceId);
+  };
+
+  const handleRegenerateMessage = (messageId: string) => {
+    regenerateMessage(messageId, currentExecution, currentWorkspaceId);
   };
 
   return (
@@ -235,8 +294,11 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
             {activeConversation != null ? (
               <ConversationView
                 conversation={activeConversation}
-                onRetryMessage={retryMessage}
-                onRegenerateMessage={regenerateMessage}
+                error={state.error}
+                onReload={() => { void selectConversation(activeConversation.id); }}
+                onRetryMessage={handleRetryMessage}
+                onRegenerateMessage={handleRegenerateMessage}
+                onOpenSettings={openSettings}
               />
             ) : (
               <div
@@ -263,7 +325,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
           )}
           {settingsOpened && (
             <WorkspacePane visible={workspace === "settings"} id="settings-workspace">
-              <SettingsWorkspace client={client} />
+              <SettingsWorkspace client={client} initialSection={settingsSection} key={settingsSection} />
             </WorkspacePane>
           )}
         </>
@@ -279,7 +341,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
           }}
         >
           <PromptComposer
-            controls={<ExecutionControls profiles={profiles} selectedProfileId={profileId} onDefaultChange={() => { setProfileId("application-default"); setRuntimeId(undefined); setProviderId(undefined); }} onAutoChange={() => { setProfileId("auto"); setRuntimeId(undefined); setProviderId(undefined); }} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId(id || providerId ? "custom" : "application-default"); setRuntimeId(id || undefined); }} onModelProviderChange={id => { setProfileId(id || runtimeId ? "custom" : "application-default"); setProviderId(id || undefined); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
+            controls={<ExecutionControls profiles={profiles} selectedProfileId={profileId} onDefaultChange={() => { setProfileId("application-default"); setRuntimeId(undefined); setProviderId(undefined); }} onAutoChange={() => { setProfileId("auto"); setRuntimeId(undefined); setProviderId(undefined); }} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} configuredModels={configuredModels} defaultModelDisplayName={defaultModelDisplayName} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId(id || providerId ? "custom" : "application-default"); setRuntimeId(id || undefined); }} onModelProviderChange={id => { setProfileId(id || runtimeId ? "custom" : "application-default"); setProviderId(id || undefined); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
             placeholder="Ask AVA anything..."
             onSubmit={handleComposerSubmit}
             onStop={stopRun}

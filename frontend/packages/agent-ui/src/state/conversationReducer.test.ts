@@ -611,3 +611,87 @@ describe("conversation:messagesHydrate merging", () => {
     expect(ids).toEqual(["u1", "a1", "a2"]);
   });
 });
+
+describe("failure codes survive hydration", () => {
+  const ts = "2026-01-01T00:00:00Z";
+
+  /** Refresh must not flatten a specific failure back to the generic one. */
+  it.each([
+    "model_unavailable",
+    "provider_connection_unavailable",
+    "provider_timeout",
+    "provider_rate_limited",
+    "provider_authentication_failed",
+    "provider_response_invalid",
+    "runtime_unavailable",
+    "credential_unavailable",
+    "context_window_exceeded",
+    "execution_interrupted",
+    "agent_failed",
+  ])("keeps %s after a reload", (code) => {
+    const state = conversationReducer(emptyState, {
+      type: "conversation:hydrate",
+      conversations: [
+        {
+          id: "c1",
+          title: "Chat",
+          messages: [
+            { id: "u1", role: "user", status: "complete", content: "Question", createdAt: ts },
+            {
+              id: "a1",
+              role: "assistant",
+              status: "failed",
+              content: "The provider rejected the request.",
+              errorCode: code,
+              createdAt: ts,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(state.conversations[0].messages[1]).toMatchObject({ status: "failed", errorCode: code });
+  });
+
+  it("keeps partial streamed content alongside the failure code", () => {
+    const state = conversationReducer(emptyState, {
+      type: "conversation:hydrate",
+      conversations: [
+        {
+          id: "c1",
+          title: "Chat",
+          messages: [
+            {
+              id: "a1",
+              role: "assistant",
+              status: "failed",
+              content: "Here is what I found so far",
+              errorCode: "provider_timeout",
+              createdAt: ts,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(state.conversations[0].messages[0]).toMatchObject({
+      content: "Here is what I found so far",
+      errorCode: "provider_timeout",
+    });
+  });
+
+  it("leaves a successful message without a failure code", () => {
+    const state = conversationReducer(emptyState, {
+      type: "conversation:hydrate",
+      conversations: [
+        {
+          id: "c1",
+          title: "Chat",
+          messages: [{ id: "a1", role: "assistant", status: "complete", content: "Answer", createdAt: ts }],
+        },
+      ],
+    });
+
+    expect(state.conversations[0].messages[0].errorCode).toBeUndefined();
+  });
+});

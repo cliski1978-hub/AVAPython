@@ -57,6 +57,7 @@ from ava.execution.persisted_execution import (
     ExecutionDefaultsNotConfiguredError,
     ModelProviderMismatchError,
     PersistedExecutionConfiguration,
+    PersistedModelConfiguration,
     ProviderAdapterNotRegisteredError,
     ProviderConstructionFailedError,
     RuntimeAdapterNotRegisteredError,
@@ -167,6 +168,65 @@ class ExecutionConfigurationResolver:
         if resolved is None:
             raise ExecutionDefaultsNotConfiguredError
         return resolved
+
+    def resolve_model_configuration(self, model_id: str) -> PersistedModelConfiguration | None:
+        """Resolve one configured model by id, or ``None`` if it is not one.
+
+        ``None`` is reserved for "no configured model has this id", which is a
+        normal answer the caller resolves against its bootstrap catalog. Every
+        other failure — a disabled model or connection, a missing connection, an
+        inconsistent pairing, an unregistered adapter, a credential failure —
+        raises, so selecting a configured model that cannot run fails the run
+        instead of silently executing a different one.
+        """
+        model = self._repositories.model_configurations.get(model_id)
+        if model is None:
+            return None
+        if not model.enabled:
+            raise ConfiguredReferenceDisabledError(_MODEL_CONFIGURATION, model.model_id)
+        connection = self._repositories.provider_connections.get(model.provider_connection_id)
+        if connection is None:
+            raise ConfiguredReferenceMissingError(_PROVIDER_CONNECTION, model.provider_connection_id)
+        if not connection.enabled:
+            raise ConfiguredReferenceDisabledError(_PROVIDER_CONNECTION, connection.provider_connection_id)
+        self._require_relationship(model, connection)
+        model_profile = _profile_for(model, connection)
+        try:
+            self._model_orchestrator.select(
+                ModelSelectionRequest(
+                    explicit_model_id=model_profile.model_id,
+                    preferred_provider_id=connection.provider_id,
+                    runtime_id=self._runtime_type_for(model_profile),
+                    hosting_requirement=self._hosting_requirement,
+                ),
+                registry=ModelRegistry((model_profile,)),
+            )
+        except ModelSelectionError:
+            raise ConfiguredModelIneligibleError(model.model_id) from None
+        credential = self._resolve_credential(connection)
+        return PersistedModelConfiguration(
+            model_provider=self._create_provider(connection, model, credential),
+            model_binding=model_binding_from_profile(model_profile),
+            model_profile=model_profile,
+            provider_connection_id=connection.provider_connection_id,
+        )
+
+    def _runtime_type_for(self, profile: ModelProfile) -> str:
+        """The runtime adapter the eligibility check evaluates against.
+
+        A configured model carries no runtime, so policy is applied against the
+        runtime the application defaults select. The check only rejects a model
+        that no runtime could host; it never chooses a runtime.
+        """
+        defaults = self._repositories.execution_defaults.get()
+        if defaults is None:
+            return profile.provider_id
+        runtime_configuration = self._repositories.runtime_configurations.get(
+            defaults.default_runtime_configuration_id
+        )
+        if runtime_configuration is None:
+            return profile.provider_id
+        return runtime_configuration.runtime_type
 
     def _resolve(self, defaults: ApplicationExecutionDefaults) -> PersistedExecutionConfiguration:
         connection = self._require_connection(defaults)
@@ -306,6 +366,10 @@ class ExecutionConfigurationResolver:
                 endpoint=connection.endpoint,
                 model_name=model.provider_model_name,
                 credential=credential,
+                # The operator declared this model's capabilities in Settings.
+                # The adapter reports them back, and the runtime branches on the
+                # report to decide streaming versus a one-shot completion.
+                capabilities=model.capabilities,
             )
         except UnknownProviderAdapterError as error:
             raise ProviderAdapterNotRegisteredError(

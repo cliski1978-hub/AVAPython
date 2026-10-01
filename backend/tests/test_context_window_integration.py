@@ -431,7 +431,7 @@ def test_an_impossible_request_fails_before_the_provider_is_called(tmp_path) -> 
     assert [event["event_type"] for event in run_events] == [
         "run_started", "message_started", "run_failed",
     ]
-    assert run_events[-1]["payload"]["error_code"] == "agent_failed"
+    assert run_events[-1]["payload"]["error_code"] == "context_window_exceeded"
 
 
 def test_an_oversized_old_turn_is_dropped_instead_of_failing(tmp_path) -> None:

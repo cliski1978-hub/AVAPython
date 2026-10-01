@@ -1,4 +1,5 @@
 import { defaultTheme, IconButton } from "@ava/ui-core";
+import { settingsSectionLabel, type SettingsSectionId } from "@ava/ui-core";
 import { copyTextToClipboard } from "../lib/clipboard";
 
 export interface MessageActionsProps {
@@ -9,10 +10,15 @@ export interface MessageActionsProps {
   /** Retry a failed/cancelled assistant message. */
   showRetry?: boolean;
   onRetry?: () => void;
+  /** Retry refused — typically because a run currently owns the conversation. */
   retryDisabled?: boolean;
   /** Regenerate a completed assistant message. */
   showRegenerate?: boolean;
   onRegenerate?: () => void;
+  /** Regenerate refused — typically because a run currently owns the conversation. */
+  regenerateDisabled?: boolean;
+  settingsSection?: SettingsSectionId;
+  onOpenSettings?: (section: SettingsSectionId) => void;
 }
 
 const t = defaultTheme;
@@ -30,12 +36,16 @@ export function MessageActions({
   retryDisabled = false,
   showRegenerate = false,
   onRegenerate,
+  regenerateDisabled = false,
+  settingsSection,
+  onOpenSettings,
 }: MessageActionsProps) {
   const handleCopy = () => {
     void (onCopy != null ? onCopy() : copyTextToClipboard(content));
   };
 
   const retryUnavailable = retryDisabled || onRetry == null;
+  const regenerateUnavailable = regenerateDisabled || onRegenerate == null;
 
   return (
     <div
@@ -64,13 +74,23 @@ export function MessageActions({
           ↻
         </IconButton>
       )}
+      {settingsSection != null && onOpenSettings != null && (
+        <IconButton
+          size="sm"
+          ariaLabel={`Open ${settingsSectionLabel[settingsSection]} Settings`}
+          title={`Open ${settingsSectionLabel[settingsSection]} Settings`}
+          onClick={() => onOpenSettings(settingsSection)}
+        >
+          ⚙
+        </IconButton>
+      )}
       {showRegenerate && (
         <IconButton
           size="sm"
           ariaLabel="Regenerate response"
-          title="Regenerate response"
+          title={regenerateUnavailable ? "Regenerate not available" : "Regenerate response"}
           onClick={onRegenerate}
-          disabled={onRegenerate == null}
+          disabled={regenerateUnavailable}
         >
           ↺
         </IconButton>

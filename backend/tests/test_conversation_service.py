@@ -22,6 +22,8 @@ from ava.contracts.conversations import (
     MessageRole,
     MessageStatus,
 )
+from ava.contracts.events import EventType, RunEvent
+from ava.contracts.responses import RunStatus
 from ava.repositories import (
     ConversationRecord,
     ConversationRepository,
@@ -37,6 +39,8 @@ from ava.services.conversation_service import (
 )
 from ava.services.conversation_store import ConversationStore
 from ava.services.message_store import MessageStore
+from ava.services.run_event_store import RunEventStore
+from ava.services.run_store import RunStore
 
 # ============================================================
 # BEGIN: Fixtures
@@ -330,6 +334,43 @@ def test_get_message_scoped_to_conversation() -> None:
     assert service.get_message(first.conversation_id, message.message_id) is not None
     assert service.get_message(second.conversation_id, message.message_id) is None
     assert service.get_message(first.conversation_id, "ghost") is None
+
+
+def test_failed_assistant_message_hydrates_persisted_failure_code() -> None:
+    """A hydrated assistant message retains the safe durable failure reason."""
+    conversations = ConversationStore()
+    messages = MessageStore()
+    runs = RunStore()
+    events = RunEventStore()
+    service = ConversationService(
+        conversation_repository=conversations,
+        message_repository=messages,
+        run_repository=runs,
+        run_event_repository=events,
+    )
+    conversation = service.create_conversation()
+    runs.create("run-1", conversation_id=conversation.conversation_id)
+    runs.update_status("run-1", RunStatus.FAILED)
+    events.append(
+        RunEvent(
+            event_id="failure-1",
+            run_id="run-1",
+            event_type=EventType.RUN_FAILED,
+            payload={"error_code": "model_unavailable"},
+        )
+    )
+    service.append_message(
+        conversation.conversation_id,
+        content="Partial response",
+        role=MessageRole.ASSISTANT,
+        source_run_id="run-1",
+    )
+
+    result = service.list_messages(conversation.conversation_id)
+
+    assert result is not None
+    assert result.messages[0].status == MessageStatus.FAILED
+    assert result.messages[0].error_code == "model_unavailable"
 
 
 # ============================================================

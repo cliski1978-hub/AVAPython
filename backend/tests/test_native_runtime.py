@@ -6,7 +6,8 @@ import pytest
 from test_model_provider_port import FakeModelProvider
 from test_native_agent import TestProvider
 
-from ava.contracts.models import ModelRequest, ModelResponse
+from ava.contracts.failures import FailureCode
+from ava.contracts.models import ModelCapabilities, ModelRequest, ModelResponse
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeCapabilities
@@ -42,6 +43,28 @@ def test_metadata_is_conservative_and_provider_independent() -> None:
     assert info.capabilities == RuntimeCapabilities()
     info.capabilities.tools = True
     assert runtime.get_runtime_info().capabilities.tools is False
+
+
+def test_streaming_publishes_incremental_snapshots_before_completion() -> None:
+    class StreamingProvider(TestProvider):
+        def get_capabilities(self) -> ModelCapabilities:
+            return ModelCapabilities(chat=True, streaming=True)
+
+        async def stream(self, request, *, model_name=None):
+            self.requests.append(request)
+            yield "Hello"
+            yield " world"
+
+    async def scenario() -> None:
+        snapshots: list[str] = []
+        result = await NativeRuntime().execute_streaming(
+            run_id="stream", request=RunRequest(prompt="Hi"),
+            model_provider=StreamingProvider(), on_content=snapshots.append,
+        )
+        assert snapshots == ["Hello", "Hello world"]
+        assert result == RuntimeRunResult(status=RunStatus.COMPLETED, content="Hello world")
+
+    asyncio.run(scenario())
 
 
 def test_one_runtime_uses_two_different_provider_implementations() -> None:
@@ -160,3 +183,49 @@ def test_cancellation_wins_over_provider_cleanup_outcome(fail: bool) -> None:
         assert (await runtime.cancel_run("run")).status == RunStatus.CANCELLED
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "error,expected_code",
+    [
+        (ModelProviderError("no such model", safe_code=FailureCode.MODEL_UNAVAILABLE), FailureCode.MODEL_UNAVAILABLE),
+        (ModelProviderError("refused", safe_code=FailureCode.PROVIDER_CONNECTION_UNAVAILABLE),
+         FailureCode.PROVIDER_CONNECTION_UNAVAILABLE),
+        (ModelProviderError("slow", safe_code=FailureCode.PROVIDER_TIMEOUT), FailureCode.PROVIDER_TIMEOUT),
+        # A provider error with no explicit code takes the adapter default.
+        (ModelProviderError("generic"), FailureCode.PROVIDER_REQUEST_FAILED),
+        # An exception the runtime cannot classify must not borrow a code.
+        (RuntimeError("secret internal text"), None),
+    ],
+)
+def test_the_runtime_preserves_a_classified_provider_failure(
+    error: Exception, expected_code: str | None
+) -> None:
+    """The runtime normalizes outcomes; it must not widen a known classification."""
+
+    async def scenario() -> RuntimeRunResult:
+        return await NativeRuntime().execute(
+            run_id="run", request=RunRequest(prompt="hi"), model_provider=TestProvider(error)
+        )
+
+    result = asyncio.run(scenario())
+    assert result.status == RunStatus.FAILED
+    assert result.failure_code == expected_code
+    # Provider wording never becomes the runtime's public content.
+    assert result.content == "Model provider request failed"
+
+
+def test_streaming_preserves_a_classified_provider_failure() -> None:
+    async def scenario() -> RuntimeRunResult:
+        runtime = NativeRuntime()
+        provider = TestProvider(ModelProviderError("nope", safe_code=FailureCode.MODEL_UNAVAILABLE))
+        return await runtime.execute_streaming(
+            run_id="run",
+            request=RunRequest(prompt="hi"),
+            model_provider=provider,
+            on_content=lambda _: None,
+        )
+
+    result = asyncio.run(scenario())
+    assert result.status == RunStatus.FAILED
+    assert result.failure_code == FailureCode.MODEL_UNAVAILABLE

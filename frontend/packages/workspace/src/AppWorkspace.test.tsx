@@ -6,6 +6,8 @@ import {
   getDocument,
   getWorkspaces,
   listDocuments,
+  listConversations,
+  listMessages,
   startRun,
   updateDocument,
 } from "@ava/api-client";
@@ -167,6 +169,24 @@ async function submitPrompt(text: string) {
 }
 
 describe("AppWorkspace", () => {
+  it("opens the Settings section requested by a hydrated configuration failure", async () => {
+    vi.mocked(listConversations).mockResolvedValueOnce({
+      contract_version: "v1",
+      conversations: [{ conversation_id: "conversation-1", title: "Failed", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }],
+    });
+    vi.mocked(listMessages).mockResolvedValueOnce({
+      contract_version: "v1", conversation_id: "conversation-1", messages: [
+        { message_id: "assistant-1", conversation_id: "conversation-1", role: "assistant", content: "Partial response", status: "failed", source_run_id: "run-1", error_code: "model_unavailable", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" },
+      ],
+    });
+    render(<AppWorkspace client={client} />);
+    await screen.findByText("Partial response");
+    // The action names the section it opens, so the test can assert the destination.
+    fireEvent.click(screen.getByLabelText("Open Model Settings"));
+    expect(
+      (await screen.findByRole("tab", { name: "Models" })).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
   beforeEach(() => {
     nextConversationId = 1;
     vi.clearAllMocks();

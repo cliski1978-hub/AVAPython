@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.responses import ACTIVE_RUN_STATUSES, RunStatus
 from ava.repositories.run_repository import (
+    ActiveConversationRunError,
     RunRecord,
     RunRepository,
 )
@@ -50,6 +51,11 @@ class RunStore(RunRepository):
         """
         if run_id in self._runs:
             raise ValueError(f"Run already exists: {run_id}")
+        if conversation_id is not None and any(
+            record.conversation_id == conversation_id and record.status.is_active
+            for record in self._runs.values()
+        ):
+            raise ActiveConversationRunError(conversation_id)
         now = datetime.now(UTC)
         record = RunRecord(
             run_id=run_id,

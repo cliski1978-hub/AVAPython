@@ -19,6 +19,14 @@ export interface RunRequest {
   execution?: RunExecutionOverride | null;
   /** Opaque AVA workspace id. Omitted when no workspace is selected. */
   workspace_id?: string | null;
+  /**
+   * Prior attempt a retry or regenerate branches from. Request-time intent
+   * only: it is never persisted, and the durable lineage is the
+   * `source_user_message_id` the new run inherits from the named run. The
+   * backend resolves the prompt and source from that run's durable records and
+   * requires it to be terminal.
+   */
+  retry_of_run_id?: string | null;
   contract_version?: ContractVersion;
 }
 

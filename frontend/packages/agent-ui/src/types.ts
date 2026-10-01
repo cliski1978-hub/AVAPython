@@ -31,6 +31,8 @@ export interface ConversationMessage {
    * payloads, stack traces, or HTTP bodies.
    */
   error?: string;
+  /** Stable normalized failure code projected from the durable run event. */
+  errorCode?: string;
   createdAt?: string;
 }
 

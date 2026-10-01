@@ -2,17 +2,29 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from ava.agents.adapters.mock.mock_agent import MockAgentAdapter
+from ava.agents.adapters.native.native_agent import NativeAgentAdapter
 from ava.api.app import create_app
 from ava.api.routes.runs import _run_event_stream, stream_run
 from ava.contracts.events import EventType, RunEvent
+from ava.contracts.failures import FailureCode
+from ava.contracts.models import ModelCapabilities, ModelInfo
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
+from ava.infrastructure.model_provider_factory import ConfiguredModelProviderFactory
+from ava.models.contracts import (
+    ModelProviderHealth,
+    ModelRequest,
+    ModelResponse,
+)
+from ava.models.errors import ModelProviderError
+from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
 from ava.services.run_store import RunStore
@@ -238,3 +250,288 @@ def test_post_run_returns_identity_before_the_stream_is_requested() -> None:
     assert body["conversation_id"] is None
     assert body["source_user_message_id"] is None
     assert body["assistant_message_id"] is None
+
+
+# ============================================================
+# BEGIN: Charter B - True Incremental Streaming End to End
+# ============================================================
+
+
+# A harness deadlock must fail in seconds, not hang until CI gives up.
+_STEP_TIMEOUT = 10.0
+
+
+class _StreamingModelProvider:
+    """A provider that emits one delta per ``asyncio.sleep``, on demand.
+
+    The gaps are the point: each ``next()`` blocks until the test releases it,
+    so a consumer that can only act after the final delta deadlocks or is
+    visibly late. That makes buffering detectable rather than merely unlikely.
+    """
+
+    def __init__(self, deltas: list[str], capabilities: ModelCapabilities | None = None) -> None:
+        self._deltas = deltas
+        self._release = asyncio.Event()
+        self._ready = asyncio.Event()
+        self._emitted = 0
+        self._capabilities = capabilities or ModelCapabilities(chat=True, streaming=True)
+
+    def release_next(self) -> None:
+        """Permit exactly one more delta to be handed downstream."""
+        self._release.set()
+
+    async def wait_until_ready(self) -> None:
+        """Block until the provider is parked waiting for a release.
+
+        Releasing before this point is a lost wakeup: the provider clears its
+        gate on the way in, so a pre-set flag would be wiped and the run would
+        deadlock on the first delta.
+        """
+        await asyncio.wait_for(self._ready.wait(), timeout=_STEP_TIMEOUT)
+
+    @property
+    def pending(self) -> int:
+        """Deltas not yet emitted.
+
+        Counted at emission, not at generator resume: a counter that only moves
+        when the consumer asks for the next delta never reaches zero, because
+        the final ``yield`` is never resumed.
+        """
+        return len(self._deltas) - self._emitted
+
+    @property
+    def emitted(self) -> int:
+        return self._emitted
+
+    def name(self) -> str:
+        return "streaming-test"
+
+    def get_capabilities(self) -> ModelCapabilities:
+        return self._capabilities
+
+    async def generate(self, request: ModelRequest, *, model_name: str | None = None) -> ModelResponse:
+        return ModelResponse(content="".join(self._deltas), model_id=model_name or "")
+
+    async def stream(self, request: ModelRequest, *, model_name: str | None = None) -> AsyncIterator[str]:
+        for delta in self._deltas:
+            self._ready.clear()
+            self._ready.set()
+            await self._release.wait()
+            self._release.clear()
+            self._emitted += 1
+            yield delta
+
+    def get_model_info(self) -> ModelInfo:
+        return ModelInfo(
+            provider_name=self.name(),
+            model_id="stream-model",
+            display_name="Stream Model",
+            capabilities=self._capabilities,
+        )
+
+    async def health(self) -> ModelProviderHealth:
+        return ModelProviderHealth(status="healthy")
+
+
+def _native_streaming_app(
+    provider: "_StreamingModelProvider",
+) -> tuple[object, RunService, RunEventStore]:
+    """Wire the real NativeAgent + NativeRuntime streaming path to a test provider."""
+    app = create_app()
+    store = RunEventStore()
+    service = RunService(
+        NativeAgentAdapter(NativeRuntime(), provider),
+        run_repository=RunStore(),
+        run_event_repository=store,
+    )
+    app.state.run_service = service
+    return app, service, store
+
+
+def test_declared_streaming_capability_reaches_the_provider_adapter() -> None:
+    """The adapter is what answers "can this model stream?".
+
+    The runtime branches on ``get_capabilities().streaming``. A factory that
+    drops the configured model's declared capabilities makes every configured
+    model look chat-only, and a streaming run silently completes in one shot.
+    """
+    provider = ConfiguredModelProviderFactory(
+        installed_provider_ids=frozenset({"local"}), default_endpoint="http://localhost:11434/v1"
+    ).create(
+        provider_id="local",
+        endpoint="http://localhost:11434/v1",
+        model_name="qwen2.5-coder:7b",
+        credential=None,
+        capabilities=ModelCapabilities(chat=True, streaming=True),
+    )
+    assert provider.get_capabilities().streaming is True
+
+
+def test_a_configured_model_without_declared_capabilities_stays_chat_only() -> None:
+    """Conservative default is preserved when nothing is declared."""
+    provider = ConfiguredModelProviderFactory(
+        installed_provider_ids=frozenset({"local"}), default_endpoint="http://localhost:11434/v1"
+    ).create(
+        provider_id="local",
+        endpoint="http://localhost:11434/v1",
+        model_name="qwen2.5-coder:7b",
+        credential=None,
+    )
+    assert provider.get_capabilities().streaming is False
+    assert provider.get_capabilities().chat is True
+
+
+async def _drain(stream) -> AsyncIterator[dict[str, object]]:
+    """Yield every SSE event a consumer can observe from ``stream``."""
+    async for chunk in stream:
+        for event in _events_from_sse(chunk):
+            yield event
+
+
+def test_partial_content_reaches_an_sse_consumer_before_the_provider_finishes() -> None:
+    """A buffered stream is a failure, not a slow stream.
+
+    Each delta is released only after the consumer has observed the previous
+    one, so "the provider still had deltas to emit" is an asserted fact rather
+    than a timing guess. A run that buffered until completion, or that appended
+    instead of replacing, cannot satisfy both assertions below.
+    """
+    deltas = ["Hel", "lo ", "world"]
+    provider = _StreamingModelProvider(deltas)
+    _app, service, store = _native_streaming_app(provider)
+
+    async def scenario() -> list[tuple[str, int]]:
+        received: list[tuple[str, int]] = []
+        observed = asyncio.Event()
+
+        async def consume() -> None:
+            stream = _run_event_stream(_ConnectedRequest(), service, prepared.run_id)
+            async for event in _drain(stream):
+                if event["event_type"] == EventType.MESSAGE_CONTENT:
+                    received.append((str(event["payload"]["content"]), provider.pending))
+                    observed.set()
+
+        prepared = service.prepare_run(RunRequest(prompt="hi"))
+        consumer = asyncio.create_task(consume())
+        runner = asyncio.create_task(service.execute_prepared_run(prepared))
+        for _ in deltas:
+            await provider.wait_until_ready()
+            provider.release_next()
+            await asyncio.wait_for(observed.wait(), timeout=_STEP_TIMEOUT)
+            observed.clear()
+        await asyncio.wait_for(runner, timeout=_STEP_TIMEOUT)
+        await asyncio.wait_for(consumer, timeout=_STEP_TIMEOUT)
+        return received
+
+    received = asyncio.run(scenario())
+
+    # One content event per delta, each replacing the previous snapshot.
+    assert [content for content, _ in received] == ["Hel", "Hello ", "Hello world"]
+    # Deltas still pending when each event was received. A buffered
+    # implementation would report 0 for all three.
+    assert [pending for _, pending in received] == [2, 1, 0]
+    assert all(len(a[0]) < len(b[0]) for a, b in zip(received, received[1:], strict=False))
+
+
+def test_the_durable_event_log_grows_before_the_run_completes() -> None:
+    """Durable events are the refresh/replay source of truth, so they must grow."""
+    deltas = ["Hel", "lo ", "world"]
+    provider = _StreamingModelProvider(deltas)
+    _app, service, store = _native_streaming_app(provider)
+
+    async def scenario() -> tuple[str, list[str]]:
+        seen: list[str] = []
+        observed = asyncio.Event()
+
+        async def consume() -> None:
+            stream = _run_event_stream(_ConnectedRequest(), service, prepared.run_id)
+            async for event in _drain(stream):
+                if event["event_type"] == EventType.MESSAGE_CONTENT:
+                    seen.append(str(event["payload"]["content"]))
+                    observed.set()
+
+        prepared = service.prepare_run(RunRequest(prompt="hi"))
+        consumer = asyncio.create_task(consume())
+        runner = asyncio.create_task(service.execute_prepared_run(prepared))
+        for _ in deltas:
+            await provider.wait_until_ready()
+            provider.release_next()
+            await asyncio.wait_for(observed.wait(), timeout=_STEP_TIMEOUT)
+            observed.clear()
+        await asyncio.wait_for(runner, timeout=_STEP_TIMEOUT)
+        await asyncio.wait_for(consumer, timeout=_STEP_TIMEOUT)
+        return prepared.run_id, seen
+
+    run_id, seen = asyncio.run(scenario())
+
+    assert seen == ["Hel", "Hello ", "Hello world"]
+    # Sequence numbers stay dense and monotonic, so after_sequence replay from a
+    # cursor can never skip or reorder a partial update.
+    sequences = [
+        event.sequence
+        for event in store.get_events(run_id)
+        if event.event_type == EventType.MESSAGE_CONTENT
+    ]
+    assert sequences == sorted(sequences)
+    assert len(set(sequences)) == 3
+
+
+def test_a_non_streaming_model_still_completes_in_one_persisted_snapshot() -> None:
+    """Final-only compatibility: streaming=False must not be forced on."""
+    provider = _StreamingModelProvider(["one ", "shot"])
+    provider._capabilities = ModelCapabilities(chat=True, streaming=False)
+    _app, service, store = _native_streaming_app(provider)
+
+    async def scenario() -> list[dict[str, object]]:
+        prepared = service.prepare_run(RunRequest(prompt="hi"))
+        await asyncio.wait_for(
+            service.execute_prepared_run(prepared), timeout=_STEP_TIMEOUT
+        )
+        chunks = [
+            chunk
+            async for chunk in _run_event_stream(
+                _ConnectedRequest(), service, prepared.run_id
+            )
+        ]
+        return _events_from_sse("".join(chunks))
+
+    events = asyncio.run(scenario())
+    contents = [e for e in events if e["event_type"] == EventType.MESSAGE_CONTENT]
+    assert len(contents) == 1
+    assert contents[0]["payload"]["content"] == "one shot"
+
+
+def test_a_stream_failure_after_partial_content_keeps_the_partial_and_the_specific_code() -> None:
+    """Defect G must survive streaming: the code is specific and content is kept."""
+
+    class _FailingAfterFirst(_StreamingModelProvider):
+        async def stream(self, request: ModelRequest, *, model_name: str | None = None) -> AsyncIterator[str]:
+            yield "partial answer"
+            raise ModelProviderError("gone", safe_code=FailureCode.PROVIDER_RATE_LIMITED)
+
+    provider = _FailingAfterFirst(["unused"])
+    _app, service, store = _native_streaming_app(provider)
+
+    async def scenario() -> list[dict[str, object]]:
+        prepared = service.prepare_run(RunRequest(prompt="hi"))
+        await asyncio.wait_for(
+            service.execute_prepared_run(prepared), timeout=_STEP_TIMEOUT
+        )
+        chunks = [
+            chunk
+            async for chunk in _run_event_stream(
+                _ConnectedRequest(), service, prepared.run_id
+            )
+        ]
+        return _events_from_sse("".join(chunks))
+
+    events = asyncio.run(scenario())
+    contents = [e for e in events if e["event_type"] == EventType.MESSAGE_CONTENT]
+    failures = [e for e in events if e["event_type"] == EventType.RUN_FAILED]
+    assert contents[0]["payload"]["content"] == "partial answer"
+    assert failures[0]["payload"]["error_code"] == FailureCode.PROVIDER_RATE_LIMITED
+
+
+# ============================================================
+# END: Charter B - True Incremental Streaming End to End
+# ============================================================

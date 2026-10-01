@@ -15,7 +15,7 @@ export interface CreateConversationRequest { title?: string | null; contract_ver
 export interface UpdateConversationRequest { title: string; contract_version?: ContractVersion; }
 export interface MessageResponse {
   message_id: string; conversation_id: string; role: MessageRole; content: string;
-  status: MessageStatus; source_run_id?: string | null; created_at: string; updated_at: string;
+  status: MessageStatus; source_run_id?: string | null; source_user_message_id?: string | null; error_code?: string | null; created_at: string; updated_at: string;
   contract_version: ContractVersion;
 }
 export interface MessageListResponse { conversation_id: string; messages: MessageResponse[]; contract_version: ContractVersion; }

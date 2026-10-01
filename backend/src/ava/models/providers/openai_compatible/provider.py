@@ -18,10 +18,13 @@ objects.
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from urllib.parse import urlsplit
 
 import httpx
 
+from ava.contracts.failures import FailureCode
 from ava.contracts.models import (
     ModelCapabilities,
     ModelInfo,
@@ -36,6 +39,124 @@ from ava.models.errors import ModelProviderError
 
 _DEFAULT_PROVIDER_NAME = "openai-compatible"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+
+
+
+# ============================================================
+# BEGIN: Failure Classification
+# ============================================================
+
+#: Provider-side error identifiers that mean "the model you named does not
+#: exist". Compared case-insensitively against the structured ``code`` field only.
+_MODEL_NOT_FOUND_CODES = frozenset({"model_not_found", "model_not_exist", "unknown_model"})
+
+
+def _structured_error(response: httpx.Response) -> tuple[str | None, str]:
+    """Return ``(structured_code, safe_text)`` from a provider error body.
+
+    Only the OpenAI-compatible error envelope is read: ``error.code`` for a
+    machine-readable identifier and ``error.message`` (or a plain string
+    ``error``) for the human-readable half. Anything else is ignored.
+
+    This runs entirely server-side. Nothing derived from the body reaches the
+    public failure payload: only the resulting AVA code does.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None, ""
+    if not isinstance(body, dict):
+        return None, ""
+    error = body.get("error")
+    if isinstance(error, str):
+        return None, error
+    if not isinstance(error, dict):
+        return None, ""
+    code = error.get("code")
+    message = error.get("message")
+    return (code if isinstance(code, str) else None), (message if isinstance(message, str) else "")
+
+
+def _is_model_not_found(status_code: int, response: httpx.Response) -> bool:
+    """Whether a failure means the requested model does not exist.
+
+    The protocol signal is a 404 on a chat-completions request, which is how
+    OpenAI-compatible servers report an unknown model. A 404 is not conclusive on
+    its own, because it also means "no such endpoint", so the structured
+    ``error.code`` is preferred and the message is consulted only as a
+    tie-breaker. This keeps the vendor-specific reading inside the adapter: no
+    service outside this file ever sees a 404 or a provider body.
+    """
+    code, text = _structured_error(response)
+    if code is not None and code.strip().lower() in _MODEL_NOT_FOUND_CODES:
+        return True
+    if status_code != 404:
+        return False
+    lowered = text.lower()
+    return "model" in lowered and ("not found" in lowered or "not exist" in lowered or "does not exist" in lowered)
+
+
+def _classify_status_failure(response: httpx.Response) -> ModelProviderError:
+    """Map a non-success HTTP response to an AVA-owned classified error.
+
+    Status code is the primary signal and the structured error code breaks ties.
+    The returned message is AVA's own wording: it states the category and never
+    quotes the provider, the endpoint, or the response body.
+    """
+    status = response.status_code
+    if status in (401, 403):
+        return ModelProviderError(
+            "The OpenAI-compatible endpoint rejected the configured credentials",
+            status_code=status,
+            safe_code=FailureCode.PROVIDER_AUTHENTICATION_FAILED,
+        )
+    if _is_model_not_found(status, response):
+        return ModelProviderError(
+            "The OpenAI-compatible endpoint does not serve the requested model",
+            status_code=status,
+            safe_code=FailureCode.MODEL_UNAVAILABLE,
+        )
+    if status in (408, 504):
+        return ModelProviderError(
+            "The OpenAI-compatible endpoint timed out",
+            status_code=status,
+            safe_code=FailureCode.PROVIDER_TIMEOUT,
+        )
+    if status == 429:
+        return ModelProviderError(
+            "The OpenAI-compatible endpoint applied a rate limit",
+            status_code=status,
+            safe_code=FailureCode.PROVIDER_RATE_LIMITED,
+        )
+    return ModelProviderError(
+        f"The OpenAI-compatible endpoint returned HTTP status {status}",
+        status_code=status,
+        safe_code=FailureCode.PROVIDER_REQUEST_FAILED,
+    )
+
+
+def _classify_transport_failure(exc: Exception) -> ModelProviderError:
+    """Map a transport-level exception to an AVA-owned classified error.
+
+    A refused connection, an unresolvable host, or a broken transport is a
+    connectivity problem, which is deliberately *not* a model problem: reporting
+    it as ``model_unavailable`` would send the user to edit a model that is
+    configured correctly.
+    """
+    if isinstance(exc, httpx.InvalidURL):
+        return ModelProviderError(
+            "OpenAI-compatible base_url is invalid",
+            safe_code=FailureCode.CONFIGURATION_INVALID,
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return ModelProviderError(
+            "The OpenAI-compatible request timed out",
+            safe_code=FailureCode.PROVIDER_TIMEOUT,
+        )
+    return ModelProviderError(
+        "Could not reach the OpenAI-compatible endpoint",
+        safe_code=FailureCode.PROVIDER_CONNECTION_UNAVAILABLE,
+    )
 
 
 # ============================================================
@@ -353,11 +474,17 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
         """
         target_model = model_name if model_name is not None else self._model_name
         if not self._base_url.strip():
-            raise ModelProviderError("base_url is not configured")
+            raise ModelProviderError(
+                "base_url is not configured", safe_code=FailureCode.CONFIGURATION_INVALID
+            )
         if not target_model.strip():
-            raise ModelProviderError("model_name is not configured")
+            raise ModelProviderError(
+                "model_name is not configured", safe_code=FailureCode.MODEL_UNAVAILABLE
+            )
         if not _base_url_config_valid(self._base_url):
-            raise ModelProviderError("OpenAI-compatible base_url is invalid")
+            raise ModelProviderError(
+            "OpenAI-compatible base_url is invalid", safe_code=FailureCode.CONFIGURATION_INVALID
+        )
         headers: dict[str, str] = {}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -367,22 +494,80 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
                 headers=headers,
                 json=_to_chat_completion_payload(request, target_model),
             )
-        except httpx.InvalidURL as exc:
-            raise ModelProviderError("OpenAI-compatible base_url is invalid") from exc
-        except httpx.TimeoutException as exc:
-            raise ModelProviderError("OpenAI-compatible request timed out") from exc
-        except httpx.RequestError as exc:
-            raise ModelProviderError("OpenAI-compatible request failed during transport") from exc
+        except (httpx.InvalidURL, httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _classify_transport_failure(exc) from exc
         if response.status_code not in (200, 201):
-            raise ModelProviderError(
-                f"OpenAI-compatible request returned HTTP status {response.status_code}",
-                status_code=response.status_code,
-            )
+            raise _classify_status_failure(response)
         try:
             payload = response.json()
         except ValueError as exc:
-            raise ModelProviderError("OpenAI-compatible response was not valid JSON") from exc
-        return _from_chat_completion_response(payload, target_model)
+            raise ModelProviderError(
+                "The OpenAI-compatible response was not valid JSON",
+                safe_code=FailureCode.PROVIDER_RESPONSE_INVALID,
+            ) from exc
+        try:
+            return _from_chat_completion_response(payload, target_model)
+        except ModelProviderError as exc:
+            # A structurally unusable success body is a response problem, not a
+            # transport one, and the adapter is the only layer that can tell.
+            raise ModelProviderError(str(exc), status_code=exc.status_code,
+                                     safe_code=FailureCode.PROVIDER_RESPONSE_INVALID) from exc
+
+    async def stream(
+        self, request: ModelRequest, *, model_name: str | None = None
+    ) -> AsyncIterator[str]:
+        """Yield real text deltas from an OpenAI-compatible SSE response."""
+        target_model = model_name if model_name is not None else self._model_name
+        if not self._base_url.strip() or not target_model.strip() or not _base_url_config_valid(self._base_url):
+            raise ModelProviderError(
+                "OpenAI-compatible streaming configuration is invalid",
+                safe_code=FailureCode.CONFIGURATION_INVALID,
+            )
+        headers: dict[str, str] = {}
+        if self._api_key is not None:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        payload = _to_chat_completion_payload(request, target_model)
+        payload["stream"] = True
+        try:
+            async with self._http_client.stream(
+                "POST", self._chat_completions_url(), headers=headers, json=payload
+            ) as response:
+                if response.status_code not in (200, 201):
+                    # A streamed response has no body until it is read, and
+                    # classification reads the structured error. Skipping this
+                    # turns a provider 404 into an httpx ResponseNotRead crash
+                    # instead of an AVA-owned failure code.
+                    await response.aread()
+                    raise _classify_status_failure(response)
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        event = json.loads(data)
+                        choices = event["choices"]
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+                    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                        raise ModelProviderError(
+                            "The OpenAI-compatible stream payload was invalid",
+                            safe_code=FailureCode.PROVIDER_RESPONSE_INVALID,
+                        ) from exc
+                    if content is None:
+                        continue
+                    if not isinstance(content, str):
+                        raise ModelProviderError(
+                            "OpenAI-compatible stream content must be text",
+                            safe_code=FailureCode.PROVIDER_RESPONSE_INVALID,
+                        )
+                    if content:
+                        yield content
+        except ModelProviderError:
+            raise
+        except (httpx.InvalidURL, httpx.TimeoutException, httpx.RequestError) as exc:
+            raise _classify_transport_failure(exc) from exc
 
     def _models_url(self) -> str:
         """Build the model-list URL from the configured base URL."""

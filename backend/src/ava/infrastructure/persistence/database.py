@@ -61,12 +61,24 @@ class SqliteDatabase:
         Opening runs the default migration set when ``auto_migrate`` is set, so
         the schema is always at the latest supported version before a consumer
         touches it.
+
+        Access is mutually exclusive for the duration of the block, and shares
+        the transaction lock rather than introducing a second one. A single
+        ``sqlite3.Connection`` is not safe to use from several threads at once
+        even with ``check_same_thread=False``: the driver interleaves the
+        per-connection statement state, which surfaced as ``InterfaceError``,
+        half-built rows, and — worst — reads that returned *no row* for a row
+        that durably existed. Serializing every use of the connection is the
+        fix, because it is the connection, not the caller's intent, that is not
+        thread-safe. The lock is reentrant so ``transaction()`` can hold it
+        across a nested ``connect()`` without deadlocking.
         """
-        connection = self._connection
-        if connection is None:
-            connection = self._open()
-            self._connection = connection
-        yield connection
+        with self._transaction_lock:
+            connection = self._connection
+            if connection is None:
+                connection = self._open()
+                self._connection = connection
+            yield connection
 
     def ensure_schema(self) -> None:
         """Bring the schema to the latest supported version via the migration system.

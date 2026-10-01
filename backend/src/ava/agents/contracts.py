@@ -23,6 +23,38 @@ from ava.contracts.responses import RunResponse, RunStatus
 # ============================================================
 
 
+class ExecutionConfigurationError(ValueError):
+    """Base for every failure raised while resolving persisted execution.
+
+    It lives here, on the port, rather than in ``ava.execution``, because of
+    *who has to catch it*. The execution adapters raise it while resolving a
+    run's configuration, and it escapes through :class:`AgentPort` to the run
+    service, which turns it into a durable, user-facing failure. Both sides of
+    that boundary must be able to name the type, so it belongs to the contract
+    they share; leaving it in the execution layer would force the service to
+    import a concrete execution module merely to classify an error, which the
+    dependency-direction guards forbid.
+
+    The concrete subclasses stay in ``ava.execution.persisted_execution`` and
+    re-export this name, so execution code and existing importers are
+    unaffected: this is the same class object, not a parallel hierarchy.
+
+    A ``ValueError`` subclass, because the whole execution path already treats
+    an unresolvable configuration as a value problem and turns it into a clean
+    run failure; a new base exception would have escaped that handling and
+    surfaced as an unhandled 500.
+
+    Every message names configured identities and non-secret connection data
+    only. No message, and no attribute, ever contains resolved secret material:
+    the credential layer's own errors already name only a reference location,
+    and the credential failure subclass adds the connection id rather than the
+    underlying detail.
+    """
+
+    #: Stable, non-secret reason for logs and diagnostics.
+    reason = "execution_configuration_invalid"
+
+
 class AgentRunResult(BaseModel):
     """AVA-owned result of an agent execution.
 
@@ -36,6 +68,12 @@ class AgentRunResult(BaseModel):
     status: RunStatus
     content: str | None = None
     execution_selection: RunExecutionSelection | None = None
+    #: Public classification for a FAILED run, from the AVA failure taxonomy.
+    #: The agent sets it for failures it can name itself (a context window that
+    #: cannot fit, an incompatible combination) and preserves one handed up by
+    #: the runtime, so a known provider failure is not widened into
+    #: ``agent_failed`` on its way to the durable record.
+    failure_code: str | None = None
 
 
 class AgentPort(ABC):

@@ -15,26 +15,43 @@ import type { ConversationMessage } from "../types";
  * run is rendered as the active one; earlier regenerated responses are
  * superseded and hidden from the normal conversation transcript.
  *
- * Collapsing is positional and identity-based: an assistant message replaces
- * the previous assistant message when they belong to the same turn (they are
- * consecutive — regenerate reuses the original user message, so every
- * regeneration of a turn appends directly after that turn's user message).
- * User and system messages are never hidden or reordered.
+ * Collapsing uses the assistant's source user-message identity. A regenerated
+ * response is appended to durable history after later turns may already exist,
+ * so adjacency alone would replace the latest assistant rather than the
+ * assistant response that owns the regenerated turn. User and system messages
+ * are never hidden or reordered.
  */
 export function selectTranscriptMessages(
   messages: ConversationMessage[],
 ): ConversationMessage[] {
   const active: ConversationMessage[] = [];
   for (const message of messages) {
+    if (message.role === "assistant" && message.sourceUserMessageId != null) {
+      let priorIndex = -1;
+      for (let index = active.length - 1; index >= 0; index -= 1) {
+        const candidate = active[index];
+        if (
+          candidate.role === "assistant" &&
+          candidate.sourceUserMessageId === message.sourceUserMessageId
+        ) {
+          priorIndex = index;
+          break;
+        }
+      }
+      if (priorIndex >= 0) {
+        active[priorIndex] = message;
+        continue;
+      }
+    }
     if (
       message.role === "assistant" &&
       active.length > 0 &&
       active[active.length - 1].role === "assistant"
     ) {
       active[active.length - 1] = message;
-    } else {
-      active.push(message);
+      continue;
     }
+    active.push(message);
   }
   return active;
 }

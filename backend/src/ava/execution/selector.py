@@ -8,6 +8,7 @@ from ava.execution.persisted_execution import (
     ExecutionConfigurationSource,
     PersistedExecutionConfiguration,
     PersistedExecutionConfigurationResolverPort,
+    PersistedModelConfiguration,
 )
 from ava.execution.routing import AutomaticExecutionRoutingPolicy
 from ava.models.bindings import ConfiguredModelBinding, ModelBindingResolver, model_binding_from_profile
@@ -121,15 +122,28 @@ class ExecutionSelector:
         instead of being caught here. A broken explicit configuration must fail
         the run, not silently degrade to bootstrap.
 
-        Explicit legacy overrides still select from the bootstrap catalogs.
-        Persisted defaults, when present, are validated first even in that case:
-        an override must not conceal a broken saved configuration. Mapping legacy
-        override fields to configured-instance ids is deferred to Phase 5.17.
+        An explicit override is *partial*: it names only the axes the caller
+        actually chose. When persisted defaults exist, every axis it leaves unset
+        keeps the persisted application default, so choosing a runtime never
+        silently swaps the operator's configured model, and choosing a model
+        never silently swaps the configured runtime.
+
+        Axes an override *does* name still resolve exactly as before: a named
+        model or provider is an explicit legacy selection from the bootstrap
+        catalogs, and a named runtime is a registry adapter key. Persisted
+        defaults are validated first even then: an override must not conceal a
+        broken saved configuration. Mapping legacy override fields to
+        configured-instance ids is deferred to Phase 5.17.
         """
+        persisted: PersistedExecutionConfiguration | None = None
         if self._persisted is not None:
             persisted = self._persisted.resolve_persisted()
             if persisted is not None and _is_unset(override):
                 return ResolvedExecution.from_persisted_configuration(persisted)
+        # An explicitly named configured model is resolved before anything else so
+        # the answer never depends on whether application defaults happen to be
+        # saved yet. A model added in Settings must be runnable on its own.
+        configured = self._configured_model(override)
         if override and override.mode == "auto":
             if override.runtime_id or override.model_id or override.model_provider_id or self._routing is None:
                 raise ValueError("Auto execution cannot include explicit ids")
@@ -149,7 +163,15 @@ class ExecutionSelector:
                 model_binding_from_profile(profile),
                 profile,
             )
+        if persisted is not None:
+            return self._resolve_override_onto_persisted(override, persisted, configured)
         runtime_id = override.runtime_id if override and override.runtime_id is not None else self._default_runtime_id
+        if configured is not None:
+            return self._execution_from_configured_model(
+                configured,
+                override=override,
+                runtime_id=runtime_id,
+            )
         if override and override.model_id is not None:
             profile = self._select_model(
                 explicit_model_id=override.model_id,
@@ -168,6 +190,114 @@ class ExecutionSelector:
             model_binding=model_binding_from_profile(profile),
             model_profile=profile,
         )
+
+    def _resolve_override_onto_persisted(
+        self,
+        override: RunExecutionOverride | None,
+        persisted: PersistedExecutionConfiguration,
+        configured: PersistedModelConfiguration | None = None,
+    ) -> ResolvedExecution:
+        """Resolve one explicit selection on top of persisted application defaults.
+
+        Each axis is decided independently: an axis the override names is
+        resolved from the catalogs the override contract already defines, and an
+        axis it leaves unset keeps the persisted default rather than falling back
+        to a bootstrap default. That is what keeps ``Model: application default``
+        meaning *the configured model* instead of a same-looking bootstrap model
+        recorded under a different identity.
+
+        A named runtime is a registry adapter key. When it names the same
+        adapter the persisted configuration already uses, the configured
+        instance is kept so the run stays attributed to it; otherwise the
+        registry resolves the key and the run records no configured instance,
+        because none backs that choice.
+        """
+        explicit_runtime_id = override.runtime_id if override is not None else None
+        if explicit_runtime_id is None or explicit_runtime_id == persisted.runtime_type:
+            runtime = persisted.runtime
+            runtime_configuration_id: str | None = persisted.runtime_configuration_id
+        else:
+            runtime = self._runtime.resolve(explicit_runtime_id)
+            runtime_configuration_id = None
+        names_model = override is not None and (override.model_id is not None or override.model_provider_id is not None)
+        if not names_model:
+            return ResolvedExecution(
+                runtime=runtime,
+                model_provider=persisted.model_provider,
+                model_binding=persisted.model_binding,
+                model_profile=persisted.model_profile,
+                source=ExecutionConfigurationSource.PERSISTED,
+                provider_connection_id=persisted.provider_connection_id,
+                runtime_configuration_id=runtime_configuration_id,
+            )
+        if configured is None:
+            configured = self._configured_model(override)
+        if configured is not None:
+            return self._execution_from_configured_model(
+                configured,
+                override=override,
+                runtime=runtime,
+                runtime_configuration_id=runtime_configuration_id,
+            )
+        profile = self._select_model(
+            explicit_model_id=override.model_id if override else None,
+            preferred_provider_id=override.model_provider_id if override else None,
+            runtime_id=explicit_runtime_id or persisted.runtime_type,
+        )
+        return ResolvedExecution(
+            runtime=runtime,
+            model_provider=self._provider.resolve(profile.provider_id),
+            model_binding=model_binding_from_profile(profile),
+            model_profile=profile,
+            source=ExecutionConfigurationSource.BOOTSTRAP,
+            runtime_configuration_id=runtime_configuration_id,
+        )
+
+    def _execution_from_configured_model(
+        self,
+        configured: PersistedModelConfiguration,
+        *,
+        override: RunExecutionOverride | None = None,
+        runtime_id: str | None = None,
+        runtime: AgentRuntimePort | None = None,
+        runtime_configuration_id: str | None = None,
+    ) -> ResolvedExecution:
+        """Build a run from one explicitly chosen configured model.
+
+        The two id spaces are checked against each other rather than trusted: a
+        ``model_id`` from the configured catalog and a ``model_provider_id`` from
+        the provider catalog describe the same selection, so disagreeing is a
+        caller error and never silently resolved in favour of one of them.
+        """
+        if (
+            override is not None
+            and override.model_provider_id is not None
+            and override.model_provider_id != configured.model_profile.provider_id
+        ):
+            raise ValueError("model_id and model_provider_id must identify the same provider")
+        resolved_runtime = runtime if runtime is not None else self._runtime.resolve(runtime_id or "")
+        return ResolvedExecution(
+            runtime=resolved_runtime,
+            model_provider=configured.model_provider,
+            model_binding=configured.model_binding,
+            model_profile=configured.model_profile,
+            source=ExecutionConfigurationSource.PERSISTED,
+            provider_connection_id=configured.provider_connection_id,
+            runtime_configuration_id=runtime_configuration_id,
+        )
+
+    def _configured_model(self, override: RunExecutionOverride | None) -> PersistedModelConfiguration | None:
+        """Resolve an explicitly named ``model_id`` as a configured model.
+
+        A configured ``model_id`` is AVA's stable, provider-neutral identity and
+        takes precedence over the bootstrap catalog, so selecting a model added
+        in Settings runs that exact record rather than a catalog entry that
+        happens to share a name. ``None`` means the id names no configured model,
+        which leaves the legacy bootstrap path below unchanged.
+        """
+        if self._persisted is None or override is None or override.model_id is None:
+            return None
+        return self._persisted.resolve_model_configuration(override.model_id)
 
     def _select_model(
         self,

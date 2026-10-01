@@ -15,10 +15,13 @@ public-safe:
 from fastapi.testclient import TestClient
 
 from ava.api.app import create_app
+from ava.configuration.execution_defaults import ApplicationExecutionDefaults
 from ava.contracts.models import ModelCapabilities, ModelHostingMode, QualificationStatus
 from ava.contracts.responses import ModelDiscoveryResponse
 from ava.contracts.version import CONTRACT_VERSION
+from ava.models.model_configurations import ModelConfiguration
 from ava.models.model_registry import ModelProfile, ModelRegistry
+from ava.models.provider_connections import ProviderConnection
 from ava.models.qualifications import ModelQualification, ModelQualificationStore
 from ava.services.model_discovery_service import ModelDiscoveryService
 
@@ -263,3 +266,177 @@ def test_models_endpoint_is_independent_of_model_providers_endpoint() -> None:
 # ============================================================
 # END: Route Tests
 # ============================================================
+
+
+# ============================================================
+# Configured models (persisted ModelConfiguration records)
+# ============================================================
+
+
+def _configuration(
+    model_id: str,
+    provider_connection_id: str = "gateway",
+    *,
+    provider_model_name: str | None = None,
+    display_name: str | None = None,
+    enabled: bool = True,
+) -> ModelConfiguration:
+    return ModelConfiguration(
+        model_id=model_id,
+        provider_connection_id=provider_connection_id,
+        provider_model_name=provider_model_name or f"{model_id}-native",
+        display_name=display_name or f"Configured {model_id}",
+        hosting_mode=ModelHostingMode.LOCAL,
+        capabilities=ModelCapabilities(chat=True),
+        enabled=enabled,
+    )
+
+
+def _repository(items):
+    """A read-only stand-in exposing only what discovery consumes."""
+
+    class _Repo:
+        def get(self, key):
+            return next(
+                (
+                    i
+                    for i in items
+                    if key in (getattr(i, "model_id", None), getattr(i, "provider_connection_id", None))
+                ),
+                None,
+            )
+
+        def list(self):
+            return list(items)
+
+    return _Repo()
+
+
+def _connection(provider_connection_id: str = "gateway", *, provider_id: str = "local") -> ProviderConnection:
+    return ProviderConnection(
+        provider_connection_id=provider_connection_id,
+        provider_id=provider_id,
+        display_name="Gateway",
+        endpoint="https://configured.test/v1",
+    )
+
+
+def test_configured_models_are_discovered_alongside_registry_profiles() -> None:
+    registry = ModelRegistry([_profile("bootstrap-only")])
+    service = ModelDiscoveryService(
+        registry=registry,
+        model_configurations=_repository([_configuration("qwen25-coder-7b")]),
+        provider_connections=_repository([_connection()]),
+    )
+
+    by_id = {m.model_id: m for m in service.discover().models}
+    assert set(by_id) == {"bootstrap-only", "qwen25-coder-7b"}
+    assert by_id["qwen25-coder-7b"].display_name == "Configured qwen25-coder-7b"
+    assert by_id["qwen25-coder-7b"].provider_id == "local"
+    assert by_id["qwen25-coder-7b"].enabled is True
+
+
+def test_several_configured_models_on_one_provider_stay_distinct() -> None:
+    # The defect: the composer was provider-keyed, so one provider could only ever
+    # offer one model. Each configured record must keep its own stable id.
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([]),
+        model_configurations=_repository(
+            [_configuration("qwen25-coder-7b"), _configuration("qwen35-9b"), _configuration("granite-8b")]
+        ),
+        provider_connections=_repository([_connection()]),
+    )
+
+    response = service.discover()
+    assert [m.model_id for m in response.models] == ["granite-8b", "qwen25-coder-7b", "qwen35-9b"]
+    assert {m.provider_id for m in response.models} == {"local"}
+
+
+def test_configured_display_name_is_never_the_provider_native_name() -> None:
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([]),
+        model_configurations=_repository(
+            [_configuration("m", provider_model_name="vendor/secret-native", display_name="Friendly")]
+        ),
+        provider_connections=_repository([_connection()]),
+    )
+
+    payload = service.discover().model_dump(mode="json")
+    serialized = payload["models"][0]
+    assert serialized["display_name"] == "Friendly"
+    for key in _FORBIDDEN_KEYS:
+        assert key not in serialized
+    assert "vendor/secret-native" not in str(payload)
+
+
+def test_disabled_configured_model_is_discovered_and_flagged() -> None:
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([]),
+        model_configurations=_repository([_configuration("off", enabled=False)]),
+        provider_connections=_repository([_connection()]),
+    )
+
+    assert [(m.model_id, m.enabled) for m in service.discover().models] == [("off", False)]
+
+
+def test_a_configured_record_wins_an_id_collision_with_a_registry_profile() -> None:
+    # The persisted record is the user's truth, so it must not be shadowed by a
+    # bootstrap profile that happens to reuse the id.
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([_profile("shared-id")]),
+        model_configurations=_repository([_configuration("shared-id", display_name="Configured Wins")]),
+        provider_connections=_repository([_connection()]),
+    )
+
+    response = service.discover()
+    assert [m.model_id for m in response.models] == ["shared-id"]
+    assert response.models[0].display_name == "Configured Wins"
+
+
+def test_discovery_reports_which_model_the_application_default_selects() -> None:
+    defaults = ApplicationExecutionDefaults(
+        default_provider_connection_id="gateway",
+        default_model_id="qwen35-9b",
+        default_runtime_configuration_id="native",
+    )
+
+    class _Defaults:
+        def get(self):
+            return defaults
+
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([]),
+        model_configurations=_repository([_configuration("qwen25-coder-7b"), _configuration("qwen35-9b")]),
+        provider_connections=_repository([_connection()]),
+        execution_defaults=_Defaults(),
+    )
+
+    assert service.discover().default_model_id == "qwen35-9b"
+
+
+def test_default_model_id_is_null_when_no_defaults_are_configured() -> None:
+    service = ModelDiscoveryService(registry=ModelRegistry([_profile("a")]))
+    assert service.discover().default_model_id is None
+
+
+def test_default_model_id_is_reported_even_if_the_model_is_not_in_the_catalog() -> None:
+    # A dangling default is a configuration problem the user should be able to
+    # see, not a reason to hide the fact that one is configured.
+    defaults = ApplicationExecutionDefaults(
+        default_provider_connection_id="gateway",
+        default_model_id="deleted-model",
+        default_runtime_configuration_id="native",
+    )
+
+    class _Defaults:
+        def get(self):
+            return defaults
+
+    service = ModelDiscoveryService(
+        registry=ModelRegistry([]),
+        model_configurations=_repository([_configuration("present")]),
+        provider_connections=_repository([_connection()]),
+        execution_defaults=_Defaults(),
+    )
+
+    assert service.discover().default_model_id == "deleted-model"

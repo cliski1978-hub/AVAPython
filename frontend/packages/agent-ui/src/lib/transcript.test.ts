@@ -55,6 +55,18 @@ describe("selectTranscriptMessages", () => {
     expect(visible.map((m) => m.id)).toEqual(["u1", "a2", "u2", "b2"]);
   });
 
+  it("replaces a non-latest assistant by source identity without hiding a later turn", () => {
+    const messages = [
+      user("u1", "First"),
+      assistant("a1", "A1", "u1"),
+      user("u2", "Second"),
+      assistant("b1", "B1", "u2"),
+      assistant("a2", "A2", "u1"),
+    ];
+    const visible = selectTranscriptMessages(messages);
+    expect(visible.map((message) => message.id)).toEqual(["u1", "a2", "u2", "b1"]);
+  });
+
   it("never hides user messages", () => {
     const messages = [
       user("u1", "Hello"),

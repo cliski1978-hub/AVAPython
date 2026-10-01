@@ -1,4 +1,5 @@
 import { defaultTheme, useInteraction } from "@ava/ui-core";
+import type { SettingsSectionId } from "@ava/ui-core";
 import type { CSSProperties } from "react";
 
 /**
@@ -16,7 +17,7 @@ import type { CSSProperties } from "react";
  * and content without inventing anything.
  */
 
-export type SettingsSectionId = "providers" | "models" | "runtimes" | "defaults";
+export type { SettingsSectionId } from "@ava/ui-core";
 
 export interface SettingsSectionDefinition {
   id: SettingsSectionId;

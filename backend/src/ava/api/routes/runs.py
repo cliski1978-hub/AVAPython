@@ -24,6 +24,8 @@ from ava.contracts.responses import RunResponse
 from ava.services.context_construction_service import ContextConstructionError
 from ava.services.run_service import (
     CancellationRequestError,
+    ConversationRunActiveError,
+    RunNotSupersedableError,
     RunRelationshipError,
     RunService,
 )
@@ -56,6 +58,28 @@ async def start_run(
         if created is None:  # pragma: no cover - prepare_run just created it
             raise RuntimeError("prepared run disappeared before response")
         return created
+    except RunNotSupersedableError as exc:
+        # A well-formed request naming a run that cannot be branched from: it is
+        # unknown, belongs to another conversation, or is still active. Reported
+        # as its own eligibility refusal so a stale client can tell "you asked
+        # for the impossible" from "your request was malformed".
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                error_code="run_not_supersedable",
+                category=ErrorCategory.VALIDATION,
+                message=str(exc),
+            ).model_dump(),
+        )
+    except ConversationRunActiveError as exc:
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                error_code="conversation_run_active",
+                category=ErrorCategory.VALIDATION,
+                message=str(exc),
+            ).model_dump(),
+        )
     except RunRelationshipError as exc:
         return JSONResponse(
             status_code=422,

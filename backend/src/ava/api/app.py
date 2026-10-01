@@ -297,6 +297,7 @@ def create_app(
         conversation_repository=application_persistence.conversation_repository,
         message_repository=application_persistence.message_repository,
         run_repository=application_persistence.run_repository,
+        run_event_repository=application_persistence.run_event_repository,
     )
     app.state.document_service = DocumentService(
         document_repository=application_persistence.document_repository,
@@ -316,9 +317,13 @@ def create_app(
         registry=model_provider_registry,
         default_provider_id=settings.model_provider,
     )
-    # Read-only model catalog discovery (registry-backed, no network).
+    # Read-only model catalog discovery (registry + persisted configuration, no network).
     app.state.model_discovery_service = ModelDiscoveryService(
-        registry=model_registry, qualification_store=qualification_store
+        registry=model_registry,
+        qualification_store=qualification_store,
+        model_configurations=application_persistence.model_configuration_repository,
+        provider_connections=application_persistence.provider_connection_repository,
+        execution_defaults=application_persistence.execution_defaults_repository,
     )
     app.state.runtime_discovery_service = RuntimeDiscoveryService(
         registry=runtime_registry, default_runtime_id=settings.agent_runtime

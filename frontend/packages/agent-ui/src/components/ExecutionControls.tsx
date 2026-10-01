@@ -1,4 +1,4 @@
-import type { RuntimeDiscoveryItem, ModelProviderDiscoveryItem, ExecutionProfile, WorkspaceInfo } from "@ava/contracts";
+import type { RuntimeDiscoveryItem, ModelInfo, ModelProviderDiscoveryItem, ExecutionProfile, WorkspaceInfo } from "@ava/contracts";
 
 export interface ExecutionControlsProps {
   runtimes: RuntimeDiscoveryItem[];
@@ -17,6 +17,18 @@ export interface ExecutionControlsProps {
   selectedWorkspaceId?: string | null;
   onWorkspaceChange?: (workspaceId: string | null) => void;
   workspacesUnavailable?: boolean;
+  /**
+   * Configured models offered by the Model control, from `GET /models`.
+   *
+   * The option value is the stable AVA `model_id`, never a display name and
+   * never a provider identity: a provider can expose several configured
+   * models, so a provider-keyed control cannot represent them. When omitted the
+   * control falls back to provider identities, which is the pre-settings
+   * behaviour and cannot address a configured model.
+   */
+  configuredModels?: ModelInfo[];
+  /** Model the application default resolves to, used to label that option. */
+  defaultModelDisplayName?: string;
 }
 
 export function ExecutionControls({
@@ -36,9 +48,34 @@ export function ExecutionControls({
   selectedWorkspaceId = null,
   onWorkspaceChange,
   workspacesUnavailable = false,
+  configuredModels = [],
+  defaultModelDisplayName,
 }: ExecutionControlsProps) {
   const selectStyle = { background: "transparent", color: "inherit", border: 0, fontSize: 12, maxWidth: 180 };
   const labelStyle = { fontSize: 12, color: "#a1a1aa" } as const;
+
+  // Configured models are the catalog a user actually configured, so they win
+  // whenever discovery reports any. Disabled records stay listed: selecting one
+  // must fail on its own explicit terms rather than vanish from the UI.
+  const hasConfiguredModels = configuredModels.length > 0;
+  const unsetLabel = selectedProfileId === "application-default"
+    ? defaultModelDisplayName
+      ? `Application default (${defaultModelDisplayName})`
+      : "Application default"
+    : "Legacy default";
+
+  // An execution profile pins a provider, not a configured model, so its value
+  // can be absent from the catalog. Render it explicitly instead of letting the
+  // select fall back to a blank option: the profile's choice stays visible and
+  // the request keeps carrying it.
+  const selectedIsListed = selectedModelProviderId == null || selectedModelProviderId === ""
+    ? true
+    : hasConfiguredModels
+      ? configuredModels.some(m => m.model_id === selectedModelProviderId)
+      : modelProviders.some(p => p.provider_id === selectedModelProviderId);
+  const unlistedSelection = selectedModelProviderId && !selectedIsListed
+    ? selectedModelProviderId
+    : null;
 
   return <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
     {(profiles.length > 0 || onDefaultChange) && <label style={labelStyle}>Profile <select aria-label="Select execution profile" disabled={disabled} value={selectedProfileId ?? "custom"} onChange={e => { if (e.target.value === "application-default") return onDefaultChange?.(); if (e.target.value === "auto") return onAutoChange?.(); const p = profiles.find(x => x.id === e.target.value); if (p) onProfileChange?.(p); }}>{onDefaultChange && <option value="application-default">Application default</option>}<option value="auto">Auto</option><option value="custom" disabled>Custom</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
@@ -48,9 +85,12 @@ export function ExecutionControls({
       {runtimes.map(r => <option key={r.runtime_info.runtime_id} value={r.runtime_info.runtime_id}>{r.runtime_info.display_name ?? r.runtime_info.runtime_id}</option>)}
     </select></label>
     <label style={labelStyle}>Model <select style={selectStyle} aria-label="Select model" disabled={disabled} value={selectedModelProviderId ?? ""} onChange={e => onModelProviderChange(e.target.value)}>
-      {onDefaultChange && <option value="">{selectedProfileId === "application-default" ? "Application default" : "Legacy default"}</option>}
-      {!onDefaultChange && !modelProviders.length && <option value="">No models available</option>}
-      {modelProviders.map(p => <option key={p.provider_id} value={p.provider_id}>{p.model_info.model_id}</option>)}
+      {onDefaultChange && <option value="">{unsetLabel}</option>}
+      {!hasConfiguredModels && !onDefaultChange && !modelProviders.length && <option value="">No models available</option>}
+      {unlistedSelection && <option value={unlistedSelection}>Provider {unlistedSelection} (from profile)</option>}
+      {hasConfiguredModels
+        ? configuredModels.map(m => <option key={m.model_id} value={m.model_id}>{m.display_name ?? m.model_id}{m.enabled ? "" : " (disabled)"}</option>)
+        : modelProviders.map(p => <option key={p.provider_id} value={p.provider_id}>{p.model_info.model_id}</option>)}
     </select></label>
     <label style={labelStyle}>Workspace <select style={selectStyle} aria-label="Select workspace" disabled={disabled || workspacesUnavailable} value={selectedWorkspaceId ?? ""} onChange={e => onWorkspaceChange?.(e.target.value === "" ? null : e.target.value)}>
       {workspacesUnavailable

@@ -271,6 +271,81 @@ def test_absent_defaults_retain_bootstrap_execution(tmp_path, monkeypatch, trans
         assert requests == []
 
 
+@pytest.mark.parametrize("persistence", ["memory", "relational"])
+def test_a_model_added_in_settings_is_discoverable_and_runnable(tmp_path, transport, persistence):
+    """Settings -> GET /models -> POST /runs, the path that was broken.
+
+    A model created in Settings must appear in the catalog the composer reads and
+    must run when chosen by its stable model_id, without the application default
+    having to change first.
+    """
+    requests, _ = transport
+    app = app_module.create_app(settings=settings_for(tmp_path, persistence))
+    with TestClient(app) as client:
+        # Defaults already point at a different model, so the explicit choice
+        # below has to stand on its own.
+        configure(client)
+        created = client.post(
+            "/settings/models",
+            json={
+                "model_id": "second-model",
+                "provider_connection_id": "gateway",
+                "provider_model_name": "vendor/second",
+                "display_name": "Second model",
+                "hosting_mode": "company_hosted",
+                "capabilities": {"chat": True},
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        catalog = client.get("/models").json()
+        assert "second-model" in [m["model_id"] for m in catalog["models"]]
+        entry = next(m for m in catalog["models"] if m["model_id"] == "second-model")
+        assert entry["display_name"] == "Second model"
+        # The provider-native name stays out of the discovery payload.
+        assert "vendor/second" not in str(catalog)
+
+        chosen = client.post(
+            "/runs", json={"prompt": "hello", "execution": {"model_id": "second-model"}}
+        )
+        assert chosen.status_code == 202, chosen.text
+        body = client.get(f"/runs/{chosen.json()['run_id']}").json()
+        assert body["status"] == "completed"
+        assert body["execution_selection"]["model_id"] == "second-model"
+
+
+def test_a_disabled_model_stays_discoverable_but_is_not_runnable(tmp_path, transport):
+    requests, _ = transport
+    app = app_module.create_app(settings=settings_for(tmp_path))
+    with TestClient(app) as client:
+        configure(client)
+        assert client.post(
+            "/settings/models",
+            json={
+                "model_id": "off-model",
+                "provider_connection_id": "gateway",
+                "provider_model_name": "vendor/off",
+                "display_name": "Off model",
+                "hosting_mode": "company_hosted",
+                "capabilities": {"chat": True},
+                "enabled": False,
+            },
+        ).status_code == 201
+
+        catalog = client.get("/models").json()
+        off = next(m for m in catalog["models"] if m["model_id"] == "off-model")
+        assert off["enabled"] is False
+
+        chosen = client.post("/runs", json={"prompt": "hello", "execution": {"model_id": "off-model"}})
+        assert chosen.status_code == 202, chosen.text
+        body = client.get(f"/runs/{chosen.json()['run_id']}").json()
+        # It fails on its own explicit terms instead of quietly running something else.
+        assert body["status"] == "failed"
+        assert body["execution_selection"] is None
+        assert requests == []
+
+
 def test_persisted_defaults_drive_execution_after_restart(tmp_path, transport):
     requests, _ = transport
     settings = settings_for(tmp_path, "relational")
@@ -302,6 +377,29 @@ def test_factory_closes_owned_pool_and_does_not_close_injected_pool():
             )
             await factory.aclose()
             assert not client.is_closed
+
+    asyncio.run(scenario())
+
+
+def test_factory_owned_client_allows_a_slow_first_streamed_token():
+    """Persisted local connections must not inherit HTTPX's five-second default.
+
+    The UI-backed path builds providers through this factory, while a standalone
+    provider creates its own client.  Keep their first-token budget suitable for
+    a real local model without disabling transport timeouts altogether.
+    """
+    async def scenario():
+        factory = ConfiguredModelProviderFactory(
+            installed_provider_ids=frozenset({"local"}), default_endpoint="opaque"
+        )
+        try:
+            timeout = factory._http_client.timeout
+            assert timeout.connect == 10.0
+            assert timeout.read == 120.0
+            assert timeout.write == 30.0
+            assert timeout.pool == 30.0
+        finally:
+            await factory.aclose()
 
     asyncio.run(scenario())
 

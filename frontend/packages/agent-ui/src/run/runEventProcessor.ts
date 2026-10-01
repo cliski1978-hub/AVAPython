@@ -8,6 +8,7 @@
 import type { JsonValue, RunEvent, RunStatus } from "@ava/contracts";
 
 import type { MessageStatus, UIRunPhase } from "../types";
+import { presentRunFailure } from "../lib/errorPresentation";
 
 /** Backend statuses the UI drives from events. */
 export type UIRunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -16,6 +17,7 @@ export type RunEventEffect =
   | { kind: "setBackendStatus"; backendStatus: UIRunStatus }
   | { kind: "setPhase"; phase: UIRunPhase }
   | { kind: "setMessageStatus"; messageStatus: MessageStatus }
+  | { kind: "setMessageError"; error: string; errorCode?: string }
   | { kind: "setMessageContent"; messageId: string | null; content: string }
   | { kind: "associateMessage"; messageId: string }
   | { kind: "ignore" };
@@ -69,6 +71,7 @@ export function applyRunEvent(event: RunEvent): RunEventEffect[] {
         { kind: "setPhase", phase: "failed" },
         { kind: "setBackendStatus", backendStatus: "failed" },
         { kind: "setMessageStatus", messageStatus: "failed" },
+        { kind: "setMessageError", error: presentRunFailure(event.payload), errorCode: payloadString(event.payload, "error_code") || undefined },
       ];
     default:
       return [{ kind: "ignore" }];

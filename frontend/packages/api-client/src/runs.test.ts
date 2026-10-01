@@ -236,3 +236,102 @@ describe("cancelRun", () => {
     await expect(cancelRun(client, "run-001")).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+// ============================================================
+// BEGIN: Charter B - incremental SSE delivery
+// ============================================================
+
+
+describe("streamRun incremental delivery", () => {
+  /**
+   * A body that stays open: each frame is only pushed when the test asks for
+   * it. A parser that accumulated the whole response before emitting would
+   * deadlock here instead of quietly buffering, so buffering fails fast.
+   */
+  function deferredSse(): { response: Response; push: (frame: string) => void; close: () => void } {
+    const encoder = new TextEncoder();
+    let push!: (frame: string) => void;
+    let close!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (frame) => controller.enqueue(encoder.encode(frame));
+        close = () => controller.close();
+      },
+    });
+    return {
+      response: new Response(body, { headers: { "Content-Type": "text/event-stream" } }),
+      push,
+      close,
+    };
+  }
+
+  function contentFrame(content: string, sequence: number): string {
+    const eventId = `evt-${sequence}`;
+    const event = {
+      event_id: eventId, run_id: "run-001", sequence,
+      event_type: "message_content", timestamp: "2026-09-27T00:00:00Z",
+      payload: { content }, contract_version: "v1",
+    };
+    return `id: ${eventId}\nevent: message_content\ndata: ${JSON.stringify(event)}\n\n`;
+  }
+
+  it("delivers each partial snapshot before the stream is closed", async () => {
+    const { response, push, close } = deferredSse();
+    const client = makeClient((async () => response) as unknown as typeof fetch);
+    const seen: string[] = [];
+    let firstEvent!: () => void;
+    const arrived = new Promise<void>((resolve) => { firstEvent = resolve; });
+
+    const streamed = streamRun(client, "run-001", {
+      onEvent: async (event) => {
+        if (event.event_type === "message_content") {
+          seen.push((event.payload as { content: string }).content);
+          firstEvent();
+        }
+      },
+    });
+
+    push(contentFrame("Hel", 3));
+    await arrived;
+    // The stream is still open: this snapshot was delivered mid-flight.
+    push(contentFrame("Hello ", 4));
+    push(contentFrame("Hello world", 5));
+    close();
+    await streamed;
+
+    expect(seen).toEqual(["Hel", "Hello ", "Hello world"]);
+    // Snapshot, not append: no duplicated prefix.
+    expect(seen[2]).toBe("Hello world");
+  });
+
+  it("reassembles an event split across two network reads", async () => {
+    const { response, push, close } = deferredSse();
+    const client = makeClient((async () => response) as unknown as typeof fetch);
+    const seen: string[] = [];
+    let done!: () => void;
+    void new Promise<void>((resolve) => { done = resolve; });
+
+    const streamed = streamRun(client, "run-001", {
+      onEvent: async (event) => {
+        if (event.event_type === "message_content") {
+          seen.push((event.payload as { content: string }).content);
+          done();
+        }
+      },
+    });
+
+    const frame = contentFrame("split frame", 3);
+    const half = Math.floor(frame.length / 2);
+    // Two chunks inside one frame: a naive per-chunk parser would fail here.
+    push(frame.slice(0, half));
+    push(frame.slice(half));
+    close();
+    await streamed;
+
+    expect(seen).toEqual(["split frame"]);
+  });
+});
+
+// ============================================================
+// END: Charter B - incremental SSE delivery
+// ============================================================
