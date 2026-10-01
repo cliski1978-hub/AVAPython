@@ -19,6 +19,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+from ava.contracts.failures import FailureCode
 from ava.contracts.models import (
     ModelCapabilities,
     ModelInfo,
@@ -1181,4 +1182,68 @@ def test_malformed_base_url_is_contained_for_generate_and_health(base_url: str) 
 
 # ============================================================
 # END: Transport Configuration Boundary Tests
+# ============================================================
+
+# ============================================================
+# BEGIN: Charter B - Streaming Failure Classification Tests
+# ============================================================
+
+
+def test_a_streamed_error_response_is_classified_rather_than_crashing() -> None:
+    """A streamed non-200 must produce an AVA failure code, not an httpx error.
+
+    A streamed response carries no body until it is read, so classification
+    that inspects the structured provider error has to read it first. Skipping
+    that read turns a plain "model not found" into an opaque
+    ``ResponseNotRead``, which is how a misconfigured streaming model used to
+    surface as a generic ``agent_failed`` with no actionable code.
+    """
+
+    body = b'{"error":{"code":"model_not_found","message":"no such model"}}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # A stream-backed body is unread, exactly like a real provider
+        # response; an eagerly-built ``json=`` body would hide the defect.
+        return httpx.Response(404, stream=httpx.ByteStream(body))
+
+    async def scenario() -> ModelProviderError:
+        provider = _configured_provider(
+            handler, capabilities=ModelCapabilities(chat=True, streaming=True)
+        )
+        request = ModelRequest(messages=[ModelMessage(role="user", content="Hi")])
+        with pytest.raises(ModelProviderError) as exc_info:
+            async for _ in provider.stream(request):
+                pass
+        return exc_info.value
+
+    error = asyncio.run(scenario())
+    assert error.safe_code == FailureCode.MODEL_UNAVAILABLE
+    assert "model_not_found" not in str(error)
+
+
+def test_a_streamed_auth_failure_keeps_its_specific_code() -> None:
+    """Fine-grained error handling must hold on the streaming path too."""
+
+    body = b'{"error":{"message":"bad key"}}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, stream=httpx.ByteStream(body))
+
+    async def scenario() -> ModelProviderError:
+        provider = _configured_provider(
+            handler, api_key="secret", capabilities=ModelCapabilities(chat=True, streaming=True)
+        )
+        request = ModelRequest(messages=[ModelMessage(role="user", content="Hi")])
+        with pytest.raises(ModelProviderError) as exc_info:
+            async for _ in provider.stream(request):
+                pass
+        return exc_info.value
+
+    error = asyncio.run(scenario())
+    assert error.safe_code == FailureCode.PROVIDER_AUTHENTICATION_FAILED
+    assert "secret" not in str(error)
+
+
+# ============================================================
+# END: Charter B - Streaming Failure Classification Tests
 # ============================================================

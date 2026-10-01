@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from ava.agents.adapters.native.native_agent import NativeAgentAdapter
 from ava.api.app import create_app
 from ava.contracts.capabilities import CapabilityName
+from ava.contracts.failures import FailureCode
 from ava.contracts.models import (
     ModelCapabilities,
     ModelInfo,
@@ -128,8 +129,19 @@ def test_cancellation_and_single_terminal_lifecycle(external_cancel: bool) -> No
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("error", [None, ModelProviderError("secret URL"), RuntimeError("secret key")])
-def test_http_native_lifecycle(monkeypatch: pytest.MonkeyPatch, error: Exception | None) -> None:
+@pytest.mark.parametrize(
+    "error,expected_code",
+    [
+        (None, None),
+        # A classified provider failure keeps its own code rather than widening.
+        (ModelProviderError("secret URL"), FailureCode.PROVIDER_REQUEST_FAILED),
+        # An unclassified exception still takes the generic safety net.
+        (RuntimeError("secret key"), FailureCode.AGENT_FAILED),
+    ],
+)
+def test_http_native_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, error: Exception | None, expected_code: str | None
+) -> None:
     provider = TestProvider(error)
     registry = ModelProviderRegistry()
     registry.register("local", provider)
@@ -152,7 +164,7 @@ def test_http_native_lifecycle(monkeypatch: pytest.MonkeyPatch, error: Exception
             assert [e["event_type"] for e in events] == [
                 "run_started", "message_started", "run_failed",
             ]
-            assert events[-1]["payload"]["error_code"] == "agent_failed"
+            assert events[-1]["payload"]["error_code"] == expected_code
         else:
             assert [e["event_type"] for e in events] == [
                 "run_started", "message_started", "message_content", "run_completed",

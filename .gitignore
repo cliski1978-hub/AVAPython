@@ -56,3 +56,19 @@ training/tools/
 training/outputs/
 training/deployment/*.gguf
 training/deployment/*-merged/
+
+# Live AVA database (user conversations, runs, events) — local state only
+backend/ava.sqlite3
+backend/ava.sqlite3-*
+
+# Audit scratch workspace: a full checkout plus vendored .venv, pnpm and
+# uv caches, and Rust target/ artifacts (~2.5 GB, 68k files). The written
+# audit reports under audit/*.md are tracked; this directory is not.
+audit/phase1-5-reaudit/
+
+# Intermediate document render artifacts (regenerate from source)
+tmp/
+
+# Regenerable audit evidence (raw command output) and generated review PDFs
+audit/evidence/
+output/

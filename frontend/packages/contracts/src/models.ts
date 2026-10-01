@@ -62,6 +62,11 @@ export interface ModelCapabilities {
 export interface ModelDiscoveryResponse {
   contract_version: ContractVersion;
   models: ModelInfo[];
+  /**
+   * The configured model the application defaults select, or null when no
+   * default is configured. Mirrors `default_runtime_id` on `/runtimes`.
+   */
+  default_model_id?: string | null;
 }
 
 export interface ModelMessage {

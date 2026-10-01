@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { defaultTheme } from "@ava/ui-core";
+import type { SettingsSectionId } from "@ava/ui-core";
 import type { ConversationMessage, UIRunPhase } from "../types";
+import { isActiveRunPhase } from "../lib/runActions";
 import { NEAR_BOTTOM_PX } from "../state/conversationReducer";
 import { AssistantMessage } from "./AssistantMessage";
 import { UserMessage } from "./UserMessage";
@@ -10,6 +12,7 @@ export interface MessageListProps {
   runPhase?: UIRunPhase;
   onRetryMessage?: (messageId: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
+  onOpenSettings?: (section: SettingsSectionId) => void;
 }
 
 const t = defaultTheme;
@@ -48,9 +51,14 @@ export function MessageList({
   runPhase,
   onRetryMessage,
   onRegenerateMessage,
+  onOpenSettings,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const nearBottomRef = useRef(true);
+
+  // A run that owns the conversation blocks retry and regenerate: both actions
+  // would start a competing attempt against the same turn.
+  const attemptBlocked = isActiveRunPhase(runPhase);
 
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const anchor =
@@ -103,6 +111,8 @@ export function MessageList({
                 content={message.content}
                 status={message.status ?? "complete"}
                 error={message.error}
+                errorCode={message.errorCode}
+                onOpenSettings={onOpenSettings}
                 progressLabel={assistantProgressLabel(runPhase)}
                 onRetry={
                   onRetryMessage != null
@@ -114,6 +124,7 @@ export function MessageList({
                     ? () => onRegenerateMessage(message.id)
                     : undefined
                 }
+                actionsDisabled={attemptBlocked}
               />
             ) : (
               <SystemMessage content={message.content} />

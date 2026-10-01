@@ -69,13 +69,22 @@ describe("applyRunEvent", () => {
     ]);
   });
 
-  it("maps run_failed to failed phase + backend status + message failed", () => {
-    const effects = applyRunEvent(event("run_failed"));
+  it("maps run_failed to failed state and an AVA-owned error message", () => {
+    const effects = applyRunEvent(event("run_failed", { error_code: "execution_interrupted" }));
     expect(effects).toEqual([
       { kind: "setPhase", phase: "failed" },
       { kind: "setBackendStatus", backendStatus: "failed" },
       { kind: "setMessageStatus", messageStatus: "failed" },
+      { kind: "setMessageError", error: "The backend restarted before this response finished. You can retry the request.", errorCode: "execution_interrupted" },
     ]);
+  });
+
+  it("uses a stable generic message for unknown run failure metadata", () => {
+    expect(applyRunEvent(event("run_failed", { error_code: "provider_trace" }))).toContainEqual({
+      kind: "setMessageError",
+      error: "Something prevented this response from completing.",
+      errorCode: "provider_trace",
+    });
   });
 
   it("ignores unknown AVA event types so future events are safe", () => {

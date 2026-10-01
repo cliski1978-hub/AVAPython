@@ -316,6 +316,63 @@ def test_legacy_override_is_explicit_not_a_persisted_default(setup):
     assert result.model_binding.model_id == "bootstrap-model"
 
 
+def test_omitted_execution_still_resolves_persisted_defaults(setup):
+    """The default path is unchanged: no override means persisted defaults."""
+    save_defaults(setup)
+    result = setup["selector"].resolve()
+    assert result.source is ExecutionConfigurationSource.PERSISTED
+    assert result.model_binding.model_id == "configured-model"
+    assert result.runtime_configuration_id == "configured-runtime"
+    assert result.provider_connection_id == "configured-connection"
+
+
+def test_partial_runtime_override_keeps_persisted_model_and_provider(setup):
+    """Naming only a runtime must not silently swap the configured model.
+
+    ``Model: application default`` means the persisted application default. It
+    used to resolve through the bootstrap catalog instead, so the run executed
+    the same underlying model but recorded its bootstrap identity, losing the
+    configured provider connection and misreporting where execution came from.
+    """
+    save_defaults(setup)
+    result = setup["selector"].resolve(RunExecutionOverride(runtime_id="openhands"))
+    assert result.runtime is setup["registry"].get("openhands")
+    assert result.model_binding.model_id == "configured-model"
+    assert result.model_profile.capabilities.tool_calling is True
+    assert result.source is ExecutionConfigurationSource.PERSISTED
+    assert result.provider_connection_id == "configured-connection"
+    # No configured runtime instance backs an explicitly chosen adapter key.
+    assert result.runtime_configuration_id is None
+
+
+def test_partial_model_override_keeps_the_persisted_runtime_instance(setup):
+    """Naming only a model must not swap the configured runtime back to bootstrap."""
+    save_defaults(setup)
+    result = setup["selector"].resolve(RunExecutionOverride(model_id="bootstrap-model"))
+    assert result.model_binding.model_id == "bootstrap-model"
+    assert result.source is ExecutionConfigurationSource.BOOTSTRAP
+    assert result.provider_connection_id is None
+    assert result.runtime is setup["registry"].get("native")
+    assert result.runtime_configuration_id == "configured-runtime"
+
+
+def test_runtime_override_naming_the_persisted_runtime_keeps_its_configured_instance(setup):
+    save_defaults(setup)
+    result = setup["selector"].resolve(RunExecutionOverride(runtime_id="native"))
+    assert result.runtime_configuration_id == "configured-runtime"
+    assert result.model_binding.model_id == "configured-model"
+    assert result.source is ExecutionConfigurationSource.PERSISTED
+
+
+def test_partial_override_is_absent_without_persisted_defaults(setup):
+    """With nothing persisted there is nothing to keep, so bootstrap still answers."""
+    result = setup["selector"].resolve(RunExecutionOverride(runtime_id="openhands"))
+    assert result.source is ExecutionConfigurationSource.BOOTSTRAP
+    assert result.model_binding.model_id == "bootstrap-model"
+    assert result.provider_connection_id is None
+    assert result.runtime is setup["registry"].get("openhands")
+
+
 def test_hosting_policy_rejects_saved_model_before_credentials_or_provider_construction(setup, monkeypatch):
     save_defaults(setup)
     resolver = create_execution_configuration_resolver(
@@ -339,3 +396,171 @@ def test_repository_failure_is_not_absence(setup, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="storage unavailable"):
         setup["selector"].resolve()
+
+
+# ============================================================
+# Explicitly chosen configured models
+# ============================================================
+
+
+def _add_model(setup, model_id, *, provider_model_name, enabled=True):
+    """Persist a second configured model on the same provider connection."""
+    configuration = ModelConfiguration(
+        model_id,
+        setup["connection"].provider_connection_id,
+        provider_model_name,
+        f"Display {model_id}",
+        ModelHostingMode.LOCAL,
+        ModelCapabilities(chat=True),
+        enabled,
+    )
+    setup["persistence"].model_configuration_repository.create(configuration)
+    return configuration
+
+
+def test_an_explicitly_chosen_configured_model_runs_that_exact_record(setup):
+    # The defect: a model added in Settings could not be chosen at all. Naming it
+    # must resolve the persisted record, not the bootstrap model that shares a
+    # provider.
+    save_defaults(setup)
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+
+    result = setup["selector"].resolve(RunExecutionOverride(model_id="second-model"))
+
+    assert result.source is ExecutionConfigurationSource.PERSISTED
+    assert result.model_binding.model_id == "second-model"
+    assert result.model_binding.provider_model_name == "vendor/second"
+    assert result.model_profile.display_name == "Display second-model"
+    assert result.provider_connection_id == setup["connection"].provider_connection_id
+
+
+def test_configured_models_are_chosen_independently_of_the_application_default(setup):
+    save_defaults(setup)
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+
+    result = setup["selector"].resolve(RunExecutionOverride(model_id="second-model"))
+
+    # The saved default is still the first model; the explicit choice wins.
+    assert setup["defaults"].default_model_id == "configured-model"
+    assert result.model_binding.model_id == "second-model"
+
+
+def test_several_configured_models_behind_one_connection_are_each_selectable(setup):
+    save_defaults(setup)
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+    _add_model(setup, "third-model", provider_model_name="vendor/third")
+
+    seen = {
+        model_id: setup["selector"].resolve(RunExecutionOverride(model_id=model_id)).model_binding.provider_model_name
+        for model_id in ("configured-model", "second-model", "third-model")
+    }
+
+    assert seen == {
+        "configured-model": "vendor/deployment",
+        "second-model": "vendor/second",
+        "third-model": "vendor/third",
+    }
+
+
+def test_a_configured_model_is_selectable_before_any_defaults_are_saved(setup):
+    # Adding a model in Settings must not depend on the user also having set an
+    # application default.
+    assert setup["resolver"].resolve_persisted() is None
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+
+    result = setup["selector"].resolve(RunExecutionOverride(model_id="second-model"))
+
+    assert result.source is ExecutionConfigurationSource.PERSISTED
+    assert result.model_binding.provider_model_name == "vendor/second"
+
+
+def test_a_disabled_configured_model_fails_loudly_rather_than_falling_back(setup):
+    # Silent substitution would run something the user did not ask for.
+    save_defaults(setup)
+    _add_model(setup, "off-model", provider_model_name="vendor/off", enabled=False)
+
+    with pytest.raises(ConfiguredReferenceDisabledError):
+        setup["selector"].resolve(RunExecutionOverride(model_id="off-model"))
+
+
+def test_an_unknown_model_id_still_resolves_through_the_legacy_catalog(setup):
+    # Bootstrap ids are still selectable; only configured records take priority.
+    save_defaults(setup)
+    result = setup["selector"].resolve(RunExecutionOverride(model_id="bootstrap-model"))
+
+    assert result.source is ExecutionConfigurationSource.BOOTSTRAP
+    assert result.model_binding.model_id == "bootstrap-model"
+
+
+def test_a_configured_model_keeps_an_explicit_runtime_and_rejects_a_conflicting_provider(setup):
+    save_defaults(setup)
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+
+    combined = setup["selector"].resolve(RunExecutionOverride(runtime_id="native", model_id="second-model"))
+    assert combined.runtime is setup["registry"].get("native")
+    assert combined.model_binding.model_id == "second-model"
+
+    with pytest.raises(ValueError, match="same provider"):
+        setup["selector"].resolve(
+            RunExecutionOverride(model_id="second-model", model_provider_id="some-other-provider")
+        )
+
+
+def test_a_configured_model_on_a_disabled_connection_is_rejected(setup):
+    save_defaults(setup)
+    _add_model(setup, "second-model", provider_model_name="vendor/second")
+    disabled = setup["persistence"].provider_connection_repository.get(setup["connection"].provider_connection_id)
+    setup["persistence"].provider_connection_repository.update(replace(disabled, enabled=False))
+
+    with pytest.raises(ConfiguredReferenceDisabledError):
+        setup["selector"].resolve(RunExecutionOverride(model_id="second-model"))
+
+
+# ============================================================
+# BEGIN: Charter B - declared streaming capability must reach the adapter
+# ============================================================
+
+
+def test_a_configured_streaming_model_reaches_the_provider_adapter_as_streaming(setup):
+    """The profile is only half the contract; the adapter must report it too.
+
+    ``NativeRuntime.execute_streaming`` branches on
+    ``model_provider.get_capabilities().streaming``. If resolution drops the
+    operator's declared capabilities, the adapter reports chat-only and every
+    configured streaming model silently completes in one shot at the end.
+    """
+    streaming_model = ModelConfiguration(
+        "streaming-model",
+        setup["connection"].provider_connection_id,
+        "vendor/streaming",
+        "Streaming model",
+        ModelHostingMode.COMPANY_HOSTED,
+        ModelCapabilities(chat=True, streaming=True),
+    )
+    setup["persistence"].model_configuration_repository.create(streaming_model)
+    setup["persistence"].execution_defaults_repository.set(
+        ApplicationExecutionDefaults(
+            setup["connection"].provider_connection_id,
+            streaming_model.model_id,
+            setup["runtime"].runtime_configuration_id,
+        )
+    )
+
+    resolved = setup["resolver"].resolve_required()
+
+    assert resolved.model_profile.capabilities.streaming is True
+    assert resolved.model_provider.get_capabilities().streaming is True
+
+
+def test_a_configured_model_without_declared_streaming_stays_chat_only(setup):
+    """The conservative default must survive resolution unchanged."""
+    save_defaults(setup)
+    resolved = setup["resolver"].resolve_required()
+    assert setup["model"].capabilities.streaming is False
+    assert resolved.model_provider.get_capabilities().streaming is False
+    assert resolved.model_provider.get_capabilities().chat is True
+
+
+# ============================================================
+# END: Charter B - declared streaming capability must reach the adapter
+# ============================================================

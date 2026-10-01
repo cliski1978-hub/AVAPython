@@ -70,6 +70,14 @@ class RunRecord:
 # ============================================================
 
 
+class ActiveConversationRunError(ValueError):
+    """A conversation already owns an active run."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        super().__init__(f"Conversation already has an active run: {conversation_id}")
+
+
 class RunRepository(ABC):
     """Port that durable run-state repositories must satisfy.
 
@@ -131,13 +139,59 @@ class RunRepository(ABC):
         """
         raise NotImplementedError
 
-    def list_active(self) -> Collection[RunRecord]:
-        """Return active snapshots in deterministic creation/id order.
+    def list_run_ids(self) -> list[str]:
+        """Return the identifiers of every run this repository can read.
 
-        A default keeps older test/third-party ports source-compatible; durable
-        production repositories override it with the actual active-run query.
+        Phase 5.30 needs active-run discovery at cold start, and discovery needs
+        enumeration: no combination of ``get`` calls can reveal runs nobody asks
+        about by id.
+
+        This is a *capability probe*, deliberately not an empty default. A
+        repository that answered ``()`` here would make cold-start recovery
+        believe a database full of stranded runs held nothing at all, and
+        recovery would then serve stale ``running`` state as if it were
+        healthy. Failing loudly keeps that impossible, while remaining
+        source-compatible: an implementation that does not override this stays
+        instantiable, and is only unusable for discovery.
+
+        Implementations may instead override :meth:`list_active` directly with a
+        cheaper query and never call this.
+
+        Returns:
+            Every run identifier known to this repository.
+
+        Raises:
+            NotImplementedError: If the repository supports neither
+                :meth:`list_run_ids` nor an overriding :meth:`list_active`.
         """
-        return ()
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement list_run_ids() or override list_active(): "
+            "active-run discovery cannot be answered with an empty result"
+        )
+
+    def list_active(self) -> Collection[RunRecord]:
+        """Return every active run snapshot in deterministic creation/id order.
+
+        Used by cold-start recovery (Phase 5.30) to find runs whose execution
+        owner was lost with the previous process.
+
+        The default is a correct generic implementation — not an empty result —
+        so an implementation gains active-run discovery by implementing
+        :meth:`list_run_ids` and nothing else. It asks the record itself whether
+        it is active, through :attr:`RunStatus.is_active`, so the active set is
+        the canonical one rather than a second list of status strings kept
+        somewhere else. It is read-only and its ordering makes a recovery pass
+        reproducible.
+
+        Production repositories override this with an optimized query that
+        filters in the persistence layer instead of loading every run.
+        """
+        records = (
+            record
+            for run_id in self.list_run_ids()
+            if (record := self.get(run_id)) is not None and record.status.is_active
+        )
+        return sorted(records, key=lambda record: (record.created_at, record.run_id))
 
     @abstractmethod
     def update_status(self, run_id: str, status: RunStatus) -> RunRecord | None:

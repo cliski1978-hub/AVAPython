@@ -1,10 +1,11 @@
 # AVA — Canonical Development Plan
 ## Current State to Product Completion
 
-**Status:** Canonical Forward Development Plan  
-**Reoriented:** 2026-09-18  
-**Current Position:** Phase 3 COMPLETE / PASS  
-**Next Phase:** Phase 4 — Durable Application State  
+**Status:** Canonical Forward Development Plan
+**Reoriented:** 2026-09-18
+**Last updated:** Phase 5 closure (5.41)
+**Current Position:** Phase 5 COMPLETE / PASS
+**Next Phase:** Phase 6 — Complete Document Platform
 **Development Principle:** Product capability first; infrastructure only when it directly enables the product.
 
 ---
@@ -15,7 +16,7 @@ This document defines AVA's development path from its current verified state thr
 
 It replaces the drift that occurred when backend runtime/model architecture advanced significantly beyond the user-facing application.
 
-The work completed in Phase 3 is retained. It is not rolled back or redesigned.
+The work completed in Phases 1–5 is retained. It is not rolled back or redesigned.
 
 From this point forward, development returns to the original AVA product direction:
 
@@ -173,6 +174,190 @@ AgentPort
 
 ---
 
+## Phase 4 — Durable Application State / Production Run Foundation
+
+**Status: ✅ COMPLETE / PASS**
+
+Completed: AVA-owned repository ports; version-controlled relational migrations;
+SQLite development persistence with isolated in-memory adapters for tests;
+durable conversations, messages, runs, run events, documents, document
+revisions, and attachment metadata, with attachment *content* stored
+independently of attachment metadata.
+
+Exit condition met: restarting the backend preserves conversations, runs,
+events, and documents; Web and Desktop reopen persisted state; no persistence
+technology leaks into AVA Core.
+
+Evidence: `docs/AVA_Phase_4_Implementation_Log.md`.
+
+---
+
+## Phase 5 — Production Configuration and Conversation/Run Experience
+
+**Status: ✅ COMPLETE / PASS**
+
+Phase 5 grew beyond its original one-line summary. It delivered two connected
+bodies of work:
+
+```text
+A. Persistent production configuration and execution configuration
+B. Production conversation, context, and run experience
+```
+
+Delivered in A: persisted `ProviderConnection`, `ModelConfiguration`, and
+`RuntimeConfiguration` records plus execution defaults; credential *references*
+that never persist secret values and resolve at execution time;
+`ExecutionConfigurationResolver` as the single owner of persisted execution
+resolution; atomic configuration bootstrap for compatibility; and the explicit
+rule that **persisted settings are authoritative when configured** and that
+bootstrap/environment configuration is *not* a silent fallback from invalid
+saved settings.
+
+Delivered in B: normalized durable `Conversation → source user Message → Run →
+assistant Message → Run Events` relationships; server-authoritative context
+construction and deterministic, model-aware context-window management; a
+normalized durable run lifecycle with durable cancellation *intent*; an SSE
+streaming transport with a persisted `RunEvent.sequence` cursor and replay;
+partial assistant persistence where `Message.content` is the durable authority;
+reconnect/resume; refresh recovery; explicit backend-restart recovery semantics
+(`execution_interrupted`); retry/regenerate across durable runs; two-layer
+stale-event protection; server-enforced one-active-run-per-conversation;
+AVA-owned normalized failure and configuration-remediation UX; a four-section
+Settings surface; Web and Desktop acceptance; restart/durability integration
+evidence; and race/concurrency hardening.
+
+Phase 5 also found and fixed a severe shared-SQLite-connection defect and, at
+full validation, an architecture regression where `RunService` had come to
+import `ava.execution` — the error contract was moved to `ava.agents.contracts`
+rather than the guard being weakened.
+
+Phase 5 did **not** implement authentication, RAG, a tool framework, plugin
+architecture, distributed run ownership, voice, agent-driven document
+operations, or advanced routing. Those remain later phases in this roadmap.
+
+- Closure record: [`docs/AVA_Phase_5_Complete_Documentation.md`](AVA_Phase_5_Complete_Documentation.md)
+- Validation record: [`docs/AVA_Phase_5_40_Full_Validation.md`](AVA_Phase_5_40_Full_Validation.md)
+- Per-step implementation records: `docs/AVA_Phase_5_16_*` … `docs/AVA_Phase_5_39_*`
+
+---
+
+# 3A. Current Verified State
+
+Verified as of Phase 5 closure. This replaces the pre-Phase-4 "current state"
+text; it is not a projection of planned work.
+
+## Backend
+
+```text
+durable repository architecture with AVA-owned ports
+SQLite relational development persistence + versioned migrations
+in-memory adapters retained for deterministic tests
+persisted provider / model / runtime / execution-default settings
+credential references (secret values never persisted)
+ExecutionConfigurationResolver + atomic configuration bootstrap
+durable conversation → user message → run → assistant message relationships
+server-authoritative context construction
+deterministic, model-aware context-window management
+normalized durable run lifecycle
+durable cancellation intent
+persisted event sequencing and replay
+SSE streaming transport
+partial assistant persistence
+reconnect / resume
+refresh run recovery
+backend-restart recovery (execution_interrupted)
+retry / regenerate across durable runs
+stale-event protection (runEpoch + loadGenerationRef)
+one-active-run-per-conversation guard
+normalized durable failure codes and presentation
+```
+
+## Frontend
+
+```text
+shared ChatGPT/Claude-style workspace composition
+durable conversations
+streaming partial assistant responses
+reconnect / resume
+refresh run recovery
+retry / regenerate
+normalized failure UX
+four-section Settings surface with Open Settings remediation
+Web shell
+Desktop thin Tauri shell
+```
+
+## Current API surface (source-verified)
+
+Verified from `backend/src/ava/api/routes/`, not from memory:
+
+```text
+GET    /health
+GET    /capabilities
+
+POST   /conversations
+GET    /conversations
+GET    /conversations/{conversation_id}
+PATCH  /conversations/{conversation_id}
+POST   /conversations/{conversation_id}/messages
+GET    /conversations/{conversation_id}/messages
+
+POST   /runs                              (202 Accepted; durable run identity)
+GET    /runs/{run_id}                     (authoritative run snapshot)
+GET    /runs/{run_id}/stream              (SSE observer transport)
+GET    /runs/{run_id}/events              (persisted replay; ?after_sequence=N)
+POST   /runs/{run_id}/cancel              (durable cancellation intent)
+
+GET    /settings/providers
+POST   /settings/providers
+GET    /settings/providers/{provider_connection_id}
+PUT    /settings/providers/{provider_connection_id}
+GET    /settings/models
+POST   /settings/models
+GET    /settings/models/{model_id}
+PUT    /settings/models/{model_id}
+GET    /settings/runtimes
+POST   /settings/runtimes
+GET    /settings/runtimes/{runtime_configuration_id}
+PUT    /settings/runtimes/{runtime_configuration_id}
+GET    /settings/defaults
+PUT    /settings/defaults
+
+POST   /documents
+GET    /documents
+GET    /documents/{document_id}
+PATCH  /documents/{document_id}
+GET    /documents/{document_id}/revisions
+GET    /documents/{document_id}/revisions/{revision_id}
+
+POST   /attachments
+GET    /attachments
+GET    /attachments/{attachment_id}
+GET    /attachments/{attachment_id}/content
+
+GET    /workspaces
+GET    /model-providers
+GET    /models
+GET    /runtimes
+GET    /execution-profiles
+```
+
+## Verified validation baseline
+
+```text
+Backend        2153 collected / 2151 passed / 0 failed / 2 skipped / 4 warnings
+Frontend       69 test files / 685 passed / 0 failed / 4 skipped / 689 collected
+Architecture   backend 124 passed; frontend guards 17 passed
+Static         Ruff PASS; mypy PASS (181 files); frontend tsc PASS (10/10)
+Builds         Web PASS (199 modules); Desktop PASS (199 modules)
+Client         10 passed; Ruff PASS; mypy PASS
+Aggregate      ./scripts/test_all.sh PASS (exit 0)
+```
+
+See `docs/AVA_Phase_5_40_Full_Validation.md`.
+
+---
+
 # 4. Development Rules From This Point Forward
 
 Every new phase must follow these rules:
@@ -199,8 +384,13 @@ Every new phase must follow these rules:
 
 # 5. Phase 4 — Durable Application State
 
-**Priority:** IMMEDIATE  
-**Status:** ⬜ NOT STARTED
+**Priority:** DELIVERED
+**Status:** ✅ COMPLETE / PASS
+
+> Completed as **Durable Application State / Production Run Foundation**. See
+> [Phase 4 in Completed Development](#phase-4--durable-application-state--production-run-foundation)
+> and `docs/AVA_Phase_4_Implementation_Log.md`. The text below is retained as
+> the original objective and exit criteria.
 
 ## Objective
 
@@ -284,7 +474,16 @@ Persist:
 
 # 6. Phase 5 — Production Conversation, Context, and Run Experience
 
-**Status:** ⬜ NOT STARTED
+**Status:** ✅ COMPLETE / PASS
+
+> Completed. Phase 5 delivered **two** connected areas, not only streaming:
+> (A) persistent production/execution configuration with credential references
+> and `ExecutionConfigurationResolver`, and (B) the production
+> conversation/context/run experience. The authoritative record is
+> [`docs/AVA_Phase_5_Complete_Documentation.md`](AVA_Phase_5_Complete_Documentation.md);
+> validation is
+> [`docs/AVA_Phase_5_40_Full_Validation.md`](AVA_Phase_5_40_Full_Validation.md).
+> The original objective and exit criteria are retained below.
 
 ## Objective
 
@@ -405,7 +604,9 @@ A user can:
 
 # 7. Phase 6 — Complete Document Platform
 
-**Status:** ⬜ FOUNDATION EXISTS
+**Status:** ⬜ FOUNDATION EXISTS — **NEXT**
+
+> This is the next development phase. No Phase 6 implementation has started.
 
 ## Objective
 
@@ -1304,10 +1505,10 @@ The canonical sequence from the current state is:
 ✅ Phase 1   Foundation
 ✅ Phase 2   Core AI UX / Workspace Foundation
 ✅ Phase 3   Runtime / Model / Security Foundation
+✅ Phase 4   Durable Application State / Production Run Foundation
+✅ Phase 5   Production Configuration + Conversation / Context / Runs
 
-⬜ Phase 4   Durable Application State
-⬜ Phase 5   Production Conversation / Context / Runs
-⬜ Phase 6   Complete Document Platform
+⬜ Phase 6   Complete Document Platform                ← NEXT
 ⬜ Phase 7   Agent-Driven Document Operations
 ⬜ Phase 8   Review and Approval
 ⬜ Phase 9   AVA Tool Framework
@@ -1359,27 +1560,39 @@ They improve the platform but are not prerequisites for AVA to be considered a c
 
 # 27. Immediate Next Development Phase
 
-## Phase 4 — Durable Application State
+## Phase 6 — Complete Document Platform
 
-The first bounded implementation step should be:
+Phases 1–5 are complete. The next bounded implementation step is Phase 6, the
+Complete Document Platform (see §7 for its objective and exit criteria).
 
-```text
-Define AVA-owned repository ports and persistence ownership
-```
-
-Start with the domains already present in memory:
+The first bounded step should be:
 
 ```text
-Conversation
-Message
-Run
-RunEvent
-Document
+Define the complete document API surface and its contract-first boundaries
 ```
 
-Then add the first concrete persistence adapter.
+AVA already has durable documents, document revisions, and a
+Tiptap-containing `@ava/document-core` package. Phase 6 completes that platform
+rather than inventing it:
 
-Do **not** begin RAG, adaptive routing, additional runtimes, model training, or enterprise integration during this step.
+```text
+Document lifecycle and metadata completeness
+Import
+Export
+Multi-document workspace
+Version history
+```
+
+Two rules carry forward from Phase 5 and apply directly:
+
+* `Tiptap` stays internal to `@ava/document-core`; the editor must not leak into
+  contracts, shells, or other shared packages.
+* Documents are durable state like conversations and runs — behind
+  AVA-owned repositories, never a persistence-technology leak.
+
+Do **not** begin agent-driven document operations (Phase 7), review/approval
+(Phase 8), the tool framework (Phase 9), RAG (Phase 10), or any
+enterprise/authentication work during this step.
 
 ---
 
@@ -1498,6 +1711,51 @@ Future Specialist Applications
 
 All of these remain capabilities of **one AVA platform**.
 
+### Clarified by Phase 4–5 implementation (rules unchanged)
+
+Phase 4 and Phase 5 added two layers to the diagram above. Neither changes the
+North Star or any permanent separation:
+
+```text
+below the application:
+  AVA-owned repositories → durable conversations, messages, runs, run events,
+  documents, revisions, attachment metadata, and configuration records
+  (persistence technology never leaks into AVA Core)
+
+above AgentPort, behind it:
+  ExecutionConfigurationResolver — resolves persisted provider / model /
+  runtime configuration to an execution selection
+  (the runtime remains a separate concern from the model provider)
+```
+
+The permanent rules this preserves:
+
+```text
+Agent Runtime ≠ Model Provider
+Model Provider ≠ Model
+Provider ≠ Provider Connection
+Model ≠ Inference Runtime
+Workspace ≠ Runtime
+Tool Permission ≠ Runtime Capability
+
+RunService → AgentPort   (unchanged; now actively enforced)
+```
+
+Model selection still never widens filesystem, workspace, shell, network, tool
+permission, or credential access. Vendor and framework-specific types remain
+behind adapters. Web and Desktop remain thin shells. Shared frontend packages
+remain the implementation center. `Tiptap` remains internal to
+`@ava/document-core`. No additional frontend state-management library was
+introduced.
+
+The one rule Phase 5 made explicit, because ambiguity there produces silent
+misconfiguration:
+
+```text
+persisted configuration, once configured, is authoritative
+bootstrap / environment configuration is compatibility, not a silent fallback
+```
+
 ---
 
 # 31. Final Direction
@@ -1508,7 +1766,7 @@ The priority is no longer to prove that AVA can support future models and runtim
 
 The priority is to make AVA a complete application.
 
-From Phase 4 forward, every major infrastructure change should answer one question:
+From Phase 6 forward, every major infrastructure change should answer one question:
 
 > **What user-facing AVA capability does this enable now?**
 

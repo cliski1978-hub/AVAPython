@@ -8,6 +8,7 @@ AVA-owned contracts (see ava.contracts.models).
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 from ava.contracts.models import (
     ModelCapabilities,
@@ -76,6 +77,18 @@ class ModelProviderPort(ABC):
             An AVA-owned ModelResponse contract.
         """
         raise NotImplementedError
+
+    async def stream(
+        self, request: ModelRequest, *, model_name: str | None = None
+    ) -> AsyncIterator[str]:
+        """Yield provider-originated text deltas.
+
+        Providers without a streaming transport retain a truthful final-only
+        fallback; streaming-capable adapters override this method.
+        """
+        response = await self.generate(request, model_name=model_name)
+        if response.content:
+            yield response.content
 
 
 # ============================================================

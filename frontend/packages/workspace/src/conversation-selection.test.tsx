@@ -724,9 +724,11 @@ describe("conversation selection and message hydration", () => {
     expect(
       document.querySelector('[data-conversation-error]'),
     ).not.toBeNull();
+    // AVA-owned wording only: the transport's own text is never surfaced.
     expect(
       document.querySelector('[data-conversation-error]')!.textContent,
-    ).toContain("backend down");
+    ).toContain("Unable to rename conversation.");
+    expect(document.body.textContent).not.toContain("backend down");
   });
 
   it("regenerate keeps one visible assistant response after navigating away and back", async () => {
@@ -873,17 +875,22 @@ describe("conversation selection and message hydration", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Regenerate response" }),
     );
+    // A rejected creation has no durable run, so it cannot produce a failed
+    // assistant response: the prior transcript must be left exactly as it was,
+    // and the raw transport text must never reach the user.
     await waitFor(() => {
-      expect(
-        document.querySelector('[data-message-state="failed"]'),
-      ).not.toBeNull();
+      expect(screen.getAllByText("Answer One")).toHaveLength(1);
     });
+    expect(
+      Array.from(document.querySelectorAll("[data-message-state]")).map((element) =>
+        element.getAttribute("data-message-state"),
+      ),
+    ).not.toContain("failed");
+    expect(document.body.textContent).not.toContain("backend down");
     expect(messageElements("assistant")).toHaveLength(1);
     expect(messageElements("user")).toHaveLength(1);
-    expect(
-      document.querySelector('[data-testid="assistant-message-error"]')
-        ?.textContent,
-    ).toContain("AVA is unavailable. Please try again.");
+    // The failure is reported as run state, never as raw transport prose.
+    expect(document.querySelector('[data-testid="assistant-message-error"]')).toBeNull();
 
     fireEvent.click(conversationItem("conversation-1"));
     await waitFor(() => {

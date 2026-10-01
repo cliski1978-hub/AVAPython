@@ -134,7 +134,7 @@ def test_same_runtime_accepts_different_provider_instances() -> None:
 ])
 def test_runtime_result_serializes_minimal_internal_contract(status: RunStatus, content: str | None) -> None:
     result = RuntimeRunResult(status=status, content=content)
-    assert result.model_dump(mode="json") == {"status": status.value, "content": content}
+    assert result.model_dump(mode="json") == {"status": status.value, "content": content, "failure_code": None}
     assert RuntimeRunResult.model_validate_json(result.model_dump_json()) == result
-    assert set(RuntimeRunResult.model_fields) == {"status", "content"}
+    assert set(RuntimeRunResult.model_fields) == {"status", "content", "failure_code"}
     assert RuntimeRunResult(status=status).content is None

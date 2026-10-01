@@ -232,10 +232,17 @@ class ModelDiscoveryResponse(BaseModel):
     hosting placement, declared capabilities, and the enabled flag. Provider
     connection data (provider-native model name, endpoint, credential) and any
     security/permission fields are never present.
+
+    ``default_model_id`` reports which configured model the application defaults
+    select, mirroring the ``default_runtime_id`` and ``default_provider_id`` that
+    ``/runtimes`` and ``/model-providers`` already publish. A client can then
+    label its "application default" option with the concrete model it resolves
+    to without reading settings configuration.
     """
 
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
     models: list[ModelInfo]
+    default_model_id: str | None = None
 
 
 # ============================================================

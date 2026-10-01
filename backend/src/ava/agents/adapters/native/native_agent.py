@@ -7,10 +7,11 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ava.agents.contracts import AgentPort, AgentRunResult
+from ava.agents.contracts import AgentPort, AgentRunResult, ExecutionConfigurationError
 from ava.contracts.capabilities import CapabilityName
 from ava.contracts.conversations import RunContext, execution_context_messages
 from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.failures import FailureCode
 from ava.contracts.models import ModelHostingMode
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
@@ -126,8 +127,16 @@ class NativeAgentAdapter(AgentPort):
                 model_capabilities=execution.model_profile.capabilities,
             ).compatible:
                 return AgentRunResult(
-                    status=RunStatus.FAILED, content="Selected execution configuration is not compatible"
+                    status=RunStatus.FAILED,
+                    content="Selected execution configuration is not compatible",
+                    failure_code=FailureCode.CONFIGURATION_INVALID,
                 )
+        except ExecutionConfigurationError:
+            # A failure to resolve persisted execution already carries a precise
+            # reason that the run service maps to a public code. Swallowing it
+            # here would discard every configuration classification and collapse
+            # them into the generic code.
+            raise
         except Exception:
             return AgentRunResult(status=RunStatus.FAILED, content="Requested execution unavailable")
         try:
@@ -139,11 +148,16 @@ class NativeAgentAdapter(AgentPort):
             return AgentRunResult(
                 status=RunStatus.FAILED,
                 content=_CONTEXT_WINDOW_CONTENT,
+                failure_code=FailureCode.CONTEXT_WINDOW_EXCEEDED,
             )
         try:
             workspace: RuntimeWorkspaceBinding | None = self._resolve_workspace(request.workspace_id)
         except UnknownWorkspaceError:
-            return AgentRunResult(status=RunStatus.FAILED, content="Requested workspace is unavailable")
+            return AgentRunResult(
+                status=RunStatus.FAILED,
+                content="Requested workspace is unavailable",
+                failure_code=FailureCode.CONFIGURATION_INVALID,
+            )
         lease: ModelLease | None = None
         terminal_status = RunStatus.FAILED
         self._executions[run_id] = execution
@@ -152,7 +166,7 @@ class NativeAgentAdapter(AgentPort):
                 lease = await self._resource_manager.acquire(
                     execution.model_profile.model_id, profile=execution.model_profile
                 )
-            if on_content is None:
+            if on_content is None or not execution.model_profile.capabilities.streaming:
                 result = await execution.runtime.execute(
                     run_id=run_id,
                     request=request,
@@ -172,7 +186,12 @@ class NativeAgentAdapter(AgentPort):
                     context=bounded,
                 )
             terminal_status = result.status
-            return AgentRunResult(status=result.status, content=result.content, execution_selection=selection)
+            return AgentRunResult(
+                status=result.status,
+                content=result.content,
+                execution_selection=selection,
+                failure_code=result.failure_code,
+            )
         except asyncio.CancelledError:
             terminal_status = RunStatus.CANCELLED
             return AgentRunResult(status=RunStatus.CANCELLED, execution_selection=selection)

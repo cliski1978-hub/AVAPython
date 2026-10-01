@@ -1,4 +1,6 @@
 import { defaultTheme, LoadingIndicator, StatusIndicator } from "@ava/ui-core";
+import type { SettingsSectionId } from "@ava/ui-core";
+import { describeRunFailure, settingsSectionForFailure } from "../lib/errorPresentation";
 import type { CSSProperties } from "react";
 import type { MessageStatus } from "../types";
 import { MessageActions } from "./MessageActions";
@@ -8,10 +10,18 @@ export interface AssistantMessageProps {
   status: MessageStatus;
   /** User-readable failure detail to show when status is "failed". */
   error?: string;
+  errorCode?: string;
+  onOpenSettings?: (section: SettingsSectionId) => void;
   /** Retry a failed/cancelled response from its source prompt. */
   onRetry?: () => void;
   /** Regenerate a completed response from its source prompt. */
   onRegenerate?: () => void;
+  /**
+   * Whether a run currently owns the conversation. A new attempt is refused
+   * while one is in flight, so the action buttons are disabled rather than
+   * offered and then ignored.
+   */
+  actionsDisabled?: boolean;
   /** Progress label shown while a run is active (starting/stopping/pending). */
   progressLabel?: string;
 }
@@ -55,8 +65,11 @@ export function AssistantMessage({
   content,
   status,
   error,
+  errorCode,
+  onOpenSettings,
   onRetry,
   onRegenerate,
+  actionsDisabled = false,
   progressLabel = "AVA is responding…",
 }: AssistantMessageProps) {
   if (status === "pending" || status === "streaming") {
@@ -74,6 +87,9 @@ export function AssistantMessage({
   }
 
   if (status === "failed") {
+    // The taxonomy drives both the headline and whether retry is offered, so a
+    // failure the user can fix is not presented the same as a dead end.
+    const failure = describeRunFailure(errorCode);
     return (
       <div
         data-message-role="assistant"
@@ -81,7 +97,7 @@ export function AssistantMessage({
         style={bubbleStyle}
       >
         {content.length > 0 && <div style={bodyStyle()}>{content}</div>}
-        <StatusIndicator state="error" label="Failed to generate response" />
+        <StatusIndicator state="error" label={failure.title} />
         {error != null && error.length > 0 && (
           <div
             data-testid="assistant-message-error"
@@ -99,8 +115,11 @@ export function AssistantMessage({
         <MessageActions
           content={content}
           canCopy={content.length > 0}
-          showRetry
+          showRetry={failure.retryable}
           onRetry={onRetry}
+          retryDisabled={actionsDisabled}
+          settingsSection={settingsSectionForFailure(errorCode)}
+          onOpenSettings={onOpenSettings}
         />
       </div>
     );
@@ -120,6 +139,7 @@ export function AssistantMessage({
           canCopy={content.length > 0}
           showRetry
           onRetry={onRetry}
+          retryDisabled={actionsDisabled}
         />
       </div>
     );
@@ -137,6 +157,7 @@ export function AssistantMessage({
         canCopy
         showRegenerate
         onRegenerate={onRegenerate}
+        regenerateDisabled={actionsDisabled}
       />
     </div>
   );

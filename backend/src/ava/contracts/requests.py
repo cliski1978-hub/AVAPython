@@ -22,6 +22,14 @@ class RunRequest(BaseModel):
     AVA owns and generates run identifiers. Callers must not supply them.
     For request correlation, a future ``correlation_id`` field may be added
     without overloading the run identifier.
+
+    ``retry_of_run_id`` names the prior attempt a retry or regenerate branches
+    from. It is a request-time intent only and is never persisted: the durable
+    lineage is the shared ``source_user_message_id`` the new run inherits from
+    the named run, so no parent-run column is added. When supplied, the prompt
+    and source user message are resolved from the named run's durable records
+    rather than trusted from the request, and the named run must already be
+    terminal.
     """
 
     prompt: str = Field(min_length=1)
@@ -29,6 +37,7 @@ class RunRequest(BaseModel):
     source_user_message_id: str | None = None
     execution: RunExecutionOverride | None = None
     workspace_id: str | None = None
+    retry_of_run_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
     @field_validator("prompt")

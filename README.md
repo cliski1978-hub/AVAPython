@@ -50,6 +50,9 @@ ava/
 │       ├── desktop/          # Priority 2 (Tauri)
 │       └── mobile/           # Priority 3 (placeholder)
 ├── docs/
+│   ├── AVA Phase 5 Complete Documentation.md
+│   ├── AVA Phase 5.40 Full Validation.md
+│   ├── AVA Canonical Development Plan Current to Completion.md
 │   ├── AVA Development Plan.md
 │   ├── Architecture.md
 │   ├── Repository Structure.md

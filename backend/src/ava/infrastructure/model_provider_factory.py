@@ -22,6 +22,7 @@ import logging
 
 import httpx
 
+from ava.contracts.models import ModelCapabilities
 from ava.models.contracts import ModelProviderPort
 from ava.models.credentials import SecretValue
 from ava.models.provider_factory import ModelProviderFactory, UnknownProviderAdapterError
@@ -32,6 +33,17 @@ logger = logging.getLogger(__name__)
 
 # Installed constructor support is independent of the selected legacy default.
 BUILTIN_PROVIDER_IDS = frozenset({"local"})
+
+# Persisted connections share a factory-owned client.  HTTPX's implicit client
+# timeout is five seconds, which is too short for a healthy local model's first
+# streamed token while it is loading or evaluating a substantial context.  Keep
+# every timeout finite, but give a stream a realistic idle-read window.
+_CONFIGURED_PROVIDER_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=120.0,
+    write=30.0,
+    pool=30.0,
+)
 
 
 def bootstrap_provider_config_valid(provider_id: str, endpoint: str) -> bool:
@@ -45,11 +57,18 @@ def bootstrap_provider_config_valid(provider_id: str, endpoint: str) -> bool:
 def construct_compatible_provider(
     *, provider_id: str, endpoint: str, model_name: str,
     credential: SecretValue | None = None, http_client: httpx.AsyncClient | None = None,
+    capabilities: ModelCapabilities | None = None,
 ) -> OpenAICompatibleModelProvider:
-    """Single construction boundary shared by bootstrap and persisted flows."""
+    """Single construction boundary shared by bootstrap and persisted flows.
+
+    ``capabilities`` is threaded all the way to the adapter because the adapter
+    is what answers "can this model stream?". An adapter constructed without it
+    reports chat-only, and the runtime then completes the run in one shot.
+    """
     return OpenAICompatibleModelProvider(
         base_url=endpoint, model_name=model_name, provider_name=provider_id,
         api_key=credential.reveal() if credential is not None else None, http_client=http_client,
+        capabilities=capabilities,
     )
 
 
@@ -80,7 +99,9 @@ class ConfiguredModelProviderFactory(ModelProviderFactory):
     ) -> None:
         self._installed = installed_provider_ids
         self._default_endpoint = default_endpoint
-        self._http_client = http_client or httpx.AsyncClient()
+        self._http_client = http_client or httpx.AsyncClient(
+            timeout=_CONFIGURED_PROVIDER_TIMEOUT
+        )
         self._owns_http_client = http_client is None
 
     def create(
@@ -90,6 +111,7 @@ class ConfiguredModelProviderFactory(ModelProviderFactory):
         endpoint: str | None,
         model_name: str,
         credential: SecretValue | None,
+        capabilities: ModelCapabilities | None = None,
     ) -> ModelProviderPort:
         """Construct one adapter for one connection.
 
@@ -106,6 +128,7 @@ class ConfiguredModelProviderFactory(ModelProviderFactory):
             provider_id=provider_id,
             credential=credential,
             http_client=self._http_client,
+            capabilities=capabilities,
         )
 
     async def aclose(self) -> None:

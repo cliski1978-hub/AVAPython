@@ -42,10 +42,33 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from ava.agents.contracts import ExecutionConfigurationError
 from ava.models.bindings import ConfiguredModelBinding
 from ava.models.contracts import ModelProviderPort
 from ava.models.model_registry import ModelProfile
 from ava.runtimes.contracts import AgentRuntimePort
+
+# ``ExecutionConfigurationError`` is re-exported rather than defined here.
+# The failure is raised while resolving persisted execution, but it escapes
+# through ``AgentPort`` to the run service, which must classify it into a
+# durable error code. Both sides therefore depend on the same object, and the
+# service is not allowed to import ``ava.execution`` to obtain it. The base
+# lives with the port contract; every concrete subclass stays below. This is
+# the same class object, so ``except`` clauses on either import path match.
+__all__ = [
+    "ExecutionConfigurationError",
+    "ExecutionDefaultsNotConfiguredError",
+    "ConfiguredReferenceMissingError",
+    "ConfiguredReferenceDisabledError",
+    "ModelProviderMismatchError",
+    "CredentialResolutionFailedError",
+    "ConfiguredModelIneligibleError",
+    "ProviderConstructionFailedError",
+    "RuntimeAdapterNotRegisteredError",
+    "ProviderAdapterNotRegisteredError",
+    "ExecutionConfigurationSource",
+    "PersistedModelConfiguration",
+]
 
 # ============================================================
 # BEGIN: Resolution Source
@@ -74,6 +97,27 @@ class ExecutionConfigurationSource(StrEnum):
 # ============================================================
 # BEGIN: Persisted Execution Configuration
 # ============================================================
+
+
+@dataclass(frozen=True)
+class PersistedModelConfiguration:
+    """One configured model resolved for execution, without a runtime.
+
+    The model axis of :class:`PersistedExecutionConfiguration`, split out because
+    a run may name a model and leave the runtime on the persisted default. The
+    provider connection is resolved here, so the caller receives an executable
+    provider rather than a record it would have to assemble itself.
+    """
+
+    model_provider: ModelProviderPort = field(repr=False)
+    model_binding: ConfiguredModelBinding
+    model_profile: ModelProfile
+    provider_connection_id: str
+
+    @property
+    def model_id(self) -> str:
+        """The configured model identity, read from the binding's single carrier."""
+        return self.model_binding.model_id
 
 
 @dataclass(frozen=True)
@@ -148,6 +192,30 @@ class PersistedExecutionConfigurationResolverPort(Protocol):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def resolve_model_configuration(self, model_id: str) -> PersistedModelConfiguration | None:
+        """Resolve one configured model by its stable ``model_id``.
+
+        This is the seam that lets a per-run selection name a configured model
+        rather than only a bootstrap catalog entry. It is deliberately a
+        different answer from :meth:`resolve_persisted`: ``None`` here means
+        "this id is not a configured model", which is a normal outcome a caller
+        resolves against its other catalog. It never means "configuration
+        broken".
+
+        Returns:
+            The resolved model, or ``None`` when ``model_id`` is not a configured
+            model.
+
+        Raises:
+            ExecutionConfigurationError: When ``model_id`` *is* a configured model
+                but it cannot be executed — a missing or disabled connection, an
+                inconsistent pairing, an ineligible model, a missing adapter, or
+                a credential failure. An unusable configured model must fail
+                loudly rather than quietly fall back to another model.
+        """
+        raise NotImplementedError
+
 
 # ============================================================
 # END: Resolver Port
@@ -159,23 +227,9 @@ class PersistedExecutionConfigurationResolverPort(Protocol):
 # ============================================================
 
 
-class ExecutionConfigurationError(ValueError):
-    """Base for every persisted execution-configuration failure.
-
-    A ``ValueError`` subclass, because the whole execution path already treats an
-    unresolvable configuration as a value problem and turns it into a clean run
-    failure; a new base exception would have escaped that handling and surfaced
-    as an unhandled 500.
-
-    Every message names configured identities and non-secret connection data
-    only. No message, and no attribute, ever contains resolved secret material:
-    the credential layer's own errors already name only a reference location,
-    and :class:`CredentialResolutionFailedError` adds the connection id rather than
-    the underlying detail.
-    """
-
-    #: Stable, non-secret reason for logs and diagnostics.
-    reason = "execution_configuration_invalid"
+# ``ExecutionConfigurationError`` is imported and re-exported at the top of this
+# module; only the concrete, persisted-configuration-specific failures are
+# defined here.
 
 
 class ExecutionDefaultsNotConfiguredError(ExecutionConfigurationError):

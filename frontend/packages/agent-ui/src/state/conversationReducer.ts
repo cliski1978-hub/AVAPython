@@ -21,6 +21,13 @@ export interface MessagePatch {
   content?: string;
   status?: MessageStatus;
   error?: string;
+  errorCode?: string;
+  /**
+   * The run that produced this response. Recorded when a run is accepted so the
+   * response's durable lineage is available without re-reading the
+   * conversation — retry and regenerate branch from it.
+   */
+  sourceRunId?: string | null;
 }
 
 export type ConversationAction =
@@ -51,6 +58,8 @@ export type ConversationAction =
       messageId: string;
       /** Optional link to the user message this assistant message answers. */
       sourceUserMessageId?: string;
+      /** Optional link to the run that produced this assistant message. */
+      sourceRunId?: string | null;
     }
   | {
       type: "conversation:updateMessage";
@@ -58,6 +67,7 @@ export type ConversationAction =
       messageId: string;
       patch: MessagePatch;
     }
+  | { type: "conversation:removeMessage"; conversationId: string; messageId: string }
   | {
       type: "conversation:setRunState";
       conversationId: string;
@@ -292,6 +302,7 @@ export function conversationReducer(
           status: "pending",
           content: "",
           sourceUserMessageId: action.sourceUserMessageId,
+          sourceRunId: action.sourceRunId,
           createdAt: createTimestamp(),
         };
         return { ...conversation, messages: [...conversation.messages, message] };
@@ -312,6 +323,12 @@ export function conversationReducer(
           ),
         };
       });
+    }
+    case "conversation:removeMessage": {
+      return updateConversation(state, action.conversationId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.filter((message) => message.id !== action.messageId),
+      }));
     }
     case "conversation:setRunState": {
       return updateConversation(state, action.conversationId, (conversation) => ({

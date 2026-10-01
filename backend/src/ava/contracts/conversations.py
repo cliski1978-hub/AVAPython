@@ -250,6 +250,8 @@ class MessageResponse(BaseModel):
     content: str
     status: MessageStatus
     source_run_id: str | None = None
+    source_user_message_id: str | None = None
+    error_code: str | None = None
     created_at: datetime
     updated_at: datetime
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)

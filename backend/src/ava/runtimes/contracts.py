@@ -25,10 +25,17 @@ class RuntimeRunResult(BaseModel):
     Implementations normalize execution into COMPLETED, FAILED, or CANCELLED
     using the existing RunStatus vocabulary. Content is optional assistant
     text or a sanitized failure message, never framework or transport data.
+
+    ``failure`` carries a classification the runtime already knows, so a
+    provider failure that the runtime can name is not widened into the generic
+    code on the way up. It holds only a public
+    :class:`~ava.contracts.failures.FailureCode`; provider wording, statuses, and
+    payloads stay in the runtime's log.
     """
 
     status: RunStatus
     content: str | None = None
+    failure_code: str | None = None
 
 
 class AgentRuntimePort(ABC):

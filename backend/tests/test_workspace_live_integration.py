@@ -365,4 +365,4 @@ def test_public_runtime_failure_hides_host_paths_and_secrets(monkeypatch: pytest
         combined = response.text + events.text
         assert "ava-secret-root-123" not in combined
         assert "AVA_FAKE_SECRET_DO_NOT_LEAK" not in combined
-        assert "The agent failed to complete the run." in events.text
+        assert "Something prevented this response from completing." in events.text

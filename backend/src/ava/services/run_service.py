@@ -54,16 +54,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from ava.agents.contracts import AgentPort, AgentRunResult
+from ava.agents.contracts import AgentPort, AgentRunResult, ExecutionConfigurationError
+from ava.contracts.attempts import can_be_superseded
 from ava.contracts.conversations import MessageRole, MessageStatus, RunContext
 from ava.contracts.events import EventType, RunEvent
+from ava.contracts.failures import FailureCode, failure_payload
 from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 from ava.repositories.conversation_repository import ConversationRepository
 from ava.repositories.message_repository import MessageRecord, MessageRepository
 from ava.repositories.run_event_repository import RunEventRepository
-from ava.repositories.run_repository import RunRecord, RunRepository
+from ava.repositories.run_repository import ActiveConversationRunError, RunRecord, RunRepository
 from ava.services.assistant_response_service import AssistantResponseService
 from ava.services.context_construction_service import ContextConstructionService
 from ava.services.run_lifecycle_service import (
@@ -77,11 +79,47 @@ logger = logging.getLogger(__name__)
 #: The stable body of a ``run_failed`` event. AVA reports one failure shape to
 #: clients; the run's own log carries the cause, and Phase 5.34 owns richer
 #: error reporting.
-_AGENT_FAILURE_PAYLOAD: dict[str, JsonValue] = {
-    "error_code": "agent_failed",
-    "message": "The agent failed to complete the run.",
-    "recoverable": False,
+_AGENT_FAILURE_PAYLOAD: dict[str, JsonValue] = failure_payload(FailureCode.AGENT_FAILED)
+
+#: Reason on an ``ExecutionConfigurationError`` -> public failure code. Every
+#: entry is a key of :data:`ava.contracts.failures.PUBLIC_FAILURE_MESSAGES`, so
+#: the safe message and the recoverability come from the one taxonomy rather
+#: than being restated here.
+_CONFIGURATION_FAILURES: dict[str, str] = {
+    "execution_defaults_not_configured": FailureCode.CONFIGURATION_MISSING,
+    "configured_reference_missing": FailureCode.CONFIGURATION_INVALID,
+    "configured_reference_disabled": FailureCode.CONFIGURATION_INVALID,
+    "model_provider_mismatch": FailureCode.MODEL_UNAVAILABLE,
+    "runtime_adapter_not_registered": FailureCode.RUNTIME_UNAVAILABLE,
+    "provider_adapter_not_registered": FailureCode.PROVIDER_CONNECTION_UNAVAILABLE,
+    "credential_resolution_failed": FailureCode.CREDENTIAL_UNAVAILABLE,
+    "configured_model_ineligible": FailureCode.MODEL_UNAVAILABLE,
+    "provider_construction_failed": FailureCode.PROVIDER_CONNECTION_UNAVAILABLE,
 }
+
+# A missing or disabled record is normally a configuration edit, so it maps to
+# ``configuration_invalid``. An unavailable *runtime* is the exception: the
+# configuration is not wrong, the execution backend cannot be used, and the
+# operator needs to be pointed at the runtime rather than at their settings
+# combination. Reporting it as a configuration error sends them to fix something
+# that is already correct.
+_KIND_OVERRIDES: dict[str, str] = {
+    "runtime configuration": FailureCode.RUNTIME_UNAVAILABLE,
+}
+
+
+def _configuration_failure_code(exc: ExecutionConfigurationError) -> str:
+    """Map one configuration error to its public code.
+
+    The reason is the primary signal, but ``configured_reference_missing`` and
+    ``configured_reference_disabled`` are raised for all three configured
+    domains, so the record's ``kind`` refines the outcome for those.
+    """
+    code = _CONFIGURATION_FAILURES.get(exc.reason, FailureCode.CONFIGURATION_INVALID)
+    kind = getattr(exc, "kind", None)
+    if isinstance(kind, str):
+        return _KIND_OVERRIDES.get(kind, code)
+    return code
 
 
 class CancellationRequestError(RuntimeError):
@@ -90,6 +128,20 @@ class CancellationRequestError(RuntimeError):
 
 class RunRelationshipError(ValueError):
     """A requested durable run/message relationship is invalid."""
+
+
+class RunNotSupersedableError(RunRelationshipError):
+    """A retry/regenerate named a prior run that cannot be branched from.
+
+    Distinct from a generic relationship error so the route can report an
+    eligibility refusal honestly instead of a malformed request: the request is
+    well formed, the targeted run is simply not a valid source of a new attempt
+    (unknown, cross-conversation, or still active).
+    """
+
+
+class ConversationRunActiveError(RunRelationshipError):
+    """A valid request conflicts with the conversation's active run."""
 
 
 @dataclass(frozen=True)
@@ -196,14 +248,18 @@ class RunService:
         background task. Its public run response is therefore available before
         a stream is opened. This method never schedules work itself.
         """
+        request = self._resolve_supersession(request)
         self._validate_relationship_request(request)
         context = self._build_context(request)
         run_id = str(uuid4())
-        self._lifecycle.create_run(
-            run_id,
-            conversation_id=request.conversation_id,
-            source_user_message_id=request.source_user_message_id,
-        )
+        try:
+            self._lifecycle.create_run(
+                run_id,
+                conversation_id=request.conversation_id,
+                source_user_message_id=request.source_user_message_id,
+            )
+        except ActiveConversationRunError as exc:
+            raise ConversationRunActiveError("This conversation already has an active run.") from exc
         assistant_message_id = self._create_assistant_placeholder(run_id, request)
         output_message_id = assistant_message_id or str(uuid4())
         # Status first, then the fact: a ``run_started`` event never exists for
@@ -246,12 +302,16 @@ class RunService:
                 content=content,
             )
 
-        result = await self._agent.start_run_streaming(
-            run_id=run_id,
-            request=request,
-            context=context,
-            on_content=record_content,
-        )
+        try:
+            result = await self._agent.start_run_streaming(
+                run_id=run_id,
+                request=request,
+                context=context,
+                on_content=record_content,
+            )
+        except ExecutionConfigurationError as exc:
+            self._lifecycle.fail(run_id, payload=self._configuration_failure_payload(exc))
+            return self._run_response(self._lifecycle.get(run_id) or self._lifecycle.fail(run_id))
         self._run_repository.set_execution_selection(run_id, result.execution_selection)
 
         current = self._lifecycle.get(run_id)
@@ -289,7 +349,7 @@ class RunService:
 
         if result.status == RunStatus.FAILED:
             response = self._terminal_response(
-                self._fail_transition, run_id, request, result
+                self._fail_transition, run_id, request, result, pass_result=True
             )
             logger.debug("Run %s failed", run_id)
             return response
@@ -302,24 +362,35 @@ class RunService:
         logger.debug("Run %s cancelled", run_id)
         return response
 
-    def _fail_transition(self, run_id: str) -> RunRecord:
+    @staticmethod
+    def _configuration_failure_payload(exc: ExecutionConfigurationError) -> dict[str, JsonValue]:
+        """The durable payload for a failure raised while resolving execution."""
+        return failure_payload(_configuration_failure_code(exc))
+
+    def _fail_transition(self, run_id: str, result: AgentRunResult | None = None) -> RunRecord:
         """Apply the canonical failure transition with its stable error body.
 
-        Every failure the lifecycle sees — an unavailable execution, a context
-        window that cannot fit, a provider or runtime exception — arrives here as
-        the same AVA-level outcome. Distinguishing causes belongs in the error
-        payload a caller chooses, not in the state machine.
+        The run reaches this point from every failing layer, but not all
+        failures are the same event. A code the execution layers already
+        classified is persisted as that code; only a genuinely unclassified
+        failure takes the generic :attr:`FailureCode.AGENT_FAILED` body.
+
+        This is the single place a public failure payload is built, so the
+        durable record can never carry an internal message, a provider status,
+        or a code outside the public taxonomy.
         """
-        return self._lifecycle.fail(run_id, payload=_AGENT_FAILURE_PAYLOAD)
+        payload = failure_payload(result.failure_code) if result is not None else failure_payload(None)
+        return self._lifecycle.fail(run_id, payload=payload)
 
     def _terminal_response(
         self,
-        apply_transition: Callable[[str], RunRecord],
+        apply_transition: Callable[..., RunRecord],
         run_id: str,
         request: RunRequest,
         result: AgentRunResult,
         *,
         assistant_message_id: str | None = None,
+        pass_result: bool = False,
     ) -> RunResponse:
         """Apply a terminal transition and answer with the authoritative status.
 
@@ -328,9 +399,14 @@ class RunService:
         the run's own record is the answer. The service reports that recorded
         outcome instead of forcing its intended one, so exactly one terminal
         state is ever persisted for a run.
+
+        ``pass_result`` forwards the agent result to the transition, for the
+        failure transition alone, which needs the classification the execution
+        layers produced. It defaults off so no other transition can be handed a
+        result it does not use.
         """
         try:
-            record: RunRecord | None = apply_transition(run_id)
+            record: RunRecord | None = apply_transition(run_id, result) if pass_result else apply_transition(run_id)
         except InvalidRunTransitionError as exc:
             logger.info(
                 "Run %s is already %s; requested %s was rejected",
@@ -488,6 +564,84 @@ class RunService:
             raise RunRelationshipError("linked runs require a context construction service")
         return self._context_service.build_for_source(
             request.conversation_id, request.source_user_message_id
+        )
+
+    def _resolve_supersession(self, request: RunRequest) -> RunRequest:
+        """Re-anchor a retry/regenerate request onto durable persistence.
+
+        When ``retry_of_run_id`` is present the request becomes a new attempt
+        branching from that prior run. Two things are then read from
+        authoritative storage instead of the request body:
+
+        * the source user message, taken from the prior run's own durable
+          ``source_user_message_id``. A client that supplies a different one is
+          refused rather than silently trusted, so an attempt can never be
+          attributed to a turn the prior run did not answer.
+        * the prompt, taken from that source user message's persisted content.
+          No duplicate user message is created and no client-authored text
+          stands in for durable history.
+
+        The prior run must already be terminal. That single status guard is what
+        stops a stale client from branching a still-executing turn, and it needs
+        no knowledge of whether the intent was a retry or a regenerate — the
+        backend deliberately does not learn which button was pressed.
+
+        The returned request is a fresh, fully validated one. ``execution`` and
+        ``workspace_id`` are carried through unchanged and are deliberately NOT
+        read back from the prior run: the new run resolves its own execution
+        configuration at creation time, so neither an old run's resolved runtime
+        nor its credentials are ever inherited.
+
+        Nothing here writes to the prior run. It is terminal history before
+        this method is called and it is unchanged after it returns.
+        """
+        if request.retry_of_run_id is None:
+            return request
+        prior = self._run_repository.get(request.retry_of_run_id)
+        if prior is None:
+            raise RunNotSupersedableError("retry target run does not exist")
+        if prior.conversation_id is None:
+            raise RunNotSupersedableError("retry target run is not conversation-linked")
+        if prior.conversation_id != request.conversation_id:
+            raise RunNotSupersedableError(
+                "retry target run belongs to a different conversation"
+            )
+        if not can_be_superseded(prior.status):
+            # An active run is never a retry or regenerate target: the current
+            # attempt must settle before its turn can be branched. Concurrency
+            # rules for genuinely concurrent turns are a later phase.
+            raise RunNotSupersedableError(
+                f"retry target run is {prior.status.value} and must settle first"
+            )
+        source_user_message_id = prior.source_user_message_id
+        if source_user_message_id is None:
+            raise RunNotSupersedableError(
+                "retry target run has no durable source user message"
+            )
+        if (
+            request.source_user_message_id is not None
+            and request.source_user_message_id != source_user_message_id
+        ):
+            raise RunNotSupersedableError(
+                "retry target run answers a different source user message"
+            )
+        if self._message_repository is None:
+            raise RunRelationshipError("linked runs require a message repository")
+        source = self._message_repository.get(prior.conversation_id, source_user_message_id)
+        if source is None or source.role != MessageRole.USER:
+            raise RunNotSupersedableError(
+                "retry target run's source user message is no longer durable"
+            )
+        # Rebuilding the request (rather than mutating it) re-runs contract
+        # validation, and the object stored on PreparedRun is exactly what was
+        # executed rather than what the client claimed.
+        return RunRequest(
+            prompt=source.content,
+            conversation_id=prior.conversation_id,
+            source_user_message_id=source_user_message_id,
+            execution=request.execution,
+            workspace_id=request.workspace_id,
+            retry_of_run_id=request.retry_of_run_id,
         )
 
     def _validate_relationship_request(self, request: RunRequest) -> None:

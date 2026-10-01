@@ -125,6 +125,9 @@ function makeCommands() {
     updateMessage: vi.fn((conversationId, messageId, patch) => {
       log.push({ op: "updateMessage", conversationId, messageId, patch });
     }),
+    removeMessage: vi.fn((conversationId, messageId) => {
+      log.push({ op: "removeMessage", conversationId, messageId });
+    }),
     associateAssistantMessage: vi.fn((conversationId, placeholderId, messageId) => {
       log.push({ op: "associateAssistantMessage", conversationId, placeholderId, messageId });
     }),
@@ -250,7 +253,7 @@ describe("submitPrompt", () => {
     });
   });
 
-  it("marks the assistant message failed when startRun rejects", async () => {
+  it("removes the optimistic assistant shell when run creation rejects", async () => {
     const agent = makeAgent({
       startRun: vi.fn(async () => {
         throw new ApiError("Backend broke", 500, {
@@ -265,19 +268,15 @@ describe("submitPrompt", () => {
 
     expect(agent.getRunEvents).not.toHaveBeenCalled();
     expect(lastSetRunState(log)).toMatchObject({
-      backendStatus: "failed",
-      uiPhase: "failed",
-      runError: "An internal error occurred.",
+      backendStatus: null,
+      uiPhase: "idle",
+      runError: "Connection to AVA was interrupted.",
     });
 
-    const failed = entries(log, "updateMessage").find(
-      (e) => e.patch?.status === "failed",
-    );
-    expect(failed?.conversationId).toBe("conv-a");
-    expect(failed?.patch).toMatchObject({
-      status: "failed",
-      error: "An internal error occurred.",
-    });
+    expect(entries(log, "updateMessage").some((e) => e.patch?.status === "failed")).toBe(false);
+    expect(entries(log, "removeMessage")).toContainEqual(expect.objectContaining({
+      conversationId: "conv-a",
+    }));
   });
 
   it("keeps backend status intact when the live stream is interrupted", async () => {
@@ -292,7 +291,7 @@ describe("submitPrompt", () => {
 
     expect(hasRunStateUpdate(log, { backendStatus: "completed" })).toBe(true);
     expect(lastSetRunState(log)).toMatchObject({
-      runError: "Live updates disconnected: AVA is unavailable. Please try again.",
+      runError: "Connection to AVA was interrupted.",
     });
     expect(entries(log, "updateMessage").some((e) => e.patch?.status === "failed")).toBe(false);
   });
@@ -501,6 +500,56 @@ describe("applyRunEvents", () => {
 });
 
 describe("cancelActiveRun", () => {
+  it("does not let a late cancellation result mutate the newer run", async () => {
+    let resolveCancel!: (response: RunResponse) => void;
+    const cancelGate = new Promise<RunResponse>((resolve) => { resolveCancel = resolve; });
+    const agent = makeAgent({ cancelRun: vi.fn(() => cancelGate) });
+    const { commands, log, runStateRecord } = makeCommands();
+    runStateRecord["conv-a"] = {
+      ...EMPTY_CONVERSATION_RUN,
+      runId: "run-a",
+      runEpoch: "epoch-a",
+      backendStatus: "running",
+      uiPhase: "running",
+      pendingMessageId: "message-a",
+    };
+
+    const cancellation = cancelActiveRun({
+      conversationId: "conv-a", runId: "run-a", runEpoch: "epoch-a",
+      assistantMessageId: "message-a", agent, commands,
+    });
+    runStateRecord["conv-a"] = {
+      ...EMPTY_CONVERSATION_RUN,
+      runId: "run-b",
+      runEpoch: "epoch-b",
+      backendStatus: "running",
+      uiPhase: "running",
+      pendingMessageId: "message-b",
+      runError: null,
+    };
+    resolveCancel({ run_id: "run-a", status: "cancelled", contract_version: "v1" });
+    await cancellation;
+
+    expect(runStateRecord["conv-a"]).toMatchObject({
+      runId: "run-b", runEpoch: "epoch-b", backendStatus: "running", uiPhase: "running",
+      pendingMessageId: "message-b", runError: null,
+    });
+    expect(entries(log, "updateMessage").some((entry) => entry.messageId === "message-b")).toBe(false);
+  });
+
+  it("does not let a late cancellation error mutate the newer run", async () => {
+    let rejectCancel!: (error: Error) => void;
+    const cancelGate = new Promise<RunResponse>((_resolve, reject) => { rejectCancel = reject; });
+    const agent = makeAgent({ cancelRun: vi.fn(() => cancelGate) });
+    const { commands, runStateRecord } = makeCommands();
+    runStateRecord["conv-a"] = { ...EMPTY_CONVERSATION_RUN, runId: "run-a", runEpoch: "epoch-a", backendStatus: "running", uiPhase: "running", pendingMessageId: "message-a" };
+    const cancellation = cancelActiveRun({ conversationId: "conv-a", runId: "run-a", runEpoch: "epoch-a", assistantMessageId: "message-a", agent, commands });
+    runStateRecord["conv-a"] = { ...EMPTY_CONVERSATION_RUN, runId: "run-b", runEpoch: "epoch-b", backendStatus: "running", uiPhase: "running", pendingMessageId: "message-b", runError: null };
+    rejectCancel(new Error("late failure"));
+    await cancellation;
+    expect(runStateRecord["conv-a"]).toMatchObject({ runId: "run-b", runEpoch: "epoch-b", backendStatus: "running", uiPhase: "running", pendingMessageId: "message-b", runError: null });
+  });
+
   it("is a no-op when there is no run id", async () => {
     const agent = makeAgent();
     const { commands } = makeCommands();
@@ -590,7 +639,7 @@ describe("cancelActiveRun", () => {
 
     expect(lastSetRunState(log)).toMatchObject({
       uiPhase: "running",
-      runError: "Bad gateway",
+      runError: "Connection to AVA was interrupted.",
     });
   });
 
@@ -793,24 +842,30 @@ describe("streamed run events", () => {
 });
 
 describe("runErrorMessage", () => {
-  it("prefers the backend error message", () => {
+  it("uses AVA-owned wording for known API errors", () => {
     const error = new ApiError("t", 500, {
       category: "internal",
       message: "An internal error occurred.",
     });
-    expect(runErrorMessage(error)).toBe("An internal error occurred.");
+    expect(runErrorMessage(error)).toBe("Connection to AVA was interrupted.");
   });
 
-  it("falls back to a status line when the body has no message", () => {
+  it("does not expose HTTP status wording when the body has no message", () => {
     expect(runErrorMessage(new ApiError("t", 502, {}))).toBe(
-      "Request failed (502).",
+      "Connection to AVA was interrupted.",
     );
   });
 
   it("uses a stable message for non-API failures", () => {
     expect(runErrorMessage(new Error("boom"))).toBe(
-      "AVA is unavailable. Please try again.",
+      "Connection to AVA was interrupted.",
     );
+  });
+
+  it("maps a conversation concurrency conflict to localized feedback", () => {
+    expect(runErrorMessage(new ApiError("t", 409, {
+      error_code: "conversation_run_active",
+    }))).toBe("This conversation already has a response in progress.");
   });
 });
 
@@ -1132,4 +1187,171 @@ describe("refresh recovery", () => {
     expect(agent.streamRun).not.toHaveBeenCalled();
     expect(agent.startRun).not.toHaveBeenCalled();
   });
+
+  it("treats a run failed by backend restart recovery as terminal, not as work to resume", async () => {
+    // Phase 5.30 settles stranded active runs as `failed` at cold start. A
+    // refresh after that restart must show the durable partial text and the
+    // failed projection, and must not resurrect an observer for an execution
+    // that no longer exists.
+    const { commands, log, runStateRecord } = makeCommands();
+    const agent = makeAgent({
+      getRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-recovered",
+        status: "failed",
+        assistant_message_id: "assistant-1",
+        cancellation_requested_at: "2026-05-06T07:08:09+00:00",
+        contract_version: "v1",
+      })),
+    });
+
+    await expect(
+      recoverRunForConversation({ conversation: recoveredConversation, agent, commands }),
+    ).resolves.toBe(false);
+
+    expect(agent.streamRun).not.toHaveBeenCalled();
+    expect(agent.startRun).not.toHaveBeenCalled();
+    // No frontend run state is created, so there is nothing to cancel or resume.
+    expect(runStateRecord["conversation-1"]).toBeUndefined();
+    // Nothing is mutated: the durable text and the server's failed projection
+    // come from hydration alone, with no replacement assistant message.
+    expect(log).toHaveLength(0);
+  });
 });
+
+// ============================================================
+// BEGIN: Charter B - incremental snapshot application
+// ============================================================
+
+
+describe("streaming content snapshots", () => {
+  /**
+   * Every ``message_content`` payload is the whole text so far, never a delta.
+   * Downstream code replaces content; appending here is what duplicates the
+   * prefix on every update and corrupts replay and refresh.
+   */
+  it("replaces the assistant content on each snapshot rather than appending", () => {
+    const { commands, log } = makeCommands();
+    const snapshots = ["Hel", "Hello ", "Hello world"];
+
+    applyRunEvents(
+      [
+        evt("run_started", "e1"),
+        evt("message_started", "e2", { message_id: "msg-1" }),
+        ...snapshots.map((content, index) =>
+          evt("message_content", `e${index + 3}`, { content }),
+        ),
+        evt("run_completed", "e9"),
+      ],
+      "conv-x",
+      "asm-x",
+      commands,
+    );
+
+    const contents = entries(log, "updateMessage")
+      .map((entry) => entry.patch?.content)
+      .filter((content): content is string => typeof content === "string");
+
+    expect(contents).toEqual(snapshots);
+    // Strictly growing, and the final text is the single final snapshot.
+    expect(contents[contents.length - 1]).toBe("Hello world");
+    expect(contents.some((content) => content.includes("Hello Hello"))).toBe(false);
+  });
+
+  it("marks the assistant message as streaming until the terminal event", () => {
+    const { commands, log } = makeCommands();
+
+    applyRunEvents(
+      [
+        evt("run_started", "e1"),
+        evt("message_started", "e2", { message_id: "msg-1" }),
+        evt("message_content", "e3", { content: "partial" }),
+        evt("run_completed", "e4"),
+      ],
+      "conv-x",
+      "asm-x",
+      commands,
+    );
+
+    const statuses = entries(log, "updateMessage").map((entry) => entry.patch?.status);
+    expect(statuses).toContain("streaming");
+    expect(statuses[statuses.length - 1]).toBe("complete");
+  });
+});
+
+// ============================================================
+// END: Charter B - incremental snapshot application
+// ============================================================
+
+// ============================================================
+// BEGIN: Charter B - progressive projection during a live run
+// ============================================================
+
+
+describe("progressive content projection", () => {
+  /**
+   * Drives a real run through the orchestration path with a deferred stream,
+   * so each snapshot is projected while the run is still open. Asserts the
+   * user-visible property: one assistant message whose text grows, never a
+   * second bubble and never an appended duplicate.
+   */
+  it("grows one assistant message across successive snapshots before completion", async () => {
+    const { commands, log } = makeCommands();
+    let emit!: (event: RunEvent) => void;
+    let resolveStream!: () => void;
+    const stream = new Promise<void>((resolve) => { resolveStream = resolve; });
+    const agent = makeAgent({
+      startRun: vi.fn(async (): Promise<RunResponse> => ({
+        run_id: "run-001", status: "running", assistant_message_id: "backend-assistant",
+        contract_version: "v1",
+      })),
+      streamRun: vi.fn(async (_runId, options) => {
+        emit = options.onEvent;
+        await stream;
+      }),
+    });
+
+    const running = startRunForPrompt({
+      conversationId: "conv-x", assistantMessageId: "local-assistant",
+      sourceUserMessageId: "user-x", prompt: "hello", agent, commands,
+    });
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+    emit({ ...evt("run_started", "s1"), sequence: 1 });
+    emit({ ...evt("message_started", "s2", { message_id: "backend-assistant" }), sequence: 2 });
+
+    const contents = () =>
+      entries(log, "updateMessage")
+        .map((entry) => entry.patch?.content)
+        .filter((content): content is string => typeof content === "string");
+
+    const snapshots = ["Hel", "Hello ", "Hello world"];
+    for (const [index, content] of snapshots.entries()) {
+      emit({ ...evt("message_content", `c${index}`, {
+        message_id: "backend-assistant", content,
+      }), sequence: index + 3 });
+      // Each snapshot is visible before the next one is even emitted.
+      await vi.waitFor(() => expect(contents().at(-1)).toBe(content));
+      // The run is still open: no terminal status was projected.
+      expect(
+        entries(log, "updateMessage").some((e) => e.patch?.status === "complete"),
+      ).toBe(false);
+    }
+    expect(contents()).toEqual(snapshots);
+
+    // Every content update lands on the one backend assistant message; the
+    // local placeholder is only ever touched with status, never with text.
+    const contentOwners = new Set(
+      entries(log, "updateMessage")
+        .filter((entry) => typeof entry.patch?.content === "string")
+        .map((entry) => entry.messageId),
+    );
+    expect(contentOwners).toEqual(new Set(["backend-assistant"]));
+
+    emit({ ...evt("run_completed", "s9"), sequence: 9 });
+    resolveStream();
+    await running;
+  });
+});
+
+// ============================================================
+// END: Charter B - progressive projection during a live run
+// ============================================================

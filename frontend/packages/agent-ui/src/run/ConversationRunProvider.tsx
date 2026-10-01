@@ -10,21 +10,20 @@ import {
 } from "react";
 
 import { useConversationState } from "../state/ConversationProvider";
-import type { UIRunPhase } from "../types";
+import { canRegenerateResponse, canRetryResponse, isActiveRunPhase } from "../lib/runActions";
+import type { MessageStatus } from "../types";
 import {
   cancelActiveRun,
   clientRunAgent,
   recoverRunForConversation,
-  startRunForPrompt,
+  rerunAssistantResponse,
   submitPrompt,
   visibleRecoveryCandidate,
+  type AcquireRunStream,
   type RunCommands,
 } from "./conversationRun";
 import { createPersistAssistantMessageCommand } from "./persistAssistantMessage";
 import type { RunExecutionOverride } from "@ava/contracts";
-
-/** Phases during which a new run must not start. */
-const ACTIVE_PHASES: UIRunPhase[] = ["starting", "running", "stopping"];
 
 export interface AgentRunApi {
   /** Submit a prompt: immediate user + pending assistant, then a backend run. */
@@ -35,10 +34,26 @@ export interface AgentRunApi {
   ): Promise<void>;
   /** Cancel the active run of the active conversation (via the API). */
   stopRun(): void;
-  /** Retry a failed/cancelled assistant message from its source prompt. */
-  retryMessage(messageId: string): void;
-  /** Regenerate a completed assistant message from its source prompt. */
-  regenerateMessage(messageId: string): void;
+  /**
+   * Retry a failed/cancelled assistant response by starting a new run for the
+   * same source user message. The prior response is left untouched as durable
+   * history and a new assistant response becomes the visible one.
+   */
+  retryMessage(
+    messageId: string,
+    execution?: RunExecutionOverride,
+    workspaceId?: string | null,
+  ): void;
+  /**
+   * Regenerate a completed assistant response by starting a new run for the
+   * same source user message. Same machinery as retry; the only difference is
+   * the prior response's status.
+   */
+  regenerateMessage(
+    messageId: string,
+    execution?: RunExecutionOverride,
+    workspaceId?: string | null,
+  ): void;
   /** True while the backend run id is being created (no Stop available yet). */
   isStarting: boolean;
   /** True while the active conversation has a run in progress. */
@@ -68,19 +83,41 @@ export function AgentRunProvider({
 }) {
   const conversation = useConversationState();
   const agent = useMemo(() => clientRunAgent(client), [client]);
-  const streamController = useRef<AbortController | null>(null);
-  const activeConversationId = useRef<string | null>(conversation.activeConversation?.id ?? null);
-  const recoveryKey = useRef<string | null>(null);
+  // Observer ownership is keyed by conversation, never by selection: run
+  // ownership belongs to the durable run's conversation. Selecting another
+  // conversation must not stop an observer, or the hidden conversation's
+  // projection silently freezes at whatever it last received. One entry per
+  // conversation preserves the existing one-active-run-per-conversation rule;
+  // this is not a concurrency change.
+  const observers = useRef(new Map<string, AbortController>());
+  const recoveryKeys = useRef(new Map<string, string>());
 
-  useEffect(() => () => streamController.current?.abort(), []);
+  const acquireRunStream = useCallback<AcquireRunStream>(
+    (conversationId) => {
+      // A newer run in this conversation supersedes the previous observer, so
+      // two observers can never own the same visible response.
+      observers.current.get(conversationId)?.abort();
+      const controller = new AbortController();
+      observers.current.set(conversationId, controller);
+      return {
+        signal: controller.signal,
+        release: () => {
+          if (observers.current.get(conversationId) === controller) {
+            observers.current.delete(conversationId);
+          }
+        },
+      };
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (activeConversationId.current !== conversation.activeConversation?.id) {
-      streamController.current?.abort();
-      streamController.current = null;
-      recoveryKey.current = null;
-      activeConversationId.current = conversation.activeConversation?.id ?? null;
-    }
-  }, [conversation.activeConversation?.id]);
+    const owned = observers.current;
+    return () => {
+      for (const controller of owned.values()) controller.abort();
+      owned.clear();
+    };
+  }, []);
 
   const commands = useMemo<RunCommands>(
     () => ({
@@ -88,6 +125,7 @@ export function AgentRunProvider({
       addAssistantMessage: conversation.addAssistantMessage,
       setRunState: conversation.setRunState,
       updateMessage: conversation.updateMessage,
+      removeMessage: conversation.removeMessage,
       associateAssistantMessage: conversation.associateAssistantMessage,
       getRunState: conversation.getRunState,
       // The run hands us the final content/source directly: reading them back
@@ -114,42 +152,45 @@ export function AgentRunProvider({
 
   useEffect(() => {
     if (activeConversation == null) return;
+    // A persisted epoch says which run is current, not that this provider has
+    // an observer. Only this session's ownership proves it: a conversation this
+    // session is already observing needs no recovery, however it was reached.
+    if (observers.current.has(activeConversation.id)) return;
     const candidate = visibleRecoveryCandidate(activeConversation);
     if (candidate == null) return;
     const key = `${activeConversation.id}:${candidate.assistantMessageId}:${candidate.sourceRunId}`;
-    if (recoveryKey.current === key) return;
-    recoveryKey.current = key;
-    streamController.current?.abort();
-    const controller = new AbortController();
-    streamController.current = controller;
+    if (recoveryKeys.current.get(activeConversation.id) === key) return;
+    recoveryKeys.current.set(activeConversation.id, key);
     void recoverRunForConversation({
       conversation: activeConversation,
       agent,
       commands,
-      streamSignal: controller.signal,
+      acquireRunStream,
     }).catch(() => {
       // A failed lookup is transport state; do not manufacture lifecycle.
-      if (!controller.signal.aborted) recoveryKey.current = null;
+      if (!observers.current.has(activeConversation.id)) {
+        recoveryKeys.current.delete(activeConversation.id);
+      }
     });
-  }, [activeConversation, agent, commands]);
+  }, [activeConversation, agent, commands, acquireRunStream]);
 
   const submitPromptFn = useCallback(
     async (prompt: string, execution?: RunExecutionOverride, workspaceId?: string | null) => {
       const current = conversation.activeConversation;
       // One active run per conversation; ignore programmatic double submits.
-      if (current?.run != null && ACTIVE_PHASES.includes(current.run.uiPhase)) {
+      if (isActiveRunPhase(current?.run?.uiPhase)) {
         return;
       }
       const promptText = prompt.trim();
       if (promptText.length === 0) return;
-      streamController.current?.abort();
-      streamController.current = new AbortController();
+      // A new run makes its conversation recoverable again if this one fails.
+      if (current?.id != null) recoveryKeys.current.delete(current.id);
       await submitPrompt(
         promptText, current?.id ?? null, agent, commands, execution, workspaceId,
-        streamController.current.signal,
+        acquireRunStream,
       );
     },
-    [conversation, agent, commands],
+    [conversation, agent, commands, acquireRunStream],
   );
 
   const stopRunFn = useCallback(() => {
@@ -163,6 +204,7 @@ export function AgentRunProvider({
     void cancelActiveRun({
       conversationId: current.id,
       runId: run.runId,
+      runEpoch: run.runEpoch,
       assistantMessageId: run.pendingMessageId,
       agent,
       commands,
@@ -170,16 +212,21 @@ export function AgentRunProvider({
   }, [conversation, agent, commands]);
 
   const rerunMessageFn = useCallback(
-    (messageId: string, allowedStatuses: Set<string>) => {
+    (
+      messageId: string,
+      isEligible: (status: MessageStatus) => boolean,
+      execution?: RunExecutionOverride,
+      workspaceId?: string | null,
+    ) => {
       const current = conversation.activeConversation;
       if (current == null) return;
-      if (current.run != null && ACTIVE_PHASES.includes(current.run.uiPhase)) {
-        return;
-      }
+      // An active run owns the conversation. A second attempt against the same
+      // turn would race it; the backend refuses that case too.
+      if (isActiveRunPhase(current.run?.uiPhase)) return;
       const message = current.messages.find((m) => m.id === messageId);
       if (message == null || message.role !== "assistant") return;
       const status = message.status ?? "complete";
-      if (!allowedStatuses.has(status)) return;
+      if (!isEligible(status)) return;
       // Prompt association is AVA-owned through sourceUserMessageId — never
       // the "previous array element" heuristic.
       const sourceUserMessageId = message.sourceUserMessageId;
@@ -190,31 +237,47 @@ export function AgentRunProvider({
       if (sourceUserMessage == null || sourceUserMessage.role !== "user") return;
       const prompt = sourceUserMessage.content;
       if (prompt.trim().length === 0) return;
-      void startRunForPrompt({
+      // The backend resolves durable lineage and checks eligibility from the
+      // current persisted run. A response with no run behind it (legacy or
+      // client-authored) has no attempt to branch from.
+      const retryOfRunId = message.sourceRunId;
+      if (retryOfRunId == null) return;
+      void rerunAssistantResponse({
         conversationId: current.id,
-        assistantMessageId: message.id,
         sourceUserMessageId: sourceUserMessage.id,
         prompt,
+        retryOfRunId,
+        execution,
+        workspaceId,
         agent,
         commands,
-        streamSignal: (() => {
-          streamController.current?.abort();
-          streamController.current = new AbortController();
-          return streamController.current.signal;
-        })(),
+        // Abort this conversation's previous observer before the new run binds,
+        // so two observers can never own the same visible response.
+        acquireRunStream,
       });
     },
-    [conversation, agent, commands],
+    [conversation, agent, commands, acquireRunStream],
   );
 
   const retryMessageFn = useCallback(
-    (messageId: string) =>
-      rerunMessageFn(messageId, new Set(["failed", "cancelled"])),
+    (
+      messageId: string,
+      execution?: RunExecutionOverride,
+      workspaceId?: string | null,
+    ) => {
+      rerunMessageFn(messageId, canRetryResponse, execution, workspaceId);
+    },
     [rerunMessageFn],
   );
 
   const regenerateMessageFn = useCallback(
-    (messageId: string) => rerunMessageFn(messageId, new Set(["complete"])),
+    (
+      messageId: string,
+      execution?: RunExecutionOverride,
+      workspaceId?: string | null,
+    ) => {
+      rerunMessageFn(messageId, canRegenerateResponse, execution, workspaceId);
+    },
     [rerunMessageFn],
   );
 

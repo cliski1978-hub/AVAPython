@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ava.contracts.models import ModelCapabilities
 from ava.models.contracts import ModelProviderPort
 from ava.models.credentials import SecretValue
 
@@ -100,6 +101,7 @@ class ModelProviderFactory(ABC):
         endpoint: str | None,
         model_name: str,
         credential: SecretValue | None,
+        capabilities: ModelCapabilities | None = None,
     ) -> ModelProviderPort:
         """Construct a provider adapter for one connection.
 
@@ -115,6 +117,13 @@ class ModelProviderFactory(ABC):
                 when the connection declares no ``credential_reference``. The
                 only legitimate consumer of the plaintext is the adapter's own
                 construction.
+            capabilities: What the resolved model is known to support. The
+                adapter reports these through ``get_capabilities()``, and the
+                execution layers branch on that report — notably to decide
+                whether a run streams or completes in one shot. Dropping it here
+                would make every configured model look chat-only, so a
+                streaming-capable model would silently stop streaming.
+                ``None`` keeps the conservative chat-only default.
 
         Raises:
             UnknownProviderAdapterError: If this factory does not serve

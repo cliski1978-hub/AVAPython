@@ -27,6 +27,7 @@ from ava.repositories.conversation_repository import (
     ConversationRepository,
 )
 from ava.repositories.message_repository import MessageRecord, MessageRepository
+from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import RunRepository
 
 DEFAULT_CONVERSATION_TITLE = "New Conversation"
@@ -77,10 +78,12 @@ class ConversationService:
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository,
         run_repository: RunRepository | None = None,
+        run_event_repository: RunEventRepository | None = None,
     ) -> None:
         self._conversation_repository = conversation_repository
         self._message_repository = message_repository
         self._run_repository = run_repository
+        self._run_event_repository = run_event_repository
 
     def create_conversation(self, title: str | None = None) -> ConversationResponse:
         """Create a new conversation, returning its response contract.
@@ -217,11 +220,28 @@ class ConversationService:
 
     def _message_to_response(self, record: MessageRecord) -> MessageResponse:
         status = record.status
+        error_code: str | None = None
+        source_user_message_id: str | None = None
         if record.role == MessageRole.ASSISTANT and record.source_run_id and self._run_repository:
             run = self._run_repository.get(record.source_run_id)
             if run is not None:
                 status = assistant_status_for_run(run.status)
-        return _message_to_response(record, status=status)
+                source_user_message_id = run.source_user_message_id
+                if run.status.value == "failed" and self._run_event_repository is not None:
+                    failed = [
+                        event
+                        for event in self._run_event_repository.get_events(run.run_id)
+                        if event.event_type.value == "run_failed"
+                    ]
+                    if failed:
+                        value = failed[-1].payload.get("error_code")
+                        error_code = value if isinstance(value, str) else None
+        return _message_to_response(
+            record,
+            status=status,
+            source_user_message_id=source_user_message_id,
+            error_code=error_code,
+        )
 
 
 # ============================================================
@@ -243,7 +263,13 @@ def _conversation_to_response(record: ConversationRecord) -> ConversationRespons
     )
 
 
-def _message_to_response(record: MessageRecord, *, status: MessageStatus | None = None) -> MessageResponse:
+def _message_to_response(
+    record: MessageRecord,
+    *,
+    status: MessageStatus | None = None,
+    source_user_message_id: str | None = None,
+    error_code: str | None = None,
+) -> MessageResponse:
     return MessageResponse(
         message_id=record.message_id,
         conversation_id=record.conversation_id,
@@ -251,6 +277,8 @@ def _message_to_response(record: MessageRecord, *, status: MessageStatus | None 
         content=record.content,
         status=status or record.status,
         source_run_id=record.source_run_id,
+        source_user_message_id=source_user_message_id,
+        error_code=error_code,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

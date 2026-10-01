@@ -22,6 +22,7 @@ import {
 } from "./conversationReducer";
 import { createRenameConversationCommand } from "./renameConversation";
 import { associateAssistantMessages } from "../lib/transcript";
+import { presentAvaError } from "../lib/errorPresentation";
 
 export interface AddedUserMessage {
   /** Id of the conversation the message was added to (possibly created). */
@@ -49,6 +50,7 @@ export interface ConversationManager {
     conversationId: string,
     messageId: string,
     sourceUserMessageId?: string | null,
+    sourceRunId?: string | null,
   ) => void;
   /** Immutably patches an existing message. */
   updateMessage: (
@@ -56,6 +58,8 @@ export interface ConversationManager {
     messageId: string,
     patch: MessagePatch,
   ) => void;
+  /** Removes a local-only optimistic message after its action was rejected. */
+  removeMessage: (conversationId: string, messageId: string) => void;
   replaceMessage: (conversationId: string, placeholderId: string, message: import("../types").ConversationMessage) => void;
   associateAssistantMessage: (conversationId: string, placeholderId: string, messageId: string) => void;
   /** Merges run lifecycle state into a conversation. */
@@ -83,6 +87,10 @@ export function ConversationProvider({ children, client }: { children: ReactNode
   const stateRef = useRef(state);
   stateRef.current = state;
   const selectedRef = useRef<string | null>(null);
+  // Conversation identity alone cannot reject A → B → A races: the first A
+  // request is stale once the second A selection begins. This counter is local
+  // observer ownership, never durable application state.
+  const loadGenerationRef = useRef(0);
   useEffect(() => {
     let live = true;
     dispatch({ type: "conversation:loadStart" });
@@ -90,10 +98,15 @@ export function ConversationProvider({ children, client }: { children: ReactNode
       const hydrated = await Promise.all(conversations.map(async (conversation) => {
         const messages = await listMessages(client, conversation.conversation_id);
         return { id: conversation.conversation_id, title: conversation.title, createdAt: conversation.created_at,
-          messages: associateAssistantMessages(messages.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceRunId: message.source_run_id, createdAt: message.created_at }))), run: undefined };
+          messages: associateAssistantMessages(messages.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceUserMessageId: message.source_user_message_id ?? undefined, sourceRunId: message.source_run_id, errorCode: message.error_code ?? undefined, createdAt: message.created_at }))), run: undefined };
       }));
       if (live) dispatch({ type: "conversation:hydrate", conversations: hydrated });
-    }).catch((error: unknown) => { if (live) dispatch({ type: "conversation:loadFailure", error: error instanceof Error ? error.message : "Unable to load conversations." }); });
+    }).catch((error: unknown) => {
+      if (live) dispatch({
+        type: "conversation:loadFailure",
+        error: presentAvaError(error, "Unable to load conversations."),
+      });
+    });
     return () => { live = false; };
   }, [client]);
 
@@ -111,14 +124,19 @@ export function ConversationProvider({ children, client }: { children: ReactNode
       },
       selectConversation: async (id) => {
         selectedRef.current = id;
+        const generation = ++loadGenerationRef.current;
         dispatch({ type: "conversation:select", id });
         dispatch({ type: "conversation:messagesLoadStart", conversationId: id });
         try {
           const result = await listMessages(client, id);
-          if (selectedRef.current !== id) return;
-          dispatch({ type: "conversation:messagesHydrate", conversationId: id, messages: associateAssistantMessages(result.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceRunId: message.source_run_id, createdAt: message.created_at }))) });
+          if (selectedRef.current !== id || loadGenerationRef.current !== generation) return;
+          dispatch({ type: "conversation:messagesHydrate", conversationId: id, messages: associateAssistantMessages(result.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceUserMessageId: message.source_user_message_id ?? undefined, sourceRunId: message.source_run_id, errorCode: message.error_code ?? undefined, createdAt: message.created_at }))) });
         } catch (error) {
-          if (selectedRef.current === id) dispatch({ type: "conversation:messagesLoadFailure", conversationId: id, error: error instanceof Error ? error.message : "Unable to load messages." });
+          if (selectedRef.current === id && loadGenerationRef.current === generation) dispatch({
+            type: "conversation:messagesLoadFailure",
+            conversationId: id,
+            error: presentAvaError(error, "Unable to load this conversation."),
+          });
         }
       },
       renameConversation: async (id, title) => {
@@ -127,7 +145,11 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           // conversation is selected (renaming must never switch selection).
           dispatch({ type: "conversation:rename", conversationId: id, title: updated.title });
         }, onError: (error) => {
-          dispatch({ type: "conversation:messagesLoadFailure", conversationId: id, error: error instanceof Error ? error.message : "Unable to rename conversation." });
+          dispatch({
+            type: "conversation:messagesLoadFailure",
+            conversationId: id,
+            error: presentAvaError(error, "Unable to rename conversation."),
+          });
         } })(id, title);
       },
       addUserMessage: async (conversationId, content) => {
@@ -158,12 +180,13 @@ export function ConversationProvider({ children, client }: { children: ReactNode
         });
         return { conversationId: createdConversationId, messageId: createdMessageId };
       },
-      addAssistantMessage: (conversationId, messageId, sourceUserMessageId) =>
+      addAssistantMessage: (conversationId, messageId, sourceUserMessageId, sourceRunId) =>
         dispatch({
           type: "conversation:addAssistantMessage",
           conversationId,
           messageId,
           sourceUserMessageId: sourceUserMessageId ?? undefined,
+          sourceRunId: sourceRunId ?? undefined,
         }),
       updateMessage: (conversationId, messageId, patch) =>
         dispatch({
@@ -172,6 +195,8 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           messageId,
           patch,
         }),
+      removeMessage: (conversationId, messageId) =>
+        dispatch({ type: "conversation:removeMessage", conversationId, messageId }),
       replaceMessage: (conversationId, placeholderId, message) => dispatch({ type: "conversation:replaceMessage", conversationId, placeholderId, message }),
       associateAssistantMessage: (conversationId, placeholderId, messageId) => dispatch({
         type: "conversation:associateAssistantMessage", conversationId, placeholderId, messageId,

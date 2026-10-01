@@ -1,4 +1,5 @@
-import { defaultTheme } from "@ava/ui-core";
+import { Button, defaultTheme } from "@ava/ui-core";
+import type { SettingsSectionId } from "@ava/ui-core";
 import type { Conversation, ConversationMessage } from "../types";
 import { selectTranscriptMessages } from "../lib/transcript";
 import { ConversationEmptyState } from "./ConversationEmptyState";
@@ -10,8 +11,13 @@ export interface ConversationViewProps {
   /** Explicit message override (useful for previews without a conversation). */
   messages?: ConversationMessage[];
   title?: string;
+  /** Localized loading/action feedback for this conversation. */
+  error?: string | null;
+  /** Re-runs the current conversation load after a recoverable failure. */
+  onReload?: () => void;
   onRetryMessage?: (messageId: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
+  onOpenSettings?: (section: SettingsSectionId) => void;
 }
 
 const t = defaultTheme;
@@ -25,8 +31,11 @@ export function ConversationView({
   conversation,
   messages,
   title,
+  error,
+  onReload,
   onRetryMessage,
   onRegenerateMessage,
+  onOpenSettings,
 }: ConversationViewProps) {
   const raw = messages ?? conversation?.messages ?? [];
   // Normal transcript: superseded regenerated assistant responses are hidden;
@@ -48,6 +57,27 @@ export function ConversationView({
       }}
     >
       <ConversationHeader title={heading} />
+      {error != null && error.length > 0 && (
+        <div
+          role="alert"
+          data-conversation-error=""
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: t.spacing.sm,
+            margin: `${t.spacing.sm}px ${t.spacing.md}px 0`,
+            padding: `${t.spacing.sm}px ${t.spacing.md}px`,
+            border: `${t.border.width}px solid ${t.colors.danger}`,
+            borderRadius: t.radius.md,
+            color: t.colors.dangerText,
+            fontSize: t.font.sizeSm,
+          }}
+        >
+          <span>{error}</span>
+          {onReload != null && <Button variant="secondary" onClick={onReload}>Retry</Button>}
+        </div>
+      )}
       {list.length === 0 ? (
         <div
           style={{
@@ -67,6 +97,7 @@ export function ConversationView({
           runPhase={runPhase}
           onRetryMessage={onRetryMessage}
           onRegenerateMessage={onRegenerateMessage}
+          onOpenSettings={onOpenSettings}
         />
       )}
     </div>

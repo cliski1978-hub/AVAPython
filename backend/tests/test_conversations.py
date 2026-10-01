@@ -240,6 +240,8 @@ def test_append_message_returns_201_and_response_shape() -> None:
         "content",
         "status",
         "source_run_id",
+        "source_user_message_id",
+        "error_code",
         "created_at",
         "updated_at",
         "contract_version",
@@ -248,6 +250,8 @@ def test_append_message_returns_201_and_response_shape() -> None:
     assert body["role"] == "user"
     assert body["status"] == "complete"
     assert body["source_run_id"] is None
+    assert body["source_user_message_id"] is None
+    assert body["error_code"] is None
     assert body["conversation_id"] == conversation["conversation_id"]
     assert body["contract_version"] == CONTRACT_VERSION
 
