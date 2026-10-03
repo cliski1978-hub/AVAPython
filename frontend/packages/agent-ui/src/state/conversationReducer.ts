@@ -11,6 +11,7 @@ export interface ConversationState {
   activeConversationId: string | null;
   loading?: boolean;
   error?: string | null;
+  loadError?: string | null;
 }
 
 export const DEFAULT_CONVERSATION_TITLE = "New Conversation";
@@ -32,7 +33,13 @@ export interface MessagePatch {
 
 export type ConversationAction =
   | { type: "conversation:upsert"; conversation: Conversation }
+  | { type: "conversation:reorder"; conversationIds: string[] }
   | { type: "conversation:rename"; conversationId: string; title: string }
+  | { type: "conversation:setFolder"; conversationId: string; folderId: string | null }
+  | { type: "conversation:setProject"; conversationId: string; projectId: string | null }
+  | { type: "conversation:setPinned"; conversationId: string; isPinned: boolean }
+  | { type: "conversation:setArchived"; conversationId: string; isArchived: boolean }
+  | { type: "conversation:delete"; conversationId: string; activeConversationId: string | null }
   | { type: "conversation:messagesLoadStart"; conversationId: string }
   | { type: "conversation:messagesHydrate"; conversationId: string; messages: Conversation["messages"] }
   | { type: "conversation:messagesLoadFailure"; conversationId: string; error: string }
@@ -132,7 +139,7 @@ function appendUserMessage(
       messages: [message],
     };
     return {
-      conversations: [created, ...state.conversations],
+      conversations: [...state.conversations, created],
       activeConversationId: created.id,
     };
   }
@@ -227,7 +234,21 @@ export function conversationReducer(
   switch (action.type) {
     case "conversation:upsert": {
       const exists = state.conversations.some((item) => item.id === action.conversation.id);
-      return { ...state, conversations: exists ? state.conversations.map((item) => item.id === action.conversation.id ? action.conversation : item) : [action.conversation, ...state.conversations], activeConversationId: action.conversation.id };
+      return { ...state, conversations: exists ? state.conversations.map((item) => item.id === action.conversation.id ? action.conversation : item) : [...state.conversations, action.conversation], activeConversationId: action.conversation.id };
+    }
+    case "conversation:reorder": {
+      const byId = new Map(state.conversations.map((conversation) => [conversation.id, conversation]));
+      const orderedIds = new Set(action.conversationIds);
+      const ordered = action.conversationIds
+        .map((id) => byId.get(id))
+        .filter((conversation): conversation is Conversation => conversation != null);
+      const localOnly = state.conversations.filter((conversation) => !orderedIds.has(conversation.id));
+      if (ordered.length + localOnly.length === state.conversations.length &&
+          ordered.every((conversation, index) => conversation === state.conversations[index]) &&
+          localOnly.every((conversation, index) => conversation === state.conversations[ordered.length + index])) {
+        return state;
+      }
+      return { ...state, conversations: [...ordered, ...localOnly] };
     }
     case "conversation:rename": {
       // Rename only the title. Unlike upsert, this never touches selection or
@@ -238,6 +259,48 @@ export function conversationReducer(
           ? conversation
           : { ...conversation, title: action.title },
       );
+    }
+    case "conversation:setFolder": {
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.folderId === action.folderId
+          ? conversation
+          : { ...conversation, folderId: action.folderId },
+      );
+    }
+    case "conversation:setProject": {
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.projectId === action.projectId
+          ? conversation
+          : { ...conversation, projectId: action.projectId },
+      );
+    }
+    case "conversation:setPinned": {
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.isPinned === action.isPinned
+          ? conversation
+          : { ...conversation, isPinned: action.isPinned },
+      );
+    }
+    case "conversation:setArchived": {
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.isArchived === action.isArchived
+          ? conversation
+          : { ...conversation, isArchived: action.isArchived },
+      );
+    }
+    case "conversation:delete": {
+      const conversations = state.conversations.filter(
+        (conversation) => conversation.id !== action.conversationId,
+      );
+      return {
+        ...state,
+        conversations,
+        activeConversationId:
+          state.activeConversationId === action.conversationId
+            ? action.activeConversationId
+            : state.activeConversationId,
+        error: null,
+      };
     }
     case "conversation:messagesLoadStart": return { ...state, error: null };
     case "conversation:messagesLoadFailure": return { ...state, error: action.error };
@@ -254,16 +317,16 @@ export function conversationReducer(
         ),
       };
     });
-    case "conversation:loadStart": return { ...state, loading: true, error: null };
-    case "conversation:loadFailure": return { ...state, loading: false, error: action.error };
+    case "conversation:loadStart": return { ...state, loading: true, error: null, loadError: null };
+    case "conversation:loadFailure": return { ...state, loading: false, error: action.error, loadError: action.error };
     case "conversation:hydrate": return {
-      ...state, loading: false, error: null, conversations: action.conversations,
+      ...state, loading: false, error: null, loadError: null, conversations: action.conversations,
       activeConversationId: state.activeConversationId ?? action.conversations[0]?.id ?? null,
     };
     case "conversation:create": {
       const conversation = createConversationEntry(DEFAULT_CONVERSATION_TITLE);
       return {
-        conversations: [conversation, ...state.conversations],
+        conversations: [...state.conversations, conversation],
         activeConversationId: conversation.id,
       };
     }

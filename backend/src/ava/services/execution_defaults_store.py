@@ -31,13 +31,9 @@ class ExecutionDefaultsStore(ExecutionDefaultsRepository):
     def set(self, defaults: ApplicationExecutionDefaults) -> ApplicationExecutionDefaults:
         validate_execution_defaults(
             defaults=defaults,
-            provider_connection=self._provider_connections.get(
-                defaults.default_provider_connection_id
-            ),
+            provider_connection=self._provider_connections.get(defaults.default_provider_connection_id),
             model_configuration=self._model_configurations.get(defaults.default_model_id),
-            runtime_configuration=self._runtime_configurations.get(
-                defaults.default_runtime_configuration_id
-            ),
+            runtime_configuration=self._runtime_configurations.get(defaults.default_runtime_configuration_id),
         )
         self._defaults = defaults
         return defaults

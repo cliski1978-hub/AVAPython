@@ -47,6 +47,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     label: "Defaults",
     summary: "The provider connection, model, and runtime AVA uses by default.",
   },
+  {
+    id: "system-prompts",
+    label: "System Prompts",
+    summary: "Reusable CORE prompt definitions and explicit scope assignments.",
+  },
 ];
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "providers";

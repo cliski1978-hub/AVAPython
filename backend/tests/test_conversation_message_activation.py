@@ -162,14 +162,20 @@ def test_multiple_conversations_persist_isolated_and_ordered(tmp_path) -> None:
         first = client.post("/conversations", json={"title": "First"}).json()
         second = client.post("/conversations", json={"title": "Second"}).json()
         assert first["conversation_id"] != second["conversation_id"]
+        expected = sorted(
+            [first, second], key=lambda item: item["conversation_id"]
+        )
+        expected.sort(
+            key=lambda item: (item["is_pinned"], item["updated_at"], item["created_at"]),
+            reverse=True,
+        )
 
     with _client(settings) as client:
         listed = client.get("/conversations").json()["conversations"]
         assert [entry["conversation_id"] for entry in listed] == [
-            first["conversation_id"],
-            second["conversation_id"],
+            item["conversation_id"] for item in expected
         ]
-        assert [entry["title"] for entry in listed] == ["First", "Second"]
+        assert [entry["title"] for entry in listed] == [item["title"] for item in expected]
 
 
 # ============================================================

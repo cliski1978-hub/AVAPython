@@ -48,11 +48,13 @@ def test_get_unknown_conversation_is_none(repository: tuple[RelationalConversati
     assert conversation_repository.get("ghost") is None
 
 
-def test_list_reflects_insertion_order(repository: tuple[RelationalConversationRepository, SqliteDatabase]) -> None:
+def test_list_uses_canonical_activity_order(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
     conversation_repository, _ = repository
     for conversation_id in ("a", "b", "c"):
         conversation_repository.create(conversation_id, title=f"T-{conversation_id}")
-    assert [r.conversation_id for r in conversation_repository.list()] == ["a", "b", "c"]
+    assert [r.conversation_id for r in conversation_repository.list()] == ["c", "b", "a"]
 
 
 def test_list_is_empty_when_no_conversations(

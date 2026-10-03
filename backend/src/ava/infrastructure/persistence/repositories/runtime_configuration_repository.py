@@ -61,8 +61,7 @@ class RelationalRuntimeConfigurationRepository(RuntimeConfigurationRepository):
             if existing["runtime_type"] != configuration.runtime_type:
                 raise ValueError("Runtime configuration runtime_type cannot change")
             database_connection.execute(
-                "UPDATE runtime_configurations SET display_name = ?, enabled = ? "
-                "WHERE runtime_configuration_id = ?",
+                "UPDATE runtime_configurations SET display_name = ?, enabled = ? WHERE runtime_configuration_id = ?",
                 (configuration.display_name, configuration.enabled, configuration.runtime_configuration_id),
             )
         return configuration

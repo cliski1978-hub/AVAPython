@@ -291,7 +291,7 @@ def test_v6_upgrades_a_v5_database_and_preserves_existing_configuration(tmp_path
                     True,
                 ),
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [6, 7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(6, 19))
         with database.connect() as connection:
             assert connection.execute("SELECT provider_id FROM provider_connections").fetchone()[0] == (
                 "openai-compatible"
@@ -340,7 +340,7 @@ def test_v6_upgrades_a_v5_database_with_phase_4_data_untouched(tmp_path) -> None
                 "VALUES ('att-1', 'report.pdf', 'application/pdf', 10, 'k1', 'document', 'doc-1', "
                 "'available', '2026-01-01T00:00:00+00:00')"
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [6, 7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(6, 19))
         with database.connect() as connection:
             seeded = {
                 "conversations": 1,

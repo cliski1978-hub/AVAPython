@@ -137,7 +137,7 @@ def test_v5_upgrades_a_v4_database_and_preserves_provider_connections(tmp_path) 
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 ("connection-a", "openai-compatible", "Connection A", None, True, None),
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [5, 6, 7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(5, 19))
         with database.connect() as connection:
             row = connection.execute(
                 "SELECT provider_id FROM provider_connections WHERE provider_connection_id = 'connection-a'"

@@ -64,17 +64,11 @@ class AssistantResponseService:
             return None
         if run.assistant_message_id is not None:
             if message_id != run.assistant_message_id or conversation_id is None:
-                raise AssistantContentOwnershipError(
-                    f"Run {run_id!r} does not own assistant message {message_id!r}"
-                )
+                raise AssistantContentOwnershipError(f"Run {run_id!r} does not own assistant message {message_id!r}")
             if self._messages is None:
                 raise AssistantContentOwnershipError("Durable assistant message repository is unavailable")
             message = self._messages.get(conversation_id, message_id)
-            if (
-                message is None
-                or message.role != MessageRole.ASSISTANT
-                or message.source_run_id != run_id
-            ):
+            if message is None or message.role != MessageRole.ASSISTANT or message.source_run_id != run_id:
                 raise AssistantContentOwnershipError(
                     f"Assistant message {message_id!r} is not linked to run {run_id!r}"
                 )
@@ -82,9 +76,7 @@ class AssistantResponseService:
                 return None
             updated = self._messages.update_content(conversation_id, message_id, content)
             if updated is None:
-                raise AssistantContentOwnershipError(
-                    f"Assistant message {message_id!r} could not be updated"
-                )
+                raise AssistantContentOwnershipError(f"Assistant message {message_id!r} could not be updated")
         else:
             latest = self._latest_content(message_id, run_id)
             if latest == content:

@@ -83,8 +83,12 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
                 stdout, stdout_truncated = await stdout_task
                 stderr, stderr_truncated = await stderr_task
                 return SandboxedCommandResult(
-                    process.returncode, stdout, stderr, timed_out=True,
-                    output_truncated=stdout_truncated or stderr_truncated, reason_code="timeout",
+                    process.returncode,
+                    stdout,
+                    stderr,
+                    timed_out=True,
+                    output_truncated=stdout_truncated or stderr_truncated,
+                    reason_code="timeout",
                     duration_seconds=asyncio.get_running_loop().time() - started,
                 )
             stdout, stdout_truncated = await stdout_task
@@ -97,7 +101,9 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
             elif not cancelled and process.returncode == -signal.SIGXCPU:
                 reason = "sandbox_resource_limit"
             return SandboxedCommandResult(
-                process.returncode, stdout, stderr,
+                process.returncode,
+                stdout,
+                stderr,
                 cancelled=cancelled,
                 output_truncated=stdout_truncated or stderr_truncated,
                 reason_code=reason,
@@ -107,7 +113,11 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
             await self._terminate(process)
             await asyncio.gather(stdout_task, stderr_task)
             return SandboxedCommandResult(
-                None, "", "", cancelled=True, reason_code="cancelled",
+                None,
+                "",
+                "",
+                cancelled=True,
+                reason_code="cancelled",
                 duration_seconds=asyncio.get_running_loop().time() - started,
             )
         finally:
@@ -125,10 +135,15 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
             return "sandbox_unavailable"
         if request.environment != {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}:
             return "environment_not_allowed"
-        if request.timeout_seconds <= 0 or any(value <= 0 for value in (
-            request.limits.cpu_seconds, request.limits.memory_bytes,
-            request.limits.process_count, request.limits.output_bytes,
-        )):
+        if request.timeout_seconds <= 0 or any(
+            value <= 0
+            for value in (
+                request.limits.cpu_seconds,
+                request.limits.memory_bytes,
+                request.limits.process_count,
+                request.limits.output_bytes,
+            )
+        ):
             return "invalid_resource_limits"
         if request.network_allowed:
             return "network_policy_unsupported"
@@ -153,15 +168,28 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
             "--die-with-parent",
             "--new-session",
             "--clearenv",
-            "--ro-bind", "/usr", "/usr",
-            "--symlink", "usr/bin", "/bin",
-            "--symlink", "usr/lib", "/lib",
-            "--symlink", "usr/lib64", "/lib64",
-            "--dev", "/dev",
-            "--proc", "/proc",
-            "--tmpfs", "/tmp",
-            "--dir", "/workspace",
-            "--dir", "/tmp/ava-home",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--symlink",
+            "usr/bin",
+            "/bin",
+            "--symlink",
+            "usr/lib",
+            "/lib",
+            "--symlink",
+            "usr/lib64",
+            "/lib64",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+            "--dir",
+            "/workspace",
+            "--dir",
+            "/tmp/ava-home",
         ]
         if request.workspace_writable:
             command.extend(("--bind", str(root), "/workspace"))
@@ -172,15 +200,17 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
         command.extend(("--setenv", "HOME", "/tmp/ava-home"))
         command.extend(("--setenv", "TMPDIR", "/tmp"))
         command.extend(("--chdir", str(Path("/workspace") / relative_directory)))
-        command.extend((
-            "/usr/bin/python3.11",
-            "-c",
-            _LIMITED_ENTRYPOINT,
-            str(request.limits.cpu_seconds),
-            str(request.limits.memory_bytes),
-            str(request.limits.process_count),
-            _EXECUTABLES[request.executable],
-        ))
+        command.extend(
+            (
+                "/usr/bin/python3.11",
+                "-c",
+                _LIMITED_ENTRYPOINT,
+                str(request.limits.cpu_seconds),
+                str(request.limits.memory_bytes),
+                str(request.limits.process_count),
+                _EXECUTABLES[request.executable],
+            )
+        )
         command.extend(request.arguments)
         return command
 
@@ -202,9 +232,7 @@ class BubblewrapSandboxedCommandRunner(SandboxedCommandRunnerPort):
             await process.wait()
 
 
-async def _read_capped(
-    stream: asyncio.StreamReader | None, limit: int
-) -> tuple[str, bool]:
+async def _read_capped(stream: asyncio.StreamReader | None, limit: int) -> tuple[str, bool]:
     if stream is None:
         return "", False
     chunks: list[bytes] = []

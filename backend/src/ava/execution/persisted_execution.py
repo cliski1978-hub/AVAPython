@@ -40,13 +40,16 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ava.agents.contracts import ExecutionConfigurationError
 from ava.models.bindings import ConfiguredModelBinding
 from ava.models.contracts import ModelProviderPort
 from ava.models.model_registry import ModelProfile
 from ava.runtimes.contracts import AgentRuntimePort
+
+if TYPE_CHECKING:
+    from ava.configuration.execution_defaults import ApplicationExecutionDefaults
 
 # ``ExecutionConfigurationError`` is re-exported rather than defined here.
 # The failure is raised while resolving persisted execution, but it escapes
@@ -68,6 +71,7 @@ __all__ = [
     "ProviderAdapterNotRegisteredError",
     "ExecutionConfigurationSource",
     "PersistedModelConfiguration",
+    "PersistedRuntimeConfiguration",
 ]
 
 # ============================================================
@@ -118,6 +122,15 @@ class PersistedModelConfiguration:
     def model_id(self) -> str:
         """The configured model identity, read from the binding's single carrier."""
         return self.model_binding.model_id
+
+
+@dataclass(frozen=True)
+class PersistedRuntimeConfiguration:
+    """One configured runtime resolved independently from a model/provider."""
+
+    runtime: AgentRuntimePort = field(repr=False)
+    runtime_key: str
+    runtime_configuration_id: str
 
 
 @dataclass(frozen=True)
@@ -193,15 +206,22 @@ class PersistedExecutionConfigurationResolverPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
-    def resolve_model_configuration(self, model_id: str) -> PersistedModelConfiguration | None:
+    def resolve_model_configuration(
+        self,
+        model_id: str,
+        *,
+        runtime_type: str | None = None,
+        skip_if_unavailable: bool = False,
+        expected_provider_connection_id: str | None = None,
+        require_configured: bool = False,
+    ) -> PersistedModelConfiguration | None:
         """Resolve one configured model by its stable ``model_id``.
 
         This is the seam that lets a per-run selection name a configured model
         rather than only a bootstrap catalog entry. It is deliberately a
-        different answer from :meth:`resolve_persisted`: ``None`` here means
-        "this id is not a configured model", which is a normal outcome a caller
-        resolves against its other catalog. It never means "configuration
-        broken".
+        different answer from :meth:`resolve_persisted`: ``None`` means this id
+        is not configured, or an unusable Project preference was explicitly
+        allowed to fall through. Application defaults use the strict arguments.
 
         Returns:
             The resolved model, or ``None`` when ``model_id`` is not a configured
@@ -214,6 +234,14 @@ class PersistedExecutionConfigurationResolverPort(Protocol):
                 a credential failure. An unusable configured model must fail
                 loudly rather than quietly fall back to another model.
         """
+        raise NotImplementedError
+
+    def application_defaults(self) -> ApplicationExecutionDefaults | None:
+        """Read application references so the selector can resolve axes independently."""
+        raise NotImplementedError
+
+    def resolve_application_runtime(self) -> PersistedRuntimeConfiguration | None:
+        """Resolve the application runtime axis with its established strict behavior."""
         raise NotImplementedError
 
 
@@ -293,8 +321,7 @@ class ModelProviderMismatchError(ExecutionConfigurationError):
         self.model_id = model_id
         self.provider_connection_id = provider_connection_id
         super().__init__(
-            f"Configured model {model_id!r} does not belong to provider connection "
-            f"{provider_connection_id!r}"
+            f"Configured model {model_id!r} does not belong to provider connection {provider_connection_id!r}"
         )
 
 
@@ -359,9 +386,7 @@ class CredentialResolutionFailedError(ExecutionConfigurationError):
 
     def __init__(self, provider_connection_id: str) -> None:
         self.provider_connection_id = provider_connection_id
-        super().__init__(
-            f"Credential for provider connection {provider_connection_id!r} could not be resolved"
-        )
+        super().__init__(f"Credential for provider connection {provider_connection_id!r} could not be resolved")
 
 
 class ConfiguredModelIneligibleError(ExecutionConfigurationError):

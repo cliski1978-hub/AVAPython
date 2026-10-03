@@ -66,6 +66,8 @@ export { ProviderConnectionsSection } from "./sections/ProviderConnectionsSectio
 export { ModelConfigurationsSection } from "./sections/ModelConfigurationsSection";
 export { RuntimeConfigurationsSection } from "./sections/RuntimeConfigurationsSection";
 export { ExecutionDefaultsSection } from "./sections/ExecutionDefaultsSection";
+export { SystemPromptsSection } from "./sections/SystemPromptsSection";
+export { CorePromptScopeAssignments, type CorePromptScopeAssignmentsProps, type AssignablePromptScope } from "./prompts/CorePromptScopeAssignments";
 export {
   ProviderConnectionEditor,
   type ProviderConnectionEditorProps,

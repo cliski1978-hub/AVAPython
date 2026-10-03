@@ -48,11 +48,7 @@ class ExecutionCompatibilityValidator:
             return ExecutionCompatibilityResult(False, ("selected model does not support chat",))
         if hosting_requirement is not None:
             if hosting_mode is None:
-                return ExecutionCompatibilityResult(
-                    False, (HostingReason.CLASSIFICATION_UNAVAILABLE.value,)
-                )
+                return ExecutionCompatibilityResult(False, (HostingReason.CLASSIFICATION_UNAVAILABLE.value,))
             if not hosting_requirement.permits(hosting_mode):
-                return ExecutionCompatibilityResult(
-                    False, (HostingReason.MODE_NOT_ALLOWED.value,)
-                )
+                return ExecutionCompatibilityResult(False, (HostingReason.MODE_NOT_ALLOWED.value,))
         return ExecutionCompatibilityResult(True)

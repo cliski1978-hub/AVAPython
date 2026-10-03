@@ -11,7 +11,7 @@ message identifiers are always service-generated; clients never supply them.
 Retrieval endpoints return snapshots, not streams.
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from ava.contracts.conversations import (
@@ -21,17 +21,55 @@ from ava.contracts.conversations import (
     CreateConversationRequest,
     CreateMessageRequest,
     MessageResponse,
+    SetConversationArchivedRequest,
+    SetConversationFolderRequest,
+    SetConversationPinnedRequest,
+    SetConversationProjectRequest,
     UpdateConversationRequest,
 )
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.services.conversation_folder_service import (
+    ConversationFolderNotFoundError,
+    ConversationFolderService,
+    ConversationNotFoundForFolderError,
+)
 from ava.services.conversation_service import (
+    ConversationFolderNotFoundForCreationError,
+    ConversationHasActiveRunError,
     ConversationNotFoundError,
     ConversationService,
     DuplicateConversationError,
     DuplicateMessageError,
 )
+from ava.services.project_service import ProjectNotFoundError
 
 router = APIRouter(tags=["conversations"])
+
+
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=204,
+    response_class=Response,
+    response_model=None,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def delete_conversation(request: Request, conversation_id: str) -> Response | JSONResponse:
+    """Permanently remove a conversation through the application service."""
+    service: ConversationService = request.app.state.conversation_service
+    try:
+        deleted = service.delete_conversation(conversation_id)
+    except ConversationHasActiveRunError:
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                error_code="conversation_run_active",
+                category=ErrorCategory.VALIDATION,
+                message="Conversation cannot be deleted while a run is active.",
+            ).model_dump(),
+        )
+    if not deleted:
+        return _unknown_conversation(conversation_id)
+    return Response(status_code=204)
 
 
 # ============================================================
@@ -45,9 +83,7 @@ router = APIRouter(tags=["conversations"])
     status_code=201,
     responses={409: {"model": ErrorResponse}},
 )
-async def create_conversation(
-    request: Request, body: CreateConversationRequest
-) -> ConversationResponse | JSONResponse:
+async def create_conversation(request: Request, body: CreateConversationRequest) -> ConversationResponse | JSONResponse:
     """Create an AVA conversation.
 
     Ava generates the conversation identifier in the service layer; the route
@@ -56,9 +92,18 @@ async def create_conversation(
     """
     service: ConversationService = request.app.state.conversation_service
     try:
-        return service.create_conversation(title=body.title)
+        return service.create_conversation(title=body.title, folder_id=body.folder_id)
     except DuplicateConversationError as exc:
         return _duplicate_error("conversation_id_conflict", exc)
+    except ConversationFolderNotFoundForCreationError:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="conversation_folder_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown conversation folder: {body.folder_id}",
+            ).model_dump(),
+        )
 
 
 # ============================================================
@@ -72,10 +117,10 @@ async def create_conversation(
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
-async def list_conversations(request: Request) -> ConversationListResponse:
-    """Return all AVA conversations in stable insertion order."""
+async def list_conversations(request: Request, search: str | None = Query(default=None)) -> ConversationListResponse:
+    """Return AVA conversations in stable order, optionally matching titles."""
     service: ConversationService = request.app.state.conversation_service
-    return service.list_conversations()
+    return service.list_conversations(search=search)
 
 
 # ============================================================
@@ -93,9 +138,7 @@ async def list_conversations(request: Request) -> ConversationListResponse:
     response_model=ConversationResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_conversation(
-    request: Request, conversation_id: str
-) -> ConversationResponse | JSONResponse:
+async def get_conversation(request: Request, conversation_id: str) -> ConversationResponse | JSONResponse:
     """Return an AVA conversation as a snapshot, or ``404`` if unknown."""
     service: ConversationService = request.app.state.conversation_service
     conversation = service.get_conversation(conversation_id)
@@ -138,6 +181,88 @@ async def rename_conversation(
 # ============================================================
 # END: Rename Conversation
 # ============================================================
+
+
+@router.patch(
+    "/conversations/{conversation_id}/pin",
+    response_model=ConversationResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def set_conversation_pinned(
+    request: Request, conversation_id: str, body: SetConversationPinnedRequest
+) -> ConversationResponse | JSONResponse:
+    """Set pin state only, returning the usual conversation snapshot."""
+    service: ConversationService = request.app.state.conversation_service
+    conversation = service.set_pinned(conversation_id, body.is_pinned)
+    if conversation is None:
+        return _unknown_conversation(conversation_id)
+    return conversation
+
+
+@router.patch(
+    "/conversations/{conversation_id}/archive",
+    response_model=ConversationResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def set_conversation_archived(
+    request: Request, conversation_id: str, body: SetConversationArchivedRequest
+) -> ConversationResponse | JSONResponse:
+    """Set archive state only, returning the usual conversation snapshot."""
+    service: ConversationService = request.app.state.conversation_service
+    conversation = service.set_archived(conversation_id, body.is_archived)
+    if conversation is None:
+        return _unknown_conversation(conversation_id)
+    return conversation
+
+
+@router.patch(
+    "/conversations/{conversation_id}/folder",
+    response_model=ConversationResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def set_conversation_folder(
+    request: Request, conversation_id: str, body: SetConversationFolderRequest
+) -> ConversationResponse | JSONResponse:
+    service: ConversationFolderService = request.app.state.conversation_folder_service
+    try:
+        record = service.set_conversation_folder(conversation_id, body.folder_id)
+        return ConversationResponse.model_validate(record.__dict__)
+    except ConversationNotFoundForFolderError:
+        return _unknown_conversation(conversation_id)
+    except ConversationFolderNotFoundError:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="conversation_folder_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown conversation folder: {body.folder_id}",
+            ).model_dump(),
+        )
+
+
+@router.patch(
+    "/conversations/{conversation_id}/project",
+    response_model=ConversationResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def set_conversation_project(
+    request: Request, conversation_id: str, body: SetConversationProjectRequest
+) -> ConversationResponse | JSONResponse:
+    service: ConversationService = request.app.state.conversation_service
+    try:
+        conversation = service.set_project(conversation_id, body.project_id)
+    except ProjectNotFoundError:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="project_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown Project: {body.project_id}",
+            ).model_dump(),
+        )
+    if conversation is None:
+        return _unknown_conversation(conversation_id)
+    return conversation
 
 
 # ============================================================
@@ -189,9 +314,7 @@ async def append_message(
     response_model=ConversationMessagesResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def list_messages(
-    request: Request, conversation_id: str
-) -> ConversationMessagesResponse | JSONResponse:
+async def list_messages(request: Request, conversation_id: str) -> ConversationMessagesResponse | JSONResponse:
     """Return a conversation's messages in stable append order.
 
     Returns ``404`` for an unknown conversation so an empty conversation

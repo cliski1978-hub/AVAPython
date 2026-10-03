@@ -24,6 +24,7 @@ export {
   type ConversationManager,
   type AddedUserMessage,
 } from "./state/ConversationProvider";
+export { selectActiveConversations, selectArchivedConversations } from "./state/conversationSelectors";
 export {
   AgentRunProvider,
   useAgentRun,
@@ -33,3 +34,4 @@ export type { RunAgent, RunCommands } from "./run/conversationRun";
 export type { RuntimeDiscoveryItem, ModelProviderDiscoveryItem, ModelInfo } from "@ava/contracts";
 export type { ExecutionProfile } from "@ava/contracts";
 export type { WorkspaceInfo } from "@ava/contracts";
+export type { ConversationFolder } from "@ava/contracts";

@@ -125,9 +125,7 @@ class InMemoryDocumentRevisionStore(DocumentRevisionRepository):
         spirit as ``clear()``; used by the in-memory write coordinator.
         """
         self._revisions = {document_id: list(revisions) for document_id, revisions in snapshot.items()}
-        self._revision_ids = {
-            record.revision_id for revisions in self._revisions.values() for record in revisions
-        }
+        self._revision_ids = {record.revision_id for revisions in self._revisions.values() for record in revisions}
 
 
 # ============================================================

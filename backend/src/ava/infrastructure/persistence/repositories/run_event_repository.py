@@ -20,13 +20,12 @@ from ava.infrastructure.persistence.database import SqliteDatabase, translate_da
 from ava.infrastructure.persistence.serialization import dump_json, row_to_run_event, to_utc_iso
 from ava.repositories.run_event_repository import TERMINAL_EVENT_TYPES, RunEventRepository
 
-_EVENT_COLUMNS = "event_id, run_id, event_type, seq, \"timestamp\", payload, contract_version"
+_EVENT_COLUMNS = 'event_id, run_id, event_type, seq, "timestamp", payload, contract_version'
 
 _TERMINAL_VALUES: tuple[str, ...] = tuple(sorted(event_type.value for event_type in TERMINAL_EVENT_TYPES))
 _TERMINAL_PLACEHOLDERS: str = ",".join("?" for _ in _TERMINAL_VALUES)
 _TERMINAL_EXISTS_SQL: str = (
-    "SELECT 1 FROM run_events WHERE run_id = ? AND event_type IN "
-    f"({_TERMINAL_PLACEHOLDERS}) LIMIT 1"
+    f"SELECT 1 FROM run_events WHERE run_id = ? AND event_type IN ({_TERMINAL_PLACEHOLDERS}) LIMIT 1"
 )
 
 # ============================================================
@@ -56,7 +55,7 @@ class RelationalRunEventRepository(RunEventRepository):
                     (event.run_id,),
                 ).fetchone()
                 connection.execute(
-                    "INSERT INTO run_events (event_id, run_id, event_type, seq, \"timestamp\", "
+                    'INSERT INTO run_events (event_id, run_id, event_type, seq, "timestamp", '
                     "payload, contract_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         event.event_id,
@@ -93,8 +92,7 @@ class RelationalRunEventRepository(RunEventRepository):
     def list_after_sequence(self, run_id: str, after_sequence: int) -> list[RunEvent]:
         with self._database.connect() as connection:
             rows = connection.execute(
-                f"SELECT {_EVENT_COLUMNS} FROM run_events "
-                "WHERE run_id = ? AND seq > ? ORDER BY seq ASC",
+                f"SELECT {_EVENT_COLUMNS} FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq ASC",
                 (run_id, after_sequence),
             ).fetchall()
         return [row_to_run_event(row) for row in rows]

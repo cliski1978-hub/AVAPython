@@ -136,8 +136,10 @@ class AvaTerminalExecutor(ToolExecutor[AvaTerminalAction, AvaTerminalObservation
             result.reason_code or "", result.reason_code or ("command_nonzero_exit" if result.exit_code else "allowed")
         )
         self._context.record(
-            AVA_TERMINAL_TOOL_NAME, "command.execute",
-            "failure" if result.reason_code or result.exit_code != 0 else "success", reason,
+            AVA_TERMINAL_TOOL_NAME,
+            "command.execute",
+            "failure" if result.reason_code or result.exit_code != 0 else "success",
+            reason,
         )
         if result.reason_code:
             return AvaTerminalObservation.from_text(
@@ -148,11 +150,13 @@ class AvaTerminalExecutor(ToolExecutor[AvaTerminalAction, AvaTerminalObservation
         output = _format_result(result.stdout, result.stderr, result.output_truncated)
         is_error = result.exit_code not in (0, None) or result.timed_out or result.cancelled
         is_error = is_error or result.reason_code is not None
-        return AvaTerminalObservation.from_text(text=output, is_error=is_error).model_copy(update={
-            "exit_code": result.exit_code,
-            "timed_out": result.timed_out,
-            "cancelled": result.cancelled,
-        })
+        return AvaTerminalObservation.from_text(text=output, is_error=is_error).model_copy(
+            update={
+                "exit_code": result.exit_code,
+                "timed_out": result.timed_out,
+                "cancelled": result.cancelled,
+            }
+        )
 
     async def _run_command(self, request: SandboxedCommandRequest) -> SandboxedCommandResult:
         task = asyncio.create_task(self._runner.execute(request))
@@ -195,8 +199,11 @@ class AvaControlledTerminalTool(ToolDefinition[AvaTerminalAction, AvaTerminalObs
                     "redirection, and chaining are unavailable."
                 ),
                 annotations=ToolAnnotations(
-                    title="ava_terminal", readOnlyHint=False, destructiveHint=True,
-                    idempotentHint=False, openWorldHint=False,
+                    title="ava_terminal",
+                    readOnlyHint=False,
+                    destructiveHint=True,
+                    idempotentHint=False,
+                    openWorldHint=False,
                 ),
                 executor=AvaTerminalExecutor(
                     workspace=context.workspace, policy=context.policy, runner=context.runner, context=context.context

@@ -265,7 +265,7 @@ def test_events_are_isolated_per_run(repositories: RepositorySetup) -> None:
 def test_conversation_create_list_order_and_duplicate(repositories: RepositorySetup) -> None:
     repositories.conversations.create("c1", title="First")
     repositories.conversations.create("c2", title="Second")
-    assert [c.conversation_id for c in repositories.conversations.list()] == ["c1", "c2"]
+    assert [c.conversation_id for c in repositories.conversations.list()] == ["c2", "c1"]
     assert repositories.conversations.get("c1").title == "First"
     assert repositories.conversations.get("ghost") is None
     with pytest.raises(ValueError, match="Conversation already exists: c2"):

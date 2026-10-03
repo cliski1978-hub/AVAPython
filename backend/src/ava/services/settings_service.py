@@ -138,14 +138,10 @@ class SettingsService:
             raise UnknownSettingsRecordError(f"Unknown provider connection: {provider_connection_id}")
         return _connection_to_response(connection)
 
-    def create_provider_connection(
-        self, body: CreateProviderConnectionRequest
-    ) -> ProviderConnectionResponse:
+    def create_provider_connection(self, body: CreateProviderConnectionRequest) -> ProviderConnectionResponse:
         """Persist a new connection after validating its credential reference."""
         if self._provider_connections.get(body.provider_connection_id) is not None:
-            raise DuplicateSettingsRecordError(
-                f"Provider connection already exists: {body.provider_connection_id}"
-            )
+            raise DuplicateSettingsRecordError(f"Provider connection already exists: {body.provider_connection_id}")
         credential_reference = _validated_credential_reference(body.credential_reference)
         try:
             connection = ProviderConnection(
@@ -199,9 +195,7 @@ class SettingsService:
 
     def list_model_configurations(self) -> ModelConfigurationListResponse:
         """Return every configured model, disabled ones included."""
-        return ModelConfigurationListResponse(
-            models=[_model_to_response(model) for model in self._models.list()]
-        )
+        return ModelConfigurationListResponse(models=[_model_to_response(model) for model in self._models.list()])
 
     def get_model_configuration(self, model_id: str) -> ModelConfigurationResponse:
         model = self._models.get(model_id)
@@ -274,14 +268,10 @@ class SettingsService:
     def get_runtime_configuration(self, runtime_configuration_id: str) -> RuntimeConfigurationResponse:
         runtime = self._runtimes.get(runtime_configuration_id)
         if runtime is None:
-            raise UnknownSettingsRecordError(
-                f"Unknown runtime configuration: {runtime_configuration_id}"
-            )
+            raise UnknownSettingsRecordError(f"Unknown runtime configuration: {runtime_configuration_id}")
         return _runtime_to_response(runtime)
 
-    def create_runtime_configuration(
-        self, body: CreateRuntimeConfigurationRequest
-    ) -> RuntimeConfigurationResponse:
+    def create_runtime_configuration(self, body: CreateRuntimeConfigurationRequest) -> RuntimeConfigurationResponse:
         """Persist a new runtime configuration.
 
         ``runtime_type`` is not checked against installed runtimes and the
@@ -289,9 +279,7 @@ class SettingsService:
         discovery are separate concerns.
         """
         if self._runtimes.get(body.runtime_configuration_id) is not None:
-            raise DuplicateSettingsRecordError(
-                f"Runtime configuration already exists: {body.runtime_configuration_id}"
-            )
+            raise DuplicateSettingsRecordError(f"Runtime configuration already exists: {body.runtime_configuration_id}")
         try:
             runtime = RuntimeConfiguration(
                 runtime_configuration_id=body.runtime_configuration_id,
@@ -309,12 +297,8 @@ class SettingsService:
         """Replace a runtime's mutable fields, preserving its adapter type."""
         current = self._runtimes.get(runtime_configuration_id)
         if current is None:
-            raise UnknownSettingsRecordError(
-                f"Unknown runtime configuration: {runtime_configuration_id}"
-            )
-        _require_unchanged(
-            f"Runtime configuration {_RUNTIME_FIXED}", current.runtime_type, body.runtime_type
-        )
+            raise UnknownSettingsRecordError(f"Unknown runtime configuration: {runtime_configuration_id}")
+        _require_unchanged(f"Runtime configuration {_RUNTIME_FIXED}", current.runtime_type, body.runtime_type)
         try:
             updated = RuntimeConfiguration(
                 runtime_configuration_id=runtime_configuration_id,
@@ -326,9 +310,7 @@ class SettingsService:
         except ValueError as exc:
             raise InvalidSettingsError(str(exc)) from exc
         if result is None:
-            raise UnknownSettingsRecordError(
-                f"Unknown runtime configuration: {runtime_configuration_id}"
-            )
+            raise UnknownSettingsRecordError(f"Unknown runtime configuration: {runtime_configuration_id}")
         return _runtime_to_response(result)
 
     # ========================================================
@@ -344,13 +326,9 @@ class SettingsService:
         defaults = self._execution_defaults.get()
         if defaults is None:
             return ApplicationExecutionDefaultsState(configured=False)
-        return ApplicationExecutionDefaultsState(
-            configured=True, defaults=_defaults_to_response(defaults)
-        )
+        return ApplicationExecutionDefaultsState(configured=True, defaults=_defaults_to_response(defaults))
 
-    def set_execution_defaults(
-        self, body: SetApplicationExecutionDefaultsRequest
-    ) -> ApplicationExecutionDefaultsState:
+    def set_execution_defaults(self, body: SetApplicationExecutionDefaultsRequest) -> ApplicationExecutionDefaultsState:
         """Replace the one defaults record, enforcing every Phase 5.8 rule.
 
         Existence, enabled state, and the model/connection association are
@@ -367,9 +345,7 @@ class SettingsService:
             )
         except ValueError as exc:
             raise InvalidSettingsError(str(exc)) from exc
-        return ApplicationExecutionDefaultsState(
-            configured=True, defaults=_defaults_to_response(saved)
-        )
+        return ApplicationExecutionDefaultsState(configured=True, defaults=_defaults_to_response(saved))
 
     # ========================================================
     # END: Application Execution Defaults

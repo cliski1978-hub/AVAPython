@@ -110,9 +110,7 @@ class RunStatus(StrEnum):
 
 #: The one canonical definition of a finished run, shared by the run service,
 #: the lifecycle authority, conversation reads, and lifecycle tests.
-TERMINAL_RUN_STATUSES: frozenset[RunStatus] = frozenset(
-    {RunStatus.COMPLETED, RunStatus.CANCELLED, RunStatus.FAILED}
-)
+TERMINAL_RUN_STATUSES: frozenset[RunStatus] = frozenset({RunStatus.COMPLETED, RunStatus.CANCELLED, RunStatus.FAILED})
 
 #: The one canonical definition of an in-progress run. ``waiting_for_approval``
 #: counts as active: an approval-gated run has started and still owes an
@@ -161,12 +159,14 @@ class RuntimeDiscoveryResponse(BaseModel):
     default_runtime_id: str
     runtimes: list[RuntimeDiscoveryItem]
 
+
 class ExecutionProfile(BaseModel):
     id: str
     name: str
     description: str | None = None
     runtime_id: str
     model_provider_id: str
+
 
 class ExecutionProfileDiscoveryResponse(BaseModel):
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)

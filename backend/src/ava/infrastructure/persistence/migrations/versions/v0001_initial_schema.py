@@ -169,8 +169,7 @@ def _structure_violations(connection: sqlite3.Connection) -> list[str]:
         columns = table_columns(connection, table)
         if tuple(columns) != EXPECTED_COLUMNS[table]:
             violations.append(
-                f"table {table!r} columns {list(columns)} do not match expected "
-                f"{list(EXPECTED_COLUMNS[table])}"
+                f"table {table!r} columns {list(columns)} do not match expected {list(EXPECTED_COLUMNS[table])}"
             )
 
     unexpected = [

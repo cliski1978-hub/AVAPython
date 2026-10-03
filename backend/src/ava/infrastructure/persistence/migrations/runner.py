@@ -154,15 +154,11 @@ class MigrationRunner:
             except MigrationError:
                 raise
             except Exception as exc:  # noqa: BLE001 - driver/migration failures are wrapped with context
-                raise MigrationError(
-                    f"migration {migration.version:04d} ({migration.name}) failed: {exc}"
-                ) from exc
+                raise MigrationError(f"migration {migration.version:04d} ({migration.name}) failed: {exc}") from exc
             applied_now.append(migration.version)
         return applied_now
 
-    def _state(
-        self, connection: sqlite3.Connection
-    ) -> tuple[list[AppliedMigration], int, set[int]]:
+    def _state(self, connection: sqlite3.Connection) -> tuple[list[AppliedMigration], int, set[int]]:
         """Inspect applied history, current version, and versions unknown to the registry.
 
         The applied history must be an exact prefix of the registry's sorted
@@ -198,9 +194,7 @@ class MigrationRunner:
         if not any(table_exists(connection, table) for table in initial.expected_tables):
             return False  # fresh empty database: normal migration path
         if initial.verify is None:
-            raise MigrationError(
-                "cannot adopt a legacy database without a migration-1 structure validator"
-            )
+            raise MigrationError("cannot adopt a legacy database without a migration-1 structure validator")
         initial.verify(connection)
         with self._database.transaction() as connection:
             _ensure_metadata_table(connection)
@@ -272,12 +266,9 @@ def _read_applied(connection: sqlite3.Connection) -> list[AppliedMigration]:
     columns = table_columns(connection, _METADATA_TABLE)
     if columns != list(_EXPECTED_METADATA_COLUMNS):
         raise SchemaValidationError(
-            f"migration metadata table {_METADATA_TABLE!r} has an unexpected structure: "
-            f"columns {columns}"
+            f"migration metadata table {_METADATA_TABLE!r} has an unexpected structure: columns {columns}"
         )
-    rows = connection.execute(
-        f'SELECT version, name, applied_at FROM "{_METADATA_TABLE}" ORDER BY version'
-    ).fetchall()
+    rows = connection.execute(f'SELECT version, name, applied_at FROM "{_METADATA_TABLE}" ORDER BY version').fetchall()
     return [
         AppliedMigration(
             version=cast(int, row["version"]),

@@ -26,6 +26,7 @@ class RunExecutionSelection(BaseModel):
 class ExecutionSelectionMode(StrEnum):
     AUTO = "auto"
 
+
 class RunExecutionOverride(BaseModel):
     """Optional per-run execution identity selection.
 

@@ -61,9 +61,7 @@ class ModelProviderPort(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def generate(
-        self, request: ModelRequest, *, model_name: str | None = None
-    ) -> ModelResponse:
+    async def generate(self, request: ModelRequest, *, model_name: str | None = None) -> ModelResponse:
         """Generate a model response from an AVA-owned request.
 
         Args:
@@ -78,9 +76,7 @@ class ModelProviderPort(ABC):
         """
         raise NotImplementedError
 
-    async def stream(
-        self, request: ModelRequest, *, model_name: str | None = None
-    ) -> AsyncIterator[str]:
+    async def stream(self, request: ModelRequest, *, model_name: str | None = None) -> AsyncIterator[str]:
         """Yield provider-originated text deltas.
 
         Providers without a streaming transport retain a truthful final-only

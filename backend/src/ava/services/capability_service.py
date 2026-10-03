@@ -38,9 +38,7 @@ class CapabilityService:
         reported exactly as the configured agent advertises it: nothing is
         hard-coded here, so capability truthfulness follows the agent.
         """
-        capabilities: dict[CapabilityName, bool] = {
-            capability: False for capability in CapabilityName
-        }
+        capabilities: dict[CapabilityName, bool] = {capability: False for capability in CapabilityName}
         capabilities[CapabilityName.HEALTH] = True
         for capability in self._agent.get_capabilities():
             capabilities[capability] = True

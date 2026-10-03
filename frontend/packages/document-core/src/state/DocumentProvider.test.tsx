@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiClient } from "@ava/api-client";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { htmlContent } from "../model";
@@ -85,6 +85,30 @@ describe("DocumentProvider hydration", () => {
     expect(value?.state.documents).toEqual([]);
     expect(value?.state.activeDocumentId).toBeNull();
     expect(value?.state.error?.message).toBe("documents unavailable");
+  });
+
+  it("keeps a newer successful reload when an older initial response fails late", async () => {
+    let rejectInitial!: (error: Error) => void;
+    const initial = new Promise<Response>((_resolve, reject) => { rejectInitial = reject; });
+    const fetchMock = vi.fn()
+      .mockReturnValueOnce(initial)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ contract_version: "v1", documents: [backendDocument] }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://localhost:8000", fetchImpl: fetchMock });
+    let value: ReturnType<typeof useDocuments> | undefined;
+    function Capture() { value = useDocuments(); return null; }
+
+    render(<DocumentProvider client={client}><Capture /></DocumentProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => { await value?.reloadDocuments(); });
+    await waitFor(() => expect(value?.state).toMatchObject({ loading: false, loadError: null, documents: [{ id: "document-backend-1" }] }));
+
+    await act(async () => {
+      rejectInitial(new TypeError("stale response after retry"));
+      await Promise.resolve();
+    });
+
+    expect(value?.state.loadError).toBeNull();
+    expect(value?.state.documents.map((document) => document.id)).toEqual(["document-backend-1"]);
   });
 
   it("creates once through the backend, inserts its authoritative response, and selects it", async () => {

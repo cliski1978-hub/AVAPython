@@ -67,9 +67,9 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
     try:
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert [m.version for m in runner.pending_migrations()] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        assert runner.migrate() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        assert runner.current_version() == 9
+        assert [m.version for m in runner.pending_migrations()] == list(range(1, 19))
+        assert runner.migrate() == list(range(1, 19))
+        assert runner.current_version() == 18
         assert list(runner.pending_migrations()) == []
         tables = _tables(database)
         assert {
@@ -85,6 +85,8 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             "runtime_configurations",
             "application_execution_defaults",
         } <= tables
+        assert "projects" in tables
+        assert "core_prompts" in tables
         assert "ava_schema_migrations" in tables
         applied = runner.applied_migrations()
         assert [(m.version, m.name) for m in applied] == [
@@ -93,10 +95,19 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             (3, "attachment metadata"),
             (4, "provider connections"),
             (5, "model configurations"),
-                (6, "runtime configurations"),
-                (7, "application execution defaults"),
-                (8, "durable conversation run relationships"),
-                (9, "durable run cancellation request"),
+            (6, "runtime configurations"),
+            (7, "application execution defaults"),
+            (8, "durable conversation run relationships"),
+            (9, "durable run cancellation request"),
+            (10, "conversation organization metadata"),
+            (11, "conversation folders"),
+            (12, "projects"),
+            (13, "conversation Project relationship"),
+            (14, "conversation Project lookup index"),
+            (15, "CORE prompt definitions"),
+            (16, "Scoped CORE prompt assignments"),
+            (17, "Project execution defaults"),
+            (18, "Project files"),
         ]
         assert applied[0].applied_at
     finally:
@@ -111,9 +122,122 @@ def test_migrate_is_idempotent_for_an_already_current_database() -> None:
         runner.migrate()
         tables_before = _tables(database)
         assert runner.migrate() == []
-        assert runner.current_version() == 9
+        assert runner.current_version() == 18
         assert _tables(database) == tables_before
-        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert _metadata_versions(database) == list(range(1, 19))
+    finally:
+        database.dispose()
+        path.unlink()
+
+
+def test_migration_0015_upgrades_version_14_without_resetting_existing_data() -> None:
+    database, path = _file_database()
+    try:
+        registry_through_14 = MigrationRegistry()
+        for migration in default_registry():
+            if migration.version <= 14:
+                registry_through_14.register(migration)
+        assert MigrationRunner(database, registry_through_14).migrate() == list(range(1, 15))
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO projects (id, name, description, instructions, is_archived, created_at, updated_at) "
+                "VALUES ('existing-project', 'Keep me', NULL, NULL, 0, '2026-01-01T00:00:00+00:00', "
+                "'2026-01-01T00:00:00+00:00')"
+            )
+            connection.execute(
+                "INSERT INTO conversations "
+                "(conversation_id, title, created_at, updated_at, is_pinned, is_archived, folder_id, project_id) "
+                "VALUES ('existing-conversation', 'Keep conversation', "
+                "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 0, 0, NULL, 'existing-project')"
+            )
+        assert MigrationRunner(database, default_registry()).migrate() == [15, 16, 17, 18]
+        assert MigrationRunner(database, default_registry()).migrate() == []
+        assert MigrationRunner(database, default_registry()).current_version() == 18
+        with database.connect() as connection:
+            project_name = connection.execute("SELECT name FROM projects WHERE id='existing-project'").fetchone()[0]
+            assert project_name == "Keep me"
+            assert (
+                connection.execute(
+                    "SELECT title FROM conversations WHERE conversation_id='existing-conversation'"
+                ).fetchone()[0]
+                == "Keep conversation"
+            )
+            assert connection.execute("SELECT COUNT(*) FROM core_prompts").fetchone()[0] == 0
+    finally:
+        database.dispose()
+        path.unlink()
+
+
+def test_migration_0017_upgrades_populated_schema_16_additively() -> None:
+    database, path = _file_database()
+    try:
+        before_17 = MigrationRegistry()
+        for migration in default_registry():
+            if migration.version <= 16:
+                before_17.register(migration)
+        assert MigrationRunner(database, before_17).migrate() == list(range(1, 17))
+        timestamp = "2026-01-01T00:00:00+00:00"
+        with database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'Existing', ?, ?)",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO conversation_folders (id, name, created_at, updated_at) VALUES ('f1', 'Folder', ?, ?)",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO conversations (conversation_id, title, created_at, updated_at, folder_id, project_id) "
+                "VALUES ('c1', 'Conversation', ?, ?, 'f1', 'p1')",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO messages (message_id, conversation_id, role, status, content, created_at, updated_at) "
+                "VALUES ('m1', 'c1', 'user', 'complete', 'hello', ?, ?)",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO runs (run_id, status, created_at, updated_at) VALUES ('r1', 'completed', ?, ?)",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO run_events (event_id, run_id, event_type, seq, timestamp, payload, contract_version) "
+                "VALUES ('e1', 'r1', 'run_started', 1, ?, '{}', 'v1')",
+                (timestamp,),
+            )
+            connection.execute(
+                "INSERT INTO core_prompts (id, name, prompt_text, category, is_enabled, created_at, updated_at) "
+                "VALUES ('prompt1', 'Prompt', 'Keep', 'general', 1, ?, ?)",
+                (timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO core_prompt_assignments "
+                "(id, core_prompt_id, scope_type, scope_id, mode, created_at, updated_at) "
+                "VALUES ('assignment1', 'prompt1', 'project', 'p1', 'enable', ?, ?)",
+                (timestamp, timestamp),
+            )
+
+        runner = MigrationRunner(database, default_registry())
+        assert runner.migrate() == [17, 18]
+        assert runner.migrate() == []
+        with database.connect() as connection:
+            project = connection.execute(
+                "SELECT name, default_runtime_key, default_model_id FROM projects WHERE id='p1'"
+            ).fetchone()
+            assert tuple(project) == ("Existing", None, None)
+            for table in (
+                "conversations",
+                "conversation_folders",
+                "messages",
+                "runs",
+                "run_events",
+                "core_prompts",
+                "core_prompt_assignments",
+            ):
+                assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+            assert connection.execute("SELECT COUNT(*) FROM project_files").fetchone()[0] == 0
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         database.dispose()
         path.unlink()
@@ -127,17 +251,26 @@ def test_migration_records_version_and_name_metadata() -> None:
             rows = connection.execute(
                 "SELECT version, name, applied_at FROM ava_schema_migrations ORDER BY version"
             ).fetchall()
-        assert len(rows) == 9
+        assert len(rows) == 18
         assert [(row["version"], row["name"]) for row in rows] == [
             (1, "initial application persistence schema"),
             (2, "document revision history"),
             (3, "attachment metadata"),
             (4, "provider connections"),
             (5, "model configurations"),
-                (6, "runtime configurations"),
-                (7, "application execution defaults"),
-                (8, "durable conversation run relationships"),
-                (9, "durable run cancellation request"),
+            (6, "runtime configurations"),
+            (7, "application execution defaults"),
+            (8, "durable conversation run relationships"),
+            (9, "durable run cancellation request"),
+            (10, "conversation organization metadata"),
+            (11, "conversation folders"),
+            (12, "projects"),
+            (13, "conversation Project relationship"),
+            (14, "conversation Project lookup index"),
+            (15, "CORE prompt definitions"),
+            (16, "Scoped CORE prompt assignments"),
+            (17, "Project execution defaults"),
+            (18, "Project files"),
         ]
         assert rows[0]["applied_at"].startswith("20")
         assert rows[1]["applied_at"].startswith("20")
@@ -161,9 +294,7 @@ def test_v2_migration_creates_the_document_revisions_table() -> None:
     try:
         MigrationRunner(database, default_registry()).migrate()
         with database.connect() as connection:
-            columns = [
-                row[1] for row in connection.execute('PRAGMA table_info("document_revisions")')
-            ]
+            columns = [row[1] for row in connection.execute('PRAGMA table_info("document_revisions")')]
         assert columns == [
             "id",
             "revision_id",
@@ -194,12 +325,8 @@ def test_v3_migration_creates_the_attachments_table() -> None:
     try:
         MigrationRunner(database, default_registry()).migrate()
         with database.connect() as connection:
-            columns = [
-                row[1] for row in connection.execute('PRAGMA table_info("attachments")')
-            ]
-            indexes = {
-                row["name"] for row in connection.execute('PRAGMA index_list("attachments")')
-            }
+            columns = [row[1] for row in connection.execute('PRAGMA table_info("attachments")')]
+            indexes = {row["name"] for row in connection.execute('PRAGMA index_list("attachments")')}
         assert columns == [
             "id",
             "attachment_id",
@@ -225,43 +352,97 @@ def test_v3_attachments_table_enforces_metadata_invariants_at_the_database_level
         connection.execute(
             "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
             "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("attachment-1", "report.pdf", "application/pdf", 10, "k1", "document", "doc-1",
-             "available", "2026-01-01T00:00:00+00:00"),
+            (
+                "attachment-1",
+                "report.pdf",
+                "application/pdf",
+                10,
+                "k1",
+                "document",
+                "doc-1",
+                "available",
+                "2026-01-01T00:00:00+00:00",
+            ),
         )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                 "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("attachment-1", "report.pdf", "application/pdf", 10, "k2", "document", "doc-1",
-                 "available", "2026-01-01T00:00:00+00:00"),
+                (
+                    "attachment-1",
+                    "report.pdf",
+                    "application/pdf",
+                    10,
+                    "k2",
+                    "document",
+                    "doc-1",
+                    "available",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                 "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("attachment-2", "report.pdf", "application/pdf", 10, "k1", "document", "doc-1",
-                 "available", "2026-01-01T00:00:00+00:00"),
+                (
+                    "attachment-2",
+                    "report.pdf",
+                    "application/pdf",
+                    10,
+                    "k1",
+                    "document",
+                    "doc-1",
+                    "available",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                 "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("attachment-3", "report.pdf", "application/pdf", 10, "k3", "document", None,
-                 "available", "2026-01-01T00:00:00+00:00"),
+                (
+                    "attachment-3",
+                    "report.pdf",
+                    "application/pdf",
+                    10,
+                    "k3",
+                    "document",
+                    None,
+                    "available",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                 "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("attachment-4", "report.pdf", "application/pdf", -1, "k4", None, None,
-                 "available", "2026-01-01T00:00:00+00:00"),
+                (
+                    "attachment-4",
+                    "report.pdf",
+                    "application/pdf",
+                    -1,
+                    "k4",
+                    None,
+                    None,
+                    "available",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                 "storage_key, owner_type, owner_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("attachment-5", "report.pdf", "application/pdf", 10, "k5", "document", "doc-1",
-                 "unknown", "2026-01-01T00:00:00+00:00"),
+                (
+                    "attachment-5",
+                    "report.pdf",
+                    "application/pdf",
+                    10,
+                    "k5",
+                    "document",
+                    "doc-1",
+                    "unknown",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
     database.dispose()
 
@@ -309,9 +490,9 @@ def test_migrate_adopts_a_legacy_step4_6_database_without_destroying_data() -> N
 
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert runner.migrate() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        assert runner.current_version() == 9
-        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert runner.migrate() == list(range(1, 19))
+        assert runner.current_version() == 18
+        assert _metadata_versions(database) == list(range(1, 19))
         with database.connect() as connection:
             row = connection.execute("SELECT run_id, status FROM runs").fetchone()
         assert row["run_id"] == "legacy-run"
@@ -375,8 +556,8 @@ def test_legacy_v1_v2_database_upgrades_to_v3_without_backfill() -> None:
         assert "document_revisions" in before
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == [3, 4, 5, 6, 7, 8, 9]
-        assert _metadata_versions(database) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert runner.migrate() == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        assert _metadata_versions(database) == list(range(1, 19))
 
         with database.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
@@ -403,7 +584,7 @@ def test_create_relational_repositories_adopts_a_legacy_database_usable_through_
         assert repositories.run_repository.get("via-port") is not None
         repositories.dispose()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 9
+            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 18
     finally:
         path.unlink()
 
@@ -653,7 +834,7 @@ def test_migrated_file_database_keeps_schema_and_data_across_reopen() -> None:
 
         reopened = SqliteDatabase(str(path), auto_migrate=False)
         runner = MigrationRunner(reopened, default_registry())
-        assert runner.current_version() == 9
+        assert runner.current_version() == 18
         assert runner.migrate() == []
         with reopened.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
@@ -738,7 +919,7 @@ def test_v9_leaves_existing_runs_with_no_cancellation_request() -> None:
         try:
             runner = MigrationRunner(reopened, default_registry())
             assert runner.current_version() == 8
-            assert runner.migrate() == [9]
+            assert runner.migrate() == [9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 
             with reopened.connect() as connection:
                 assert _table_columns(connection, "runs")[-1] == "cancellation_requested_at"
@@ -766,15 +947,24 @@ def test_v9_preserves_the_existing_runs_table_and_its_rows() -> None:
             MigrationRunner(reopened, default_registry()).migrate()
             with reopened.connect() as connection:
                 assert tuple(_table_columns(connection, "runs")) == (
-                    "run_id", "status", "created_at", "updated_at", "execution_selection",
-                    "conversation_id", "source_user_message_id", "assistant_message_id",
+                    "run_id",
+                    "status",
+                    "created_at",
+                    "updated_at",
+                    "execution_selection",
+                    "conversation_id",
+                    "source_user_message_id",
+                    "assistant_message_id",
                     "cancellation_requested_at",
                 )
                 assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
-                assert connection.execute(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' "
-                    "AND name = 'idx_runs_cancellation_requested'"
-                ).fetchone()[0] == 1
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' "
+                        "AND name = 'idx_runs_cancellation_requested'"
+                    ).fetchone()[0]
+                    == 1
+                )
         finally:
             reopened.dispose()
     finally:

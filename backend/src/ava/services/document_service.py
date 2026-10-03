@@ -154,9 +154,7 @@ class DocumentService:
     def list_documents(self) -> DocumentListResponse:
         """Return all documents in stable insertion order."""
         records = self._document_repository.list()
-        return DocumentListResponse(
-            documents=[_document_to_response(record) for record in records]
-        )
+        return DocumentListResponse(documents=[_document_to_response(record) for record in records])
 
     def list_revisions(self, document_id: str) -> DocumentRevisionListResponse | None:
         """Return a document's full immutable revision history (revision-number ASC).

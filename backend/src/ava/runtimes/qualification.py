@@ -73,8 +73,12 @@ class CodingWorkflowQualificationResult:
 
 
 def classify_workflow_stall(
-    *, tool_calls: int, file_editor_calls: int, terminal_calls: int,
-    final_response_emitted: bool, cancelled: bool,
+    *,
+    tool_calls: int,
+    file_editor_calls: int,
+    terminal_calls: int,
+    final_response_emitted: bool,
+    cancelled: bool,
 ) -> str | None:
     """Classify a bounded run from observable events, never hidden reasoning."""
     if final_response_emitted:
@@ -190,16 +194,12 @@ def qualify_native_tool_calls(
             reason == ToolCallQualificationFailure.TOOL_CALL_EMITTED_AS_TEXT for reason in reasons
         ),
         malformed_tool_calls=sum(trial.malformed_tool_arguments for trial in trials),
-        successful_executions=sum(
-            trial.tool_executed and trial.sandbox_receipt_observed for trial in trials
-        ),
+        successful_executions=sum(trial.tool_executed and trial.sandbox_receipt_observed for trial in trials),
         successful_tool_result_consumption=sum(
             trial.tool_result_observed and trial.final_response_observed for trial in trials
         ),
         final_responses=sum(trial.final_response_observed for trial in trials),
         passed=bool(trials)
-        and all(
-            reason == ToolCallQualificationFailure.NATIVE_TOOL_CALL_SUCCESS for reason in reasons
-        ),
+        and all(reason == ToolCallQualificationFailure.NATIVE_TOOL_CALL_SUCCESS for reason in reasons),
         failure_reasons=reasons,
     )

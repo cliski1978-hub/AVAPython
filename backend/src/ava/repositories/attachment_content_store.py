@@ -78,6 +78,13 @@ class AttachmentContentStore(ABC):
         """
         raise NotImplementedError()
 
+    def delete(self, storage_key: str) -> bool:
+        """Remove stored content by opaque key; return false when it is absent.
+
+        Adapters that do not support deletion fail closed.
+        """
+        raise NotImplementedError()
+
     @abstractmethod
     def exists(
         self,

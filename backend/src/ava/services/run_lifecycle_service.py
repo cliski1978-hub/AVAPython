@@ -87,12 +87,8 @@ ALLOWED_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = MappingProxyType
                 RunStatus.CANCELLED,
             }
         ),
-        RunStatus.WAITING_FOR_APPROVAL: frozenset(
-            {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}
-        ),
-        RunStatus.RUNNING: frozenset(
-            {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-        ),
+        RunStatus.WAITING_FOR_APPROVAL: frozenset({RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}),
+        RunStatus.RUNNING: frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}),
         RunStatus.COMPLETED: frozenset(),
         RunStatus.FAILED: frozenset(),
         RunStatus.CANCELLED: frozenset(),
@@ -144,9 +140,7 @@ class InvalidRunTransitionError(ValueError):
         self.run_id = run_id
         self.from_status = from_status
         self.to_status = to_status
-        super().__init__(
-            f"Run {run_id!r} cannot move from {from_status.value!r} to {to_status.value!r}"
-        )
+        super().__init__(f"Run {run_id!r} cannot move from {from_status.value!r} to {to_status.value!r}")
 
 
 # ============================================================
@@ -370,9 +364,7 @@ class RunLifecycleService:
                 record.status.value,
             )
             return record
-        updated = self._runs.request_cancellation(
-            run_id, requested_at=requested_at or datetime.now(UTC)
-        )
+        updated = self._runs.request_cancellation(run_id, requested_at=requested_at or datetime.now(UTC))
         if updated is None:
             # The guard declined: either the run settled between the read and the
             # write, or another request already recorded one. Both cases leave
@@ -443,12 +435,8 @@ class RunLifecycleService:
             logger.debug("Run %s is already %s", run_id, to_status.value)
             return record
         if to_status not in ALLOWED_TRANSITIONS[record.status]:
-            raise InvalidRunTransitionError(
-                run_id=run_id, from_status=record.status, to_status=to_status
-            )
-        updated = self._runs.compare_and_set_status(
-            run_id, expected_status=record.status, status=to_status
-        )
+            raise InvalidRunTransitionError(run_id=run_id, from_status=record.status, to_status=to_status)
+        updated = self._runs.compare_and_set_status(run_id, expected_status=record.status, status=to_status)
         if updated is None:
             # The guarded write lost: another writer moved the run between the
             # read and the write. Re-read to say what actually happened instead
@@ -474,9 +462,7 @@ class RunLifecycleService:
         if current.status is to_status:
             logger.info("Run %s reached %s via another writer", run_id, to_status.value)
             return current
-        raise InvalidRunTransitionError(
-            run_id=run_id, from_status=current.status, to_status=to_status
-        )
+        raise InvalidRunTransitionError(run_id=run_id, from_status=current.status, to_status=to_status)
 
     def _append_lifecycle_event(
         self,

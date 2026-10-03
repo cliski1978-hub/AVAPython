@@ -52,8 +52,7 @@ class RunStore(RunRepository):
         if run_id in self._runs:
             raise ValueError(f"Run already exists: {run_id}")
         if conversation_id is not None and any(
-            record.conversation_id == conversation_id and record.status.is_active
-            for record in self._runs.values()
+            record.conversation_id == conversation_id and record.status.is_active for record in self._runs.values()
         ):
             raise ActiveConversationRunError(conversation_id)
         now = datetime.now(UTC)
@@ -115,15 +114,11 @@ class RunStore(RunRepository):
             # The first request's timestamp is the one that persists; a repeat
             # click is not a later request, it is the same request.
             return None
-        updated = replace(
-            record, cancellation_requested_at=requested_at, updated_at=datetime.now(UTC)
-        )
+        updated = replace(record, cancellation_requested_at=requested_at, updated_at=datetime.now(UTC))
         self._runs[run_id] = updated
         return updated
 
-    def set_execution_selection(
-        self, run_id: str, selection: RunExecutionSelection | None
-    ) -> RunRecord | None:
+    def set_execution_selection(self, run_id: str, selection: RunExecutionSelection | None) -> RunRecord | None:
         record = self._runs.get(run_id)
         if record is None:
             return None

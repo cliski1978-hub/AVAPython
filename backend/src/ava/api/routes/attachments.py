@@ -135,9 +135,7 @@ async def list_attachments(
     response_model=AttachmentResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_attachment(
-    request: Request, attachment_id: str
-) -> AttachmentResponse | JSONResponse:
+async def get_attachment(request: Request, attachment_id: str) -> AttachmentResponse | JSONResponse:
     """Return attachment metadata, or ``404`` if unknown.
 
     Metadata only: the content store is never touched, so known
@@ -165,9 +163,7 @@ async def get_attachment(
     response_model=None,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def get_attachment_content(
-    request: Request, attachment_id: str
-) -> StreamingResponse | JSONResponse:
+async def get_attachment_content(request: Request, attachment_id: str) -> StreamingResponse | JSONResponse:
     """Stream an available attachment's bytes untouched.
 
     Only ``available`` attachments expose content: ``pending``/``failed``

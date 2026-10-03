@@ -1,8 +1,9 @@
 """Composition seam for the relational persistence adapters (Step 4.6).
 
 Application composition (``ava.infrastructure.composition``) selects this
-relational composition for every Phase 4 domain — **run, run-event,
-conversation, message, document, document revision, and attachment** — when
+relational composition for every durable domain — **run, run-event,
+conversation, message, document, document revision, attachment, Project,
+and CORE prompts** — when
 ``AVA_PERSISTENCE=relational``. Those ports feed their services over one
 shared ``SqliteDatabase``; the configured default stays the in-memory stores.
 
@@ -16,31 +17,45 @@ from dataclasses import dataclass
 from ava.infrastructure.persistence.database import SqliteDatabase
 from ava.infrastructure.persistence.repositories import (
     RelationalAttachmentRepository,
+    RelationalConversationFolderRepository,
     RelationalConversationRepository,
+    RelationalCorePromptAssignmentRepository,
+    RelationalCorePromptRepository,
     RelationalDocumentRepository,
     RelationalDocumentRevisionRepository,
     RelationalDocumentWriteCoordinator,
     RelationalExecutionDefaultsRepository,
     RelationalMessageRepository,
     RelationalModelConfigurationRepository,
+    RelationalProjectFileRepository,
+    RelationalProjectRepository,
     RelationalProviderConnectionRepository,
     RelationalRunEventRepository,
     RelationalRunRepository,
     RelationalRuntimeConfigurationRepository,
 )
+from ava.infrastructure.persistence.repositories.conversation_hard_delete_coordinator import (
+    RelationalConversationHardDeleteCoordinator,
+)
 from ava.repositories import (
     AttachmentRepository,
+    ConversationFolderRepository,
     ConversationRepository,
+    CorePromptAssignmentRepository,
+    CorePromptRepository,
     DocumentRepository,
     DocumentRevisionRepository,
     ExecutionDefaultsRepository,
     MessageRepository,
     ModelConfigurationRepository,
+    ProjectFileRepository,
+    ProjectRepository,
     ProviderConnectionRepository,
     RunEventRepository,
     RunRepository,
     RuntimeConfigurationRepository,
 )
+from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoordinator
 
 # ============================================================
 # BEGIN: Persistence Repositories
@@ -52,7 +67,8 @@ class PersistenceRepositories:
     """The relational repository adapters plus their shared database.
 
     Holds the five Phase 4 domain adapters, the document revision history
-    adapter, the attachment metadata adapter, and the document write
+    adapter, the attachment metadata adapter, the independent Project adapter,
+    and the document write
     coordinator (the transaction-owning seam that keeps the current
     ``documents`` row and its ``document_revisions`` history advancing
     atomically). Everything shares one ``SqliteDatabase``; the coordinator and
@@ -64,6 +80,7 @@ class PersistenceRepositories:
     run_repository: RunRepository
     run_event_repository: RunEventRepository
     conversation_repository: ConversationRepository
+    conversation_folder_repository: ConversationFolderRepository
     message_repository: MessageRepository
     model_configuration_repository: ModelConfigurationRepository
     provider_connection_repository: ProviderConnectionRepository
@@ -73,6 +90,10 @@ class PersistenceRepositories:
     attachment_repository: AttachmentRepository
     document_write_coordinator: RelationalDocumentWriteCoordinator
     execution_defaults_repository: ExecutionDefaultsRepository
+    project_repository: ProjectRepository
+    project_file_repository: ProjectFileRepository
+    core_prompt_repository: CorePromptRepository
+    core_prompt_assignment_repository: CorePromptAssignmentRepository
 
     def dispose(self) -> None:
         """Close the shared database connection backing these adapters."""
@@ -110,6 +131,7 @@ def create_relational_repositories(
         run_repository=RelationalRunRepository(database=database),
         run_event_repository=RelationalRunEventRepository(database=database),
         conversation_repository=RelationalConversationRepository(database=database),
+        conversation_folder_repository=RelationalConversationFolderRepository(database=database),
         message_repository=RelationalMessageRepository(database=database),
         model_configuration_repository=model_configuration_repository,
         provider_connection_repository=provider_connection_repository,
@@ -128,7 +150,23 @@ def create_relational_repositories(
             model_configurations=model_configuration_repository,
             runtime_configurations=runtime_configuration_repository,
         ),
+        project_repository=RelationalProjectRepository(database=database),
+        project_file_repository=RelationalProjectFileRepository(database=database),
+        core_prompt_repository=RelationalCorePromptRepository(database=database),
+        core_prompt_assignment_repository=RelationalCorePromptAssignmentRepository(database=database),
     )
+
+
+def create_relational_conversation_hard_delete_coordinator(
+    database: SqliteDatabase,
+) -> ConversationHardDeleteCoordinator:
+    """Construct the relational conversation hard-delete adapter.
+
+    Keeping this concrete adapter inside persistence preserves the boundary
+    that application and infrastructure composition consume through the
+    exported persistence factory rather than importing repository adapters.
+    """
+    return RelationalConversationHardDeleteCoordinator(database=database)
 
 
 # ============================================================

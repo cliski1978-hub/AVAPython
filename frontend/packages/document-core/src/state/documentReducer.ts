@@ -4,12 +4,14 @@ export interface DocumentState {
   documents: AvaDocument[];
   activeDocumentId: string | null;
   loading?: boolean;
+  loadError?: Error | null;
   isCreating?: boolean;
   isSaving?: boolean;
   error?: Error | null;
 }
 
 export type DocumentAction =
+  | { type: "hydrateStart" }
   | { type: "hydrate"; documents: AvaDocument[] }
   | { type: "hydrateFailure"; error: Error }
   | { type: "createStart" }
@@ -35,17 +37,21 @@ export function getActiveDocument(state: DocumentState): AvaDocument | null {
 }
 
 export function documentReducer(state: DocumentState, action: DocumentAction): DocumentState {
+  if (action.type === "hydrateStart") {
+    return { ...state, loading: true, loadError: null };
+  }
   if (action.type === "hydrate") {
     return {
       ...state,
       documents: action.documents,
       activeDocumentId: action.documents[0]?.id ?? null,
       loading: false,
+      loadError: null,
       error: null,
     };
   }
   if (action.type === "hydrateFailure") {
-    return { ...state, documents: [], activeDocumentId: null, loading: false, error: action.error };
+    return { ...state, documents: [], activeDocumentId: null, loading: false, loadError: action.error, error: action.error };
   }
   if (action.type === "createStart") {
     return { ...state, isCreating: true };

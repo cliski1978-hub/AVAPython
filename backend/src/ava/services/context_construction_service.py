@@ -153,9 +153,7 @@ class ContextConstructionService:
     ) -> RunContext:
         """Resolve one conversation's canonical prefix into context messages."""
         if self._conversation_repository.get(conversation_id) is None:
-            raise ContextConversationNotFoundError(
-                f"conversation {conversation_id} does not exist"
-            )
+            raise ContextConversationNotFoundError(f"conversation {conversation_id} does not exist")
         records = list(self._message_repository.list_for_conversation(conversation_id))
         if source_user_message_id is None:
             # Defensive legacy path. A run normally cannot carry a
@@ -165,13 +163,9 @@ class ContextConstructionService:
             # old conversation still produces sensible context.
             return RunContext(
                 conversation_id=conversation_id,
-                messages=self._visible_transcript(
-                    records, through_index=self._last_user_index(records)
-                ),
+                messages=self._visible_transcript(records, through_index=self._last_user_index(records)),
             )
-        source_index = self._source_index(
-            records, conversation_id, source_user_message_id
-        )
+        source_index = self._source_index(records, conversation_id, source_user_message_id)
         return RunContext(
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
@@ -192,19 +186,15 @@ class ContextConstructionService:
         source = self._message_repository.get(conversation_id, source_user_message_id)
         if source is None:
             raise ContextSourceMessageNotFoundError(
-                f"source message {source_user_message_id} does not exist "
-                f"in conversation {conversation_id}"
+                f"source message {source_user_message_id} does not exist in conversation {conversation_id}"
             )
         if source.role != MessageRole.USER:
-            raise ContextSourceMessageRoleError(
-                f"source message {source_user_message_id} is not a user message"
-            )
+            raise ContextSourceMessageRoleError(f"source message {source_user_message_id} is not a user message")
         for index, record in enumerate(records):
             if record.message_id == source_user_message_id:
                 return index
         raise ContextSourceMessageNotFoundError(
-            f"source message {source_user_message_id} is not part of "
-            f"conversation {conversation_id} order"
+            f"source message {source_user_message_id} is not part of conversation {conversation_id} order"
         )
 
     @staticmethod
@@ -240,11 +230,7 @@ class ContextConstructionService:
         ]
         collapsed: list[MessageRecord] = []
         for record in prefix:
-            if (
-                record.role == MessageRole.ASSISTANT
-                and collapsed
-                and collapsed[-1].role == MessageRole.ASSISTANT
-            ):
+            if record.role == MessageRole.ASSISTANT and collapsed and collapsed[-1].role == MessageRole.ASSISTANT:
                 # A regenerated answer supersedes the previous answer for the
                 # same turn. Collapse positionally, never by message text.
                 collapsed[-1] = record

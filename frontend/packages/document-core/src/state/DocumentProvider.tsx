@@ -1,5 +1,5 @@
 import { createDocument as createBackendDocument, listDocumentRevisions, listDocuments, updateDocument, type ApiClient } from "@ava/api-client";
-import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import { type AvaDocument, type AvaDocumentRevision, type DocumentContent } from "../model";
 import { documentReducer, getActiveDocument, getDocumentById, type DocumentState } from "./documentReducer";
 import { mapDocumentResponse, mapDocumentRevisionResponse } from "./documentMapper";
@@ -7,6 +7,7 @@ import { mapDocumentResponse, mapDocumentRevisionResponse } from "./documentMapp
 interface DocumentsContextValue {
   state: DocumentState;
   activeDocument: AvaDocument | null;
+  reloadDocuments: () => Promise<void>;
   updateDocumentContent: (documentId: string, content: DocumentContent) => void;
   createDocument: () => Promise<void>;
   selectDocument: (documentId: string) => void;
@@ -25,22 +26,32 @@ export function DocumentProvider({ client, children }: { client: ApiClient; chil
   const stateRef = useRef(state);
   const creatingRef = useRef(false);
   const savingRef = useRef(false);
+  const loadGenerationRef = useRef(0);
   stateRef.current = state;
 
-  useEffect(() => {
-    let cancelled = false;
-    listDocuments(client)
-      .then((response) => {
-        if (!cancelled) dispatch({ type: "hydrate", documents: response.documents.map(mapDocumentResponse) });
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) dispatch({ type: "hydrateFailure", error: error instanceof Error ? error : new Error(String(error)) });
-      });
-    return () => { cancelled = true; };
+  const reloadDocuments = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    dispatch({ type: "hydrateStart" });
+    try {
+      const response = await listDocuments(client);
+      if (loadGenerationRef.current === generation) {
+        dispatch({ type: "hydrate", documents: response.documents.map(mapDocumentResponse) });
+      }
+    } catch (error: unknown) {
+      if (loadGenerationRef.current === generation) {
+        dispatch({ type: "hydrateFailure", error: error instanceof Error ? error : new Error(String(error)) });
+      }
+    }
   }, [client]);
+
+  useEffect(() => {
+    void reloadDocuments();
+    return () => { loadGenerationRef.current += 1; };
+  }, [reloadDocuments]);
   const value = useMemo<DocumentsContextValue>(() => ({
     state,
     activeDocument: getActiveDocument(state),
+    reloadDocuments,
     updateDocumentContent: (documentId, content) => dispatch({ type: "updateContent", documentId, content, updatedAt: new Date().toISOString() }),
     createDocument: async () => {
       if (creatingRef.current) return;
@@ -112,7 +123,7 @@ export function DocumentProvider({ client, children }: { client: ApiClient; chil
       const response = await listDocumentRevisions(client, documentId);
       return response.revisions.map(mapDocumentRevisionResponse);
     },
-  }), [state]);
+  }), [reloadDocuments, state]);
   return <DocumentsContext.Provider value={value}>{children}</DocumentsContext.Provider>;
 }
 

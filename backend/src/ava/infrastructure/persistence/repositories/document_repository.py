@@ -157,8 +157,7 @@ class RelationalDocumentRepository(DocumentRepository):
     ) -> DocumentRecord | None:
         """Replace title+content on ``connection``; return the stored snapshot or ``None``."""
         cursor = connection.execute(
-            "UPDATE documents SET title = ?, content = ?, content_format = ?, updated_at = ? "
-            "WHERE document_id = ?",
+            "UPDATE documents SET title = ?, content = ?, content_format = ?, updated_at = ? WHERE document_id = ?",
             (title, content, content_format.value, to_utc_iso(updated_at), document_id),
         )
         if cursor.rowcount == 0:

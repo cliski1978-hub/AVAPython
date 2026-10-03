@@ -9,9 +9,16 @@ database drivers/ORM tooling.
 from ava.infrastructure.persistence.repositories.attachment_repository import (
     RelationalAttachmentRepository,
 )
+from ava.infrastructure.persistence.repositories.conversation_folder_repository import (
+    RelationalConversationFolderRepository,
+)
 from ava.infrastructure.persistence.repositories.conversation_repository import (
     RelationalConversationRepository,
 )
+from ava.infrastructure.persistence.repositories.core_prompt_assignment_repository import (
+    RelationalCorePromptAssignmentRepository,
+)
+from ava.infrastructure.persistence.repositories.core_prompt_repository import RelationalCorePromptRepository
 from ava.infrastructure.persistence.repositories.document_repository import (
     RelationalDocumentRepository,
 )
@@ -30,6 +37,8 @@ from ava.infrastructure.persistence.repositories.message_repository import (
 from ava.infrastructure.persistence.repositories.model_configuration_repository import (
     RelationalModelConfigurationRepository,
 )
+from ava.infrastructure.persistence.repositories.project_file_repository import RelationalProjectFileRepository
+from ava.infrastructure.persistence.repositories.project_repository import RelationalProjectRepository
 from ava.infrastructure.persistence.repositories.provider_connection_repository import (
     RelationalProviderConnectionRepository,
 )
@@ -46,6 +55,9 @@ from ava.infrastructure.persistence.repositories.runtime_configuration_repositor
 __all__ = [
     "RelationalAttachmentRepository",
     "RelationalConversationRepository",
+    "RelationalConversationFolderRepository",
+    "RelationalCorePromptRepository",
+    "RelationalCorePromptAssignmentRepository",
     "RelationalDocumentRepository",
     "RelationalDocumentRevisionRepository",
     "RelationalDocumentWriteCoordinator",
@@ -53,6 +65,8 @@ __all__ = [
     "RelationalMessageRepository",
     "RelationalModelConfigurationRepository",
     "RelationalProviderConnectionRepository",
+    "RelationalProjectRepository",
+    "RelationalProjectFileRepository",
     "RelationalRunEventRepository",
     "RelationalRunRepository",
     "RelationalRuntimeConfigurationRepository",

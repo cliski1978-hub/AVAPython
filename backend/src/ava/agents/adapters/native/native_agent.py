@@ -7,9 +7,18 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ava.agents.contracts import AgentPort, AgentRunResult, ExecutionConfigurationError
+from ava.agents.contracts import (
+    AgentPort,
+    AgentRunResult,
+    ExecutionConfigurationError,
+    ExecutionPromptContextBuilderPort,
+)
 from ava.contracts.capabilities import CapabilityName
-from ava.contracts.conversations import RunContext, execution_context_messages
+from ava.contracts.conversations import (
+    ExecutionPromptContextBuildError,
+    RunContext,
+    execution_context_messages,
+)
 from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.failures import FailureCode
 from ava.contracts.models import ModelHostingMode
@@ -55,6 +64,7 @@ class NativeAgentAdapter(AgentPort):
         hosting_requirement: ModelHostingRequirement | None = None,
         model_resource_manager: ModelResourceManager | None = None,
         context_window_manager: ContextWindowManager | None = None,
+        prompt_context_builder: ExecutionPromptContextBuilderPort | None = None,
     ) -> None:
         self._executions: dict[str, ResolvedExecution] = {}
         self._terminal_statuses: dict[str, RunStatus] = {}
@@ -71,6 +81,7 @@ class NativeAgentAdapter(AgentPort):
         # clients never supply this through a run request.
         self._hosting_requirement = hosting_requirement
         self._resource_manager = model_resource_manager
+        self._prompt_context_builder = prompt_context_builder
         # The window policy is AVA-owned and runtime-neutral, so it always runs
         # here — above the runtime boundary, after model selection. A default
         # instance is the documented policy rather than a bypass switch: the
@@ -102,9 +113,7 @@ class NativeAgentAdapter(AgentPort):
         on_content: Callable[[str], None],
     ) -> AgentRunResult:
         """Forward normalized content snapshots from the selected runtime."""
-        return await self._start_run(
-            run_id, request, context=context, on_content=on_content
-        )
+        return await self._start_run(run_id, request, context=context, on_content=on_content)
 
     async def _start_run(
         self,
@@ -116,21 +125,19 @@ class NativeAgentAdapter(AgentPort):
     ) -> AgentRunResult:
         self._terminal_statuses.pop(run_id, None)
         try:
-            execution = self._selector.resolve(request.execution)
+            execution = self._selector.resolve(
+                request.execution,
+                conversation_id=request.conversation_id,
+            )
             selection = self._selection(execution)
-            if not self._validator.validate(
+            compatible = self._validator.validate(
                 request=request,
                 runtime=execution.runtime,
                 model_provider=execution.model_provider,
                 hosting_mode=execution.model_binding.hosting_mode,
                 hosting_requirement=self._hosting_requirement,
                 model_capabilities=execution.model_profile.capabilities,
-            ).compatible:
-                return AgentRunResult(
-                    status=RunStatus.FAILED,
-                    content="Selected execution configuration is not compatible",
-                    failure_code=FailureCode.CONFIGURATION_INVALID,
-                )
+            ).compatible
         except ExecutionConfigurationError:
             # A failure to resolve persisted execution already carries a precise
             # reason that the run service maps to a public code. Swallowing it
@@ -139,12 +146,36 @@ class NativeAgentAdapter(AgentPort):
             raise
         except Exception:
             return AgentRunResult(status=RunStatus.FAILED, content="Requested execution unavailable")
+        if not compatible:
+            return AgentRunResult(
+                status=RunStatus.FAILED,
+                content="Selected execution configuration is not compatible",
+                execution_selection=selection,
+                failure_code=FailureCode.CONFIGURATION_INVALID,
+            )
+        if self._prompt_context_builder is not None:
+            try:
+                context = self._prompt_context_builder.build(
+                    context,
+                    runtime_key=execution.runtime_key,
+                    capabilities=self.get_capabilities(),
+                )
+            except ExecutionPromptContextBuildError as exc:
+                logger.warning(
+                    "Unable to resolve execution prompt context for run %s (%s)",
+                    run_id,
+                    exc.error_code,
+                )
+                return AgentRunResult(
+                    status=RunStatus.FAILED,
+                    content="AVA could not resolve the instructions for this run",
+                    execution_selection=selection,
+                    failure_code=FailureCode.CONFIGURATION_INVALID,
+                )
         try:
             bounded = self._bound_context(context, request, execution)
         except ContextWindowExceededError:
-            logger.info(
-                "Run %s does not fit the selected model's context window", run_id
-            )
+            logger.info("Run %s does not fit the selected model's context window", run_id)
             return AgentRunResult(
                 status=RunStatus.FAILED,
                 content=_CONTEXT_WINDOW_CONTENT,
@@ -245,9 +276,21 @@ class NativeAgentAdapter(AgentPort):
             model_context_limit=self._context_limit(execution),
             model_id=execution.model_profile.model_id,
         )
-        if context is None or not context.has_messages:
+        if context is None or (not context.has_messages and context.prompt_layers is None):
             return context
-        return context.model_copy(update={"messages": result.messages})
+        if not context.has_messages:
+            # The current user prompt is supplied by the runtime fallback and
+            # is never copied into the durable-history field. All leading
+            # instruction layers are mandatory and remain on the context.
+            return context
+        layer_count = 0
+        if context.prompt_layers is not None:
+            layer_count = (
+                1
+                + len(context.prompt_layers.resolved_core_prompts)
+                + int(bool(context.prompt_layers.project_instructions))
+            )
+        return context.model_copy(update={"messages": result.messages[layer_count:]})
 
     def _context_limit(self, execution: ResolvedExecution) -> int | None:
         """Read the selected model's total context window, if it reports one.
@@ -262,22 +305,20 @@ class NativeAgentAdapter(AgentPort):
         try:
             return execution.model_provider.get_model_info().context_limit
         except Exception:
-            logger.exception(
-                "Unable to read context window for model %s", execution.model_profile.model_id
-            )
+            logger.exception("Unable to read context window for model %s", execution.model_profile.model_id)
             return None
 
     def _selection(self, execution: ResolvedExecution) -> RunExecutionSelection | None:
         """Read identity metadata defensively; lifecycle must remain safe.
 
         The stable AVA ``model_id`` and provider identity come from the resolved
-        binding; run metadata never reports the provider-native model name.
+        binding; the effective registry runtime key comes from selection, and
+        run metadata never reports the provider-native model name.
         """
         try:
-            runtime_info = execution.runtime.get_runtime_info()
             binding = execution.model_binding
             return RunExecutionSelection(
-                runtime_id=runtime_info.runtime_id,
+                runtime_id=execution.runtime_key,
                 model_provider_id=binding.provider_id,
                 model_id=binding.model_id,
                 hosting_mode=binding.hosting_mode,
@@ -337,8 +378,14 @@ class _FixedSelector:
             enabled=True,
         )
 
-    def resolve(self, _override: object = None) -> ResolvedExecution:
+    def resolve(self, _override: object = None, *, conversation_id: str | None = None) -> ResolvedExecution:
         from ava.execution.selector import ResolvedExecution
 
         profile = self._profile()
-        return ResolvedExecution(self._runtime, self._provider, model_binding_from_profile(profile), profile)
+        return ResolvedExecution(
+            self._runtime,
+            self._provider,
+            model_binding_from_profile(profile),
+            profile,
+            self._runtime.get_runtime_info().runtime_id,
+        )

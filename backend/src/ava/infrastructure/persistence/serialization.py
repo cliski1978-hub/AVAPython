@@ -29,10 +29,13 @@ from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.json_types import JsonValue
 from ava.contracts.responses import RunStatus
 from ava.repositories.attachment_repository import AttachmentRecord
+from ava.repositories.conversation_folder import ConversationFolderRecord
 from ava.repositories.conversation_repository import ConversationRecord
+from ava.repositories.core_prompt import CorePromptCategory, CorePromptRecord
 from ava.repositories.document_repository import DocumentRecord
 from ava.repositories.document_revision_repository import DocumentRevisionRecord
 from ava.repositories.message_repository import MessageRecord
+from ava.repositories.project import ProjectExecutionDefaults, ProjectRecord
 from ava.repositories.run_repository import RunRecord
 
 # ============================================================
@@ -101,6 +104,45 @@ def load_execution_selection(raw: str | None) -> RunExecutionSelection | None:
 # ============================================================
 
 
+def row_to_conversation_folder_record(row: sqlite3.Row) -> ConversationFolderRecord:
+    return ConversationFolderRecord(
+        id=row["id"],
+        name=row["name"],
+        created_at=parse_utc(row["created_at"]),
+        updated_at=parse_utc(row["updated_at"]),
+    )
+
+
+def row_to_project_record(row: sqlite3.Row) -> ProjectRecord:
+    """Map a ``projects`` row back to an AVA Project snapshot."""
+    return ProjectRecord(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        instructions=row["instructions"],
+        is_archived=bool(row["is_archived"]),
+        created_at=parse_utc(row["created_at"]),
+        updated_at=parse_utc(row["updated_at"]),
+        execution_defaults=ProjectExecutionDefaults(
+            runtime_key=row["default_runtime_key"], model_id=row["default_model_id"]
+        ),
+    )
+
+
+def row_to_core_prompt_record(row: sqlite3.Row) -> CorePromptRecord:
+    """Map a ``core_prompts`` row, rejecting unknown stored category values."""
+    return CorePromptRecord(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        prompt_text=row["prompt_text"],
+        category=CorePromptCategory(row["category"]),
+        is_enabled=bool(row["is_enabled"]),
+        created_at=parse_utc(row["created_at"]),
+        updated_at=parse_utc(row["updated_at"]),
+    )
+
+
 def row_to_run_record(row: sqlite3.Row) -> RunRecord:
     """Map a ``runs`` row back to an AVA run record."""
     return RunRecord(
@@ -113,9 +155,7 @@ def row_to_run_record(row: sqlite3.Row) -> RunRecord:
         source_user_message_id=row["source_user_message_id"],
         assistant_message_id=row["assistant_message_id"],
         cancellation_requested_at=(
-            parse_utc(row["cancellation_requested_at"])
-            if row["cancellation_requested_at"] is not None
-            else None
+            parse_utc(row["cancellation_requested_at"]) if row["cancellation_requested_at"] is not None else None
         ),
     )
 
@@ -134,12 +174,17 @@ def row_to_run_event(row: sqlite3.Row) -> RunEvent:
 
 
 def row_to_conversation_record(row: sqlite3.Row) -> ConversationRecord:
-    """Map a ``conversations`` row back to an AVA conversation record."""
+    """Map a conversation row, accepting legacy projections without metadata."""
+    columns = row.keys()
     return ConversationRecord(
         conversation_id=row["conversation_id"],
         title=row["title"],
         created_at=parse_utc(row["created_at"]),
         updated_at=parse_utc(row["updated_at"]),
+        is_pinned=bool(row["is_pinned"]) if "is_pinned" in columns else False,
+        is_archived=bool(row["is_archived"]) if "is_archived" in columns else False,
+        folder_id=row["folder_id"] if "folder_id" in columns else None,
+        project_id=row["project_id"] if "project_id" in columns else None,
     )
 
 

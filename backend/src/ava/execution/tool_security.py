@@ -26,7 +26,10 @@ class ToolAuthorizationPolicy:
     """Pure activation policy. Operation checks remain mandatory."""
 
     def evaluate(
-        self, *, tool_id: str, capabilities: RuntimeCapabilities,
+        self,
+        *,
+        tool_id: str,
+        capabilities: RuntimeCapabilities,
         workspace: RuntimeWorkspaceBinding | None,
     ) -> ToolAuthorizationDecision:
         reason = "allowed"
@@ -92,8 +95,11 @@ class ToolRunContext:
     revoked: Event = field(default_factory=Event)
 
     def record(
-        self, tool_id: str, action: str,
-        outcome: Literal["authorized", "denied", "success", "failure"], reason: str,
+        self,
+        tool_id: str,
+        action: str,
+        outcome: Literal["authorized", "denied", "success", "failure"],
+        reason: str,
     ) -> None:
         try:
             self.sink.record(ToolAuditEvent(self.run_id, self.runtime_id, tool_id, action, outcome, reason))

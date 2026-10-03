@@ -37,8 +37,7 @@ from ava.repositories.attachment_repository import (
 )
 
 _ATTACHMENT_COLUMNS = (
-    "attachment_id, file_name, media_type, size_bytes, storage_key, "
-    "owner_type, owner_id, status, created_at"
+    "attachment_id, file_name, media_type, size_bytes, storage_key, owner_type, owner_id, status, created_at"
 )
 
 # ============================================================
@@ -86,9 +85,7 @@ class RelationalAttachmentRepository(AttachmentRepository):
                     (record.storage_key,),
                 ).fetchone()
                 if existing_key is not None:
-                    raise ValueError(
-                        f"Attachment storage key already in use: {record.storage_key}"
-                    )
+                    raise ValueError(f"Attachment storage key already in use: {record.storage_key}")
                 connection.execute(
                     "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                     "storage_key, owner_type, owner_id, status, created_at) "
@@ -124,8 +121,7 @@ class RelationalAttachmentRepository(AttachmentRepository):
     ) -> list[AttachmentRecord]:
         with self._database.connect() as connection:
             rows = connection.execute(
-                f"SELECT {_ATTACHMENT_COLUMNS} FROM attachments "
-                "WHERE owner_type = ? AND owner_id = ? ORDER BY id ASC",
+                f"SELECT {_ATTACHMENT_COLUMNS} FROM attachments WHERE owner_type = ? AND owner_id = ? ORDER BY id ASC",
                 (owner_type.value, owner_id),
             ).fetchall()
         return [row_to_attachment_record(row) for row in rows]

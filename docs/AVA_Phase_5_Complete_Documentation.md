@@ -3,10 +3,11 @@
 **PHASE 5 STATUS: COMPLETE / PASS**
 
 This is the primary human-readable closure document for Phase 5. It describes
-what AVA *became* during Phase 5, not a list of commits or test runs. The
-authoritative validation evidence is
-[AVA_Phase_5_40_Full_Validation.md](AVA_Phase_5_40_Full_Validation.md); the
-per-step implementation records are preserved individually and are linked
+what AVA *became* during Phase 5, not a list of commits or test runs. The final
+canonical validation evidence is
+[AVA_Phase_5_85_Final_Canonical_Validation.md](AVA_Phase_5_85_Final_Canonical_Validation.md);
+the earlier 5.40 record remains the authoritative validation for its original
+scope. Per-step implementation records are preserved individually and linked
 throughout.
 
 The forward roadmap remains
@@ -908,6 +909,63 @@ Phase 6 begins only on explicit instruction. No Phase 6 implementation,
 planning, tool framework, approval entity, or tool schema was started during
 Phase 5 or during this closure.
 
+### Subsequent Phase 5 extensions through Project Files
+
+The Phase 5 extension sequence includes Project Files persistence/API/client (5.76) and its validation/stabilization record (5.76A). Phase 5.76 is certified under the documented external-blocker policy: focused and workspace checks plus a disposable SQLite/ASGI lifecycle passed, while canonical TestClient and loopback-server checks were blocked by the sandbox. See [AVA_Phase_5_76A_Project_Files_Validation_Stabilization.md](AVA_Phase_5_76A_Project_Files_Validation_Stabilization.md) for exact evidence and limits.
+
+Phase 5.77 is complete: the existing Project workspace Files tab provides typed-client list/upload/download/delete UX with per-Project transient state, retry and failure handling, duplicate-filename-safe ID actions, and no attachment, execution-context, or RAG coupling. See [AVA_Phase_5_77_Project_Files_UI.md](AVA_Phase_5_77_Project_Files_UI.md). Phase 5.78 defines the future provider-neutral Knowledge/RAG boundary, source identity, explicit scope, provenance, and lifecycle invariants without implementing RAG behavior. See [AVA_Phase_5_78_Future_Knowledge_RAG_Boundary.md](AVA_Phase_5_78_Future_Knowledge_RAG_Boundary.md). Knowledge/RAG implementation remains unstarted.
+
+Phase 5.79 implementation and Phase 5.79A validation are complete: the Chat sidebar uses dnd-kit for conversation-to-Folder and conversation-to-Ungrouped movement, retains accessible menu actions, and creates Folder-scoped conversations atomically without coupling Folder and Project membership. Automated validation passed; live-browser and canonical full-harness validation were independently blocked by this sandbox, as detailed in [AVA_Phase_5_79A_Folder_Drag_Drop_Validation.md](AVA_Phase_5_79A_Folder_Drag_Drop_Validation.md).
+
+Phase 5.80 is complete: the Chat sidebar separates Active and Archived views, derives both from canonical conversation state, excludes archived conversations from active Folder/Ungrouped and Project lists, and avoids duplicate Folder+Project rows. Existing archive/restore writes preserve selection, pin, Folder/Project relationships, transcript, and run observation; search continues to include archived matches with an Archived marker. See [AVA_Phase_5_80_Archive_Views_Sidebar_Cleanup.md](AVA_Phase_5_80_Archive_Views_Sidebar_Cleanup.md) for the chosen visibility behavior and validation record.
+
+Phase 5.81 cross-feature deletion/cleanup integration is complete. Conversation, Folder, Project, Project File, and CORE prompt ownership boundaries are documented and exercised across memory and SQLite persistence, including relationship survival, archived-conversation hard delete, exact Project File content refs, assignment cleanup, restart durability, and SQLite integrity. Frontend deletion tombstones prevent delayed Conversation/Folder/Project list responses from resurrecting resources; search and run-event late-response regressions are covered. See [AVA_Phase_5_81_Cross_Feature_Deletion_Cleanup_Integration.md](AVA_Phase_5_81_Cross_Feature_Deletion_Cleanup_Integration.md).
+
+Phase 5.82 restart/durability certification is complete. A disposable SQLite database and configured local content roots were reopened through fresh FastAPI compositions; durable graph snapshots, CORE/execution projections, Project File bytes, attachment cleanup, stranded-run recovery, deletion absence, and SQLite integrity were verified. The canonical harness's TestClient stall and unavailable live browser were independently reproduced/documented; no production defect or migration was introduced. See [AVA_Phase_5_82_Restart_Durability_Certification.md](AVA_Phase_5_82_Restart_Durability_Certification.md).
+
+Phase 5.83 migration certification covers the real v1–v18 registry through disposable historical SQLite baselines, including legacy conversation graph preservation, nullable/INHERIT defaults, Project and Folder links, Project File metadata separation, integrity checks, real repository composition, and idempotent current-schema startup. No production migration or schema change was needed. See [AVA_Phase_5_83_Backward_Compatibility_Migration_Certification.md](AVA_Phase_5_83_Backward_Compatibility_Migration_Certification.md).
+
+Phase 5.83A is complete. A controlled backend outage reproduced settled Conversation, Folder, and Document failures; explicit retry, empty-versus-error states, and generation guards now recover without a page reload. StrictMode/out-of-order tests, a live outage/recovery, repeated backend restarts, frontend and full-stack restarts, direct Project reload, rapid navigation, and HMR passed. Web Vite now refuses port fallback to Desktop's 5174. No backend or database change was needed. The canonical all-backend harness still stalls at the known sandbox TestClient/loopback boundary; focused migration/durability certification passed. See [AVA_Phase_5_83A_Shared_Loading_Regression_Recovery.md](AVA_Phase_5_83A_Shared_Loading_Regression_Recovery.md).
+
+Phase 5.84 and Phase 5.84A are **complete**. Web and Desktop shared-backend acceptance passed; native Tauri acceptance was closed using the actual X11 window, Chat/Projects/Documents/Settings workflows, data mutation, backend outage/retry, repeated restarts, and the built release executable. The Tauri all-target build declares the existing 512×512 app icon and produces DEB, RPM, and AppImage bundles. See [AVA_Phase_5_84_Web_Desktop_Acceptance_Pass.md](AVA_Phase_5_84_Web_Desktop_Acceptance_Pass.md) and [AVA_Phase_5_84A_Native_Tauri_Acceptance_Closure.md](AVA_Phase_5_84A_Native_Tauri_Acceptance_Closure.md).
+
+Phase 5.85 final canonical validation is **complete**. The full aggregate harness passed after outdated v17 schema expectations were reconciled with the current v18 registry; the final run covered backend, frontend, TypeScript, and Python client checks. Web live smoke, Web/Desktop builds, the all-target native Tauri build, live database integrity, migration history, and the Phase 5 architecture boundaries were rechecked. Native pointer drag and Project File download remain explicitly accepted evidence gaps from 5.84A; no BLOCKER or MAJOR defect remains. Phase 5 is **READY FOR PHASE 6**. The complete inventory, exact results, accepted limitations, deferred scope, and Phase 6 stable-entry boundary are in [AVA_Phase_5_85_Final_Canonical_Validation.md](AVA_Phase_5_85_Final_Canonical_Validation.md).
+
+### Final Phase 5 architecture and capability summary
+
+The finished Phase 5 extension keeps Conversation Folders organizational and
+Projects contextual: a Conversation may independently belong to both. Projects
+carry separately persisted instructions, per-axis execution defaults, and
+Project Files. CORE prompt definitions remain separate from scoped assignments;
+the resolver composes them beneath AVA's immutable root prompt, with Project
+instructions injected afterward. Runtime and model selection resolve
+independently through explicit run choice, Project preference, application
+preference, then bootstrap fallback.
+
+Conversation Attachments and Project Files retain separate ownership and
+storage lifecycles. The provider-neutral Knowledge/RAG boundary remains
+architecture-only. Archive is reversible; hard delete follows the certified
+ownership cleanup matrix. SQLite v18 is the current durable schema, and the
+backend remains authoritative across restart. Shared Web/Desktop packages
+project the same API state and recovery patterns. dnd-kit is the shared
+drag/drop infrastructure for Conversation/Folder organization.
+
+By capability, Phase 5 delivers durable Conversations and run recovery;
+searchable, sortable, pinnable, archivable, deletable Chat organization;
+Folders; Projects and Project conversation/instruction context; CORE prompt
+management/resolution/injection; application and Project execution selection;
+Project Files; retryable shared loading; and Web, Desktop, and native Tauri
+acceptance. It does not deliver Knowledge/RAG execution or Phase 6's complete
+Document Platform.
+
+Deferred beyond Phase 5 are Knowledge/RAG ingestion, embeddings, vector storage
+and retrieval; the complete Document Platform; nested Folders; manual
+conversation ordering; broader future drag/drop layouts and resource types; and
+distributed/multi-worker run ownership. Phase 6 may assume the shared
+Web/Desktop shell, conversation foundation, backend persistence, Projects and
+Folders, prompt resolution, execution selection, Project Files, schema v18, and
+loading/recovery behavior are stable. Phase 6 has not started.
+
 ---
 
 ## Related documentation
@@ -915,8 +973,59 @@ Phase 5 or during this closure.
 | Document | Role |
 | --- | --- |
 | [AVA_Phase_5_40_Full_Validation.md](AVA_Phase_5_40_Full_Validation.md) | Authoritative Phase 5.40 validation record |
+| [AVA_Phase_5_81_Cross_Feature_Deletion_Cleanup_Integration.md](AVA_Phase_5_81_Cross_Feature_Deletion_Cleanup_Integration.md) | Cross-feature deletion ownership and cleanup certification |
+| [AVA_Phase_5_82_Restart_Durability_Certification.md](AVA_Phase_5_82_Restart_Durability_Certification.md) | Fresh application restart, durable state, content stores, and recovery certification |
+| [AVA_Phase_5_83_Backward_Compatibility_Migration_Certification.md](AVA_Phase_5_83_Backward_Compatibility_Migration_Certification.md) | Historical SQLite upgrade matrix, ownership boundaries, migration inventory, and compatibility evidence |
+| [AVA_Phase_5_83A_Shared_Loading_Regression_Recovery.md](AVA_Phase_5_83A_Shared_Loading_Regression_Recovery.md) | Forced shared-loading failure, retry recovery, StrictMode/race coverage, restart matrix, and live certification |
+| [AVA_Phase_5_84_Web_Desktop_Acceptance_Pass.md](AVA_Phase_5_84_Web_Desktop_Acceptance_Pass.md) | Complete Web/Desktop acceptance record and shared-backend validation |
+| [AVA_Phase_5_84A_Native_Tauri_Acceptance_Closure.md](AVA_Phase_5_84A_Native_Tauri_Acceptance_Closure.md) | Native window, interaction, outage/retry, restart, release artifact, cleanup, and final acceptance evidence |
+| [AVA_Phase_5_85_Final_Canonical_Validation.md](AVA_Phase_5_85_Final_Canonical_Validation.md) | Final phase inventory, architecture/migration audit, full-stack validation, limitations, and Phase 6 stable-entry boundary |
 | `AVA_Phase_5_40A/B/C/D_*_Notes.md` | Per-layer working notes behind the validation record |
 | `AVA_Phase_5_16_Execution_Configuration_Resolver.md` … `AVA_Phase_5_39_Race_Concurrency_Hardening.md` | Per-step implementation records (5.16–5.39) |
+| [AVA_Phase_5_Reopened_P1_Remediation.md](AVA_Phase_5_Reopened_P1_Remediation.md) | Post-closure P1 defect remediation (Defects A–I) |
+| [AVA_Phase_5_42_Conversation_Organization_Metadata_Domain.md](AVA_Phase_5_42_Conversation_Organization_Metadata_Domain.md) | Conversation organization metadata domain (pin/archive/folder, read-only) |
+| [AVA_Phase_5_43_Conversation_Organization_Metadata_Persistence.md](AVA_Phase_5_43_Conversation_Organization_Metadata_Persistence.md) | Durable conversation organization metadata, migration, and restart preservation |
+| [AVA_Phase_5_44_Conversation_Pin_Unpin_Write_Path.md](AVA_Phase_5_44_Conversation_Pin_Unpin_Write_Path.md) | Narrow pin/unpin write path, preservation, and restart durability |
+| [AVA_Phase_5_45_Conversation_Archive_Restore_Write_Path.md](AVA_Phase_5_45_Conversation_Archive_Restore_Write_Path.md) | Narrow archive/restore write path, child preservation, and restart durability |
+| [AVA_Phase_5_46_Conversation_Hard_Delete_Service.md](AVA_Phase_5_46_Conversation_Hard_Delete_Service.md) | Internal conversation hard-delete service and owned-record cleanup |
+| [AVA_Phase_5_47_Conversation_Delete_API.md](AVA_Phase_5_47_Conversation_Delete_API.md) | Public conversation DELETE API and typed client method |
+| [AVA_Phase_5_48_Conversation_Delete_UI.md](AVA_Phase_5_48_Conversation_Delete_UI.md) | Confirmed permanent-delete UI, local reconciliation, and observer cleanup |
+| [AVA_Phase_5_49_Conversation_Rename_UX_Audit.md](AVA_Phase_5_49_Conversation_Rename_UX_Audit.md) | Rename flow audit, stale-404 reconciliation, and duplicate-submit guard |
+| [AVA_Phase_5_50_Conversation_Search_Backend_Client.md](AVA_Phase_5_50_Conversation_Search_Backend_Client.md) | Title-only conversation list search, repository parity, and typed client query encoding |
+| [AVA_Phase_5_51_Conversation_Search_UI.md](AVA_Phase_5_51_Conversation_Search_UI.md) | Debounced sidebar search backed by the conversation title-search API |
+| [AVA_Phase_5_52_Conversation_Sorting.md](AVA_Phase_5_52_Conversation_Sorting.md) | Canonical pin/activity/creation/identity order across repositories, API, search, and sidebar |
+| [AVA_Phase_5_53_Conversation_Folder_Domain.md](AVA_Phase_5_53_Conversation_Folder_Domain.md) | Flat organizational folder record and public read/write contracts; no persistence or routes |
+| [AVA_Phase_5_54_Conversation_Folder_Persistence_CRUD.md](AVA_Phase_5_54_Conversation_Folder_Persistence_CRUD.md) | Durable folder storage, CRUD/assignment API, transactional unassignment, and typed client support |
+| [AVA_Phase_5_55_Conversation_Folder_Sidebar_UX.md](AVA_Phase_5_55_Conversation_Folder_Sidebar_UX.md) | Sidebar folder sections, Ungrouped conversations, CRUD actions, move/unassign, and selection/run preservation |
+| [AVA_Phase_5_56_Project_Domain.md](AVA_Phase_5_56_Project_Domain.md) | Independent Project domain record and public contracts; no persistence, routes, or UI |
+| [AVA_Phase_5_57_Project_Persistence.md](AVA_Phase_5_57_Project_Persistence.md) | Project schema migration 0012, memory/SQLite repositories, composition, and restart durability |
+| [AVA_Phase_5_58_Project_CRUD_Service_API.md](AVA_Phase_5_58_Project_CRUD_Service_API.md) | Project lifecycle service, CRUD/archive API, typed client, and standalone metadata deletion |
+| [AVA_Phase_5_59_Project_List_Page_Navigation.md](AVA_Phase_5_59_Project_List_Page_Navigation.md) | Projects navigation, backend-ordered list, metadata actions, and placeholder Project route |
+| [AVA_Phase_5_60_Project_Detail_Workspace_Shell.md](AVA_Phase_5_60_Project_Detail_Workspace_Shell.md) | Project detail workspace sections, overview metadata, route loading, and deferred capability boundaries |
+| [AVA_Phase_5_61_Conversation_Project_Relationship.md](AVA_Phase_5_61_Conversation_Project_Relationship.md) | Nullable durable Conversation-to-Project membership, assignment semantics, and Project-delete cleanup |
+| [AVA_Phase_5_72_Project_Execution_Defaults.md](AVA_Phase_5_72_Project_Execution_Defaults.md) | Independent persisted Project runtime/model preferences; no execution precedence or UI |
+| [AVA_Phase_5_73_Project_Execution_Default_Resolution.md](AVA_Phase_5_73_Project_Execution_Default_Resolution.md) | Per-axis explicit → Project → application → bootstrap selection, canonical conversation membership, and stale Project preference fallback |
+| [AVA_Phase_5_74_Project_Execution_Defaults_UI.md](AVA_Phase_5_74_Project_Execution_Defaults_UI.md) | Project Settings runtime/model default controls using the existing APIs and per-axis precedence |
+| [AVA_Phase_5_75_Project_Files_Domain.md](AVA_Phase_5_75_Project_Files_Domain.md) | Project file ownership, metadata/content boundary, domain port, and storage-neutral public contracts |
+| [AVA_Phase_5_76_Project_Files_Persistence_API_Client.md](AVA_Phase_5_76_Project_Files_Persistence_API_Client.md) | Migration 0018, memory/SQLite metadata, local opaque-reference content storage, Project-scoped API, typed client, rollback, and restart behavior |
+| [AVA_Phase_5_76A_Project_Files_Validation_Stabilization.md](AVA_Phase_5_76A_Project_Files_Validation_Stabilization.md) | Formatting audit, focused and frontend validation, disposable ASGI/SQLite lifecycle, and canonical sandbox-blocker evidence |
+| [AVA_Phase_5_77_Project_Files_UI.md](AVA_Phase_5_77_Project_Files_UI.md) | Project workspace Files tab lifecycle UI, isolation/race behavior, ID-safe duplicate handling, tests, and no-execution/RAG boundary |
+| [AVA_Phase_5_78_Future_Knowledge_RAG_Boundary.md](AVA_Phase_5_78_Future_Knowledge_RAG_Boundary.md) | Provider-neutral Knowledge/RAG domain and ports, Project File source identity, scope/provenance and future lifecycle invariants; no RAG implementation |
+| [AVA_Phase_5_79_Folder_Drag_Drop_New_Chat.md](AVA_Phase_5_79_Folder_Drag_Drop_New_Chat.md) | dnd-kit conversation-to-Folder/Ungrouped movement, Project/run/selection preservation, and atomic New Chat in Folder |
+| [AVA_Phase_5_79A_Folder_Drag_Drop_Validation.md](AVA_Phase_5_79A_Folder_Drag_Drop_Validation.md) | Full Phase 5.79 validation, regression evidence, and sandbox blockers |
+| [AVA_Phase_5_80_Archive_Views_Sidebar_Cleanup.md](AVA_Phase_5_80_Archive_Views_Sidebar_Cleanup.md) | Active/Archived sidebar views, organization filtering, restore preservation, and validation evidence |
+| [AVA_Phase_5_62_Project_Conversation_API.md](AVA_Phase_5_62_Project_Conversation_API.md) | Project-scoped conversation list/create APIs, atomic membership creation, and typed client methods |
+| [AVA_Phase_5_63_Project_Conversation_UI.md](AVA_Phase_5_63_Project_Conversation_UI.md) | Chat sidebar Projects, lazy Project conversation lists, scoped creation, Project assignment, and Project workspace Conversations UI |
+| [AVA_Phase_5_64_Project_Instructions_Persistence.md](AVA_Phase_5_64_Project_Instructions_Persistence.md) | Audit and regression coverage for durable inert Project instructions, including exact text and omitted-versus-null updates |
+| [AVA_Phase_5_65_Project_Instructions_UI.md](AVA_Phase_5_65_Project_Instructions_UI.md) | Project Instructions editor, draft/save/null semantics, canonical state reconciliation, and execution boundary |
+| [AVA_Phase_5_66_CORE_System_Prompt_Domain.md](AVA_Phase_5_66_CORE_System_Prompt_Domain.md) | Reusable CORE prompt definition domain/contracts and future assignment/resolution/execution boundaries |
+| [AVA_Phase_5_67_CORE_Prompt_Persistence_CRUD.md](AVA_Phase_5_67_CORE_Prompt_Persistence_CRUD.md) | CORE prompt migration, memory/SQLite repositories, CRUD and enable API, typed client, and inert execution boundary |
+| [AVA_Phase_5_67A_Project_Conversation_Regression_Fix.md](AVA_Phase_5_67A_Project_Conversation_Regression_Fix.md) | Stale backend/schema-12 diagnosis, data-preserving migration, live Project list/create verification, and retry regression evidence |
+| [AVA_Phase_5_68_Scoped_CORE_Prompt_Assignment.md](AVA_Phase_5_68_Scoped_CORE_Prompt_Assignment.md) | Explicit CORE prompt scoped enable/disable assignments, migration 0016, target cleanup, public API, typed client, and resolution/execution boundaries |
+| [AVA_Phase_5_69_System_Prompt_Selection_UI.md](AVA_Phase_5_69_System_Prompt_Selection_UI.md) | System Prompts definition management and explicit Global/Project/Folder/Conversation/Runtime/Capability assignments; no resolution or execution integration |
+| [AVA_Phase_5_70_Effective_Prompt_Resolver.md](AVA_Phase_5_70_Effective_Prompt_Resolver.md) | Deterministic read-only CORE prompt resolution, scoped precedence, provenance, and structured preview API; no execution injection |
+| [AVA_Phase_5_71_Execution_Context_Injection.md](AVA_Phase_5_71_Execution_Context_Injection.md) | Application-owned root prompt, effective CORE prompt and Project instruction injection into normal/streaming execution, and provider/runtime translation |
+| [AVA_Phase_5_71A_Execution_Validation_Stabilization.md](AVA_Phase_5_71A_Execution_Validation_Stabilization.md) | Attachment restart-recovery stall isolation, hard-delete composition boundary repair, schema-16 live execution checks, and complete canonical certification |
 | `AVA_Phase_5_18_Production_Conversation_Architecture_Audit.md` | The pre-fix gap audit |
 | `AVA_Phase_5_30_Backend_Restart_Recovery_Semantics.md` | Explicit restart policy |
 | `AVA_Phase_5_36_Web_Acceptance.md`, `AVA_Phase_5_37_Desktop_Acceptance.md` | Shell acceptance |

@@ -100,9 +100,7 @@ def create_provider_connection(
     response_model=ProviderConnectionResponse,
     responses={404: {"model": ErrorResponse}},
 )
-def get_provider_connection(
-    request: Request, provider_connection_id: str
-) -> ProviderConnectionResponse | JSONResponse:
+def get_provider_connection(request: Request, provider_connection_id: str) -> ProviderConnectionResponse | JSONResponse:
     """Return one configured provider connection, or ``404`` if unknown."""
     try:
         return _service(request).get_provider_connection(provider_connection_id)

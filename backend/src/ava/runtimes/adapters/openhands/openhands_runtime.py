@@ -77,9 +77,7 @@ def _legacy_model_binding(provider: ModelProviderPort) -> ConfiguredModelBinding
         model_name = provider.get_model_info().model_id
     except Exception:
         model_name = provider_id
-    return ConfiguredModelBinding(
-        model_id=model_name, provider_id=provider_id, provider_model_name=model_name
-    )
+    return ConfiguredModelBinding(model_id=model_name, provider_id=provider_id, provider_model_name=model_name)
 
 
 def _conversation_prompt(context: RunContext | None, prompt: str) -> str:
@@ -90,6 +88,18 @@ def _conversation_prompt(context: RunContext | None, prompt: str) -> str:
     keeps its order and text but loses per-message role structure, because the
     SDK accepts only a user message here.
     """
+    if context is not None and context.prompt_layers is not None:
+        layers = context.prompt_layers
+        blocks = [f"[AVA ROOT SYSTEM]\n{layers.root_system_prompt}"]
+        blocks.extend(f"[AVA CORE PROMPT: {item.name}]\n{item.prompt_text}" for item in layers.resolved_core_prompts)
+        if layers.project_instructions:
+            blocks.append(f"[PROJECT INSTRUCTIONS]\n{layers.project_instructions}")
+        history = context.messages or []
+        if not history:
+            history = execution_context_messages(None, prompt)
+        transcript = "\n\n".join(f"{message.role.value.capitalize()}: {message.content}" for message in history)
+        return "\n\n".join([*blocks, f"{_TRANSCRIPT_HEADER}\n\n{transcript}"])
+
     messages = execution_context_messages(context, prompt)
     if len(messages) == 1 and messages[0].role == MessageRole.USER:
         return messages[0].content
@@ -153,9 +163,12 @@ class OpenHandsRuntime(AgentRuntimePort):
             except ImportError:
                 return RuntimeRunResult(status=RunStatus.FAILED, content="OpenHands runtime is unavailable")
             tools = build_openhands_tools(
-                workspace, authorization_policy=self._authorization_policy,
-                capabilities=self.get_runtime_info().capabilities, context=tool_context,
-                command_policy=self._command_policy, command_runner=self._command_runner,
+                workspace,
+                authorization_policy=self._authorization_policy,
+                capabilities=self.get_runtime_info().capabilities,
+                context=tool_context,
+                command_policy=self._command_policy,
+                command_runner=self._command_runner,
             )
             if tools:
                 try:
@@ -165,14 +178,21 @@ class OpenHandsRuntime(AgentRuntimePort):
                 except ImportError:
                     return RuntimeRunResult(status=RunStatus.FAILED, content="OpenHands file tools are unavailable")
             llm = LLM(
-                model=f"openai/{binding.provider_model_name}", base_url=binding.endpoint,
+                model=f"openai/{binding.provider_model_name}",
+                base_url=binding.endpoint,
                 api_key=_openhands_api_key(binding.api_key),
             )
             agent = ControlledAgent(llm=llm, tools=tools, include_default_tools=[])
-            conversation = cast(Any, await asyncio.to_thread(
-                ControlledConversation, agent=agent, workspace=_workspace_path(workspace),
-                persistence_dir=None, visualizer=None,
-            ))
+            conversation = cast(
+                Any,
+                await asyncio.to_thread(
+                    ControlledConversation,
+                    agent=agent,
+                    workspace=_workspace_path(workspace),
+                    persistence_dir=None,
+                    visualizer=None,
+                ),
+            )
             if tool_context.revoked.is_set():
                 return RuntimeRunResult(status=RunStatus.CANCELLED)
             await asyncio.to_thread(conversation.send_message, _conversation_prompt(context, request.prompt))

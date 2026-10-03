@@ -41,7 +41,6 @@ _DEFAULT_PROVIDER_NAME = "openai-compatible"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
-
 # ============================================================
 # BEGIN: Failure Classification
 # ============================================================
@@ -210,9 +209,7 @@ def _to_chat_completion_payload(request: ModelRequest, model_name: str) -> dict[
     """
     payload: dict[str, object] = {
         "model": model_name,
-        "messages": [
-            {"role": message.role, "content": message.content} for message in request.messages
-        ],
+        "messages": [{"role": message.role, "content": message.content} for message in request.messages],
     }
     if request.temperature is not None:
         payload["temperature"] = request.temperature
@@ -335,9 +332,7 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
         self._api_key = api_key
         self._context_limit = context_limit
         self._display_name = display_name
-        self._capabilities = (
-            capabilities if capabilities is not None else ModelCapabilities(chat=True)
-        )
+        self._capabilities = capabilities if capabilities is not None else ModelCapabilities(chat=True)
         self._http_client = http_client or httpx.AsyncClient(
             timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT_SECONDS
         )
@@ -456,9 +451,7 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
         """Return the configured conservative capabilities."""
         return self._capabilities
 
-    async def generate(
-        self, request: ModelRequest, *, model_name: str | None = None
-    ) -> ModelResponse:
+    async def generate(self, request: ModelRequest, *, model_name: str | None = None) -> ModelResponse:
         """Send ``request`` to ``POST {base_url}/chat/completions``.
 
         The provider targets the explicit provider-native ``model_name`` when
@@ -474,17 +467,13 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
         """
         target_model = model_name if model_name is not None else self._model_name
         if not self._base_url.strip():
-            raise ModelProviderError(
-                "base_url is not configured", safe_code=FailureCode.CONFIGURATION_INVALID
-            )
+            raise ModelProviderError("base_url is not configured", safe_code=FailureCode.CONFIGURATION_INVALID)
         if not target_model.strip():
-            raise ModelProviderError(
-                "model_name is not configured", safe_code=FailureCode.MODEL_UNAVAILABLE
-            )
+            raise ModelProviderError("model_name is not configured", safe_code=FailureCode.MODEL_UNAVAILABLE)
         if not _base_url_config_valid(self._base_url):
             raise ModelProviderError(
-            "OpenAI-compatible base_url is invalid", safe_code=FailureCode.CONFIGURATION_INVALID
-        )
+                "OpenAI-compatible base_url is invalid", safe_code=FailureCode.CONFIGURATION_INVALID
+            )
         headers: dict[str, str] = {}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -510,12 +499,11 @@ class OpenAICompatibleModelProvider(ModelProviderPort):
         except ModelProviderError as exc:
             # A structurally unusable success body is a response problem, not a
             # transport one, and the adapter is the only layer that can tell.
-            raise ModelProviderError(str(exc), status_code=exc.status_code,
-                                     safe_code=FailureCode.PROVIDER_RESPONSE_INVALID) from exc
+            raise ModelProviderError(
+                str(exc), status_code=exc.status_code, safe_code=FailureCode.PROVIDER_RESPONSE_INVALID
+            ) from exc
 
-    async def stream(
-        self, request: ModelRequest, *, model_name: str | None = None
-    ) -> AsyncIterator[str]:
+    async def stream(self, request: ModelRequest, *, model_name: str | None = None) -> AsyncIterator[str]:
         """Yield real text deltas from an OpenAI-compatible SSE response."""
         target_model = model_name if model_name is not None else self._model_name
         if not self._base_url.strip() or not target_model.strip() or not _base_url_config_valid(self._base_url):

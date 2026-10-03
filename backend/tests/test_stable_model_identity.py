@@ -15,10 +15,13 @@ prove:
 """
 
 import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
 from ava.agents.adapters.native.native_agent import NativeAgentAdapter
+from ava.configuration.settings import Settings
 from ava.contracts.execution import RunExecutionOverride
 from ava.contracts.models import (
     ModelCapabilities,
@@ -32,6 +35,7 @@ from ava.contracts.models import (
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.execution.selector import ExecutionSelector
+from ava.infrastructure.composition import create_application_persistence
 from ava.models.bindings import (
     ConfiguredModelBinding,
     ModelBindingResolver,
@@ -42,6 +46,7 @@ from ava.models.contracts import ModelProviderPort
 from ava.models.model_registry import ModelProfile, ModelRegistry
 from ava.models.registry import ModelProviderRegistry
 from ava.models.resolver import ModelProviderResolver
+from ava.repositories.project import ProjectExecutionDefaults, ProjectRecord
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.registry import RuntimeRegistry
 from ava.runtimes.resolver import RuntimeResolver
@@ -243,6 +248,39 @@ def test_explicit_model_id_selects_binding_and_provider_native_name() -> None:
         assert result.execution_selection.model_id == "ava/large"
         assert result.execution_selection.model_provider_id == "shared"
         assert provider.received_model_names == ["large-native"]
+
+    asyncio.run(scenario())
+
+
+def test_project_execution_preferences_do_not_change_run_selection() -> None:
+    async def scenario() -> None:
+        agent, provider = _shared_provider_agent()
+        persistence = create_application_persistence(Settings(persistence_provider="memory"))
+        now = datetime(2026, 10, 1, tzinfo=UTC)
+        project = ProjectRecord("p-inert", "Inert defaults", now, now)
+        try:
+            persistence.project_repository.create(project)
+            before = await agent.start_run("run-before-project-preferences", RunRequest(prompt="Hello"))
+            assert before.status == RunStatus.COMPLETED and before.execution_selection is not None
+
+            changed = replace(
+                project,
+                execution_defaults=ProjectExecutionDefaults(runtime_key="openhands", model_id="ava/large"),
+            )
+            assert persistence.project_repository.update(changed) == changed
+            after = await agent.start_run("run-after-project-preferences", RunRequest(prompt="Hello"))
+            assert after.status == RunStatus.COMPLETED and after.execution_selection is not None
+
+            assert before.execution_selection.runtime_id == after.execution_selection.runtime_id == "native"
+            assert before.execution_selection.model_id == after.execution_selection.model_id == "ava/small"
+            assert (
+                before.execution_selection.model_provider_id
+                == after.execution_selection.model_provider_id
+                == "shared"
+            )
+            assert provider.received_model_names == ["small-native", "small-native"]
+        finally:
+            persistence.dispose()
 
     asyncio.run(scenario())
 

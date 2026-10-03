@@ -233,7 +233,7 @@ def test_generate_normalizes_base_url_trailing_slash() -> None:
 
 
 def test_generate_preserves_message_order_and_roles() -> None:
-    """Multiple messages retain order and role."""
+    """Root/CORE/Project layers and history retain order and role."""
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -244,7 +244,9 @@ def test_generate_preserves_message_order_and_roles() -> None:
         provider = _configured_provider(handler)
         request = ModelRequest(
             messages=[
-                ModelMessage(role="system", content="You are a helpful assistant."),
+                ModelMessage(role="system", content="AVA root."),
+                ModelMessage(role="system", content="CORE: Line one\n\n  Indented line\n日本語 →"),
+                ModelMessage(role="system", content="[PROJECT INSTRUCTIONS]\nProject marker β"),
                 ModelMessage(role="user", content="First."),
                 ModelMessage(role="assistant", content="Second."),
                 ModelMessage(role="user", content="Third."),
@@ -256,7 +258,9 @@ def test_generate_preserves_message_order_and_roles() -> None:
     body = captured["body"]
     assert isinstance(body, dict)
     assert body["messages"] == [
-        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "system", "content": "AVA root."},
+        {"role": "system", "content": "CORE: Line one\n\n  Indented line\n日本語 →"},
+        {"role": "system", "content": "[PROJECT INSTRUCTIONS]\nProject marker β"},
         {"role": "user", "content": "First."},
         {"role": "assistant", "content": "Second."},
         {"role": "user", "content": "Third."},

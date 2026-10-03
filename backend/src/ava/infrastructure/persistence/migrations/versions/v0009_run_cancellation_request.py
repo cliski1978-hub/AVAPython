@@ -9,8 +9,14 @@ VERSION = 9
 NAME = "durable run cancellation request"
 EXPECTED_TABLES = ("runs",)
 EXPECTED_COLUMNS = (
-    "run_id", "status", "created_at", "updated_at", "execution_selection",
-    "conversation_id", "source_user_message_id", "assistant_message_id",
+    "run_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "execution_selection",
+    "conversation_id",
+    "source_user_message_id",
+    "assistant_message_id",
     "cancellation_requested_at",
 )
 
@@ -29,6 +35,4 @@ def migrate_up(connection: sqlite3.Connection) -> None:
 
 def verify_structure(connection: sqlite3.Connection) -> None:
     if not table_exists(connection, "runs") or tuple(table_columns(connection, "runs")) != EXPECTED_COLUMNS:
-        raise SchemaValidationError(
-            "runs table does not match durable run cancellation schema (version 9)"
-        )
+        raise SchemaValidationError("runs table does not match durable run cancellation schema (version 9)")

@@ -24,7 +24,7 @@ implement its own version.
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 from ava.contracts.responses import RunStatus
 from ava.contracts.version import CONTRACT_VERSION
@@ -115,6 +115,33 @@ class ContextMessage(BaseModel):
     message_id: str | None = None
 
 
+class ExecutionCorePrompt(BaseModel):
+    """One resolved CORE prompt carried as structured execution context."""
+
+    id: str
+    name: str
+    category: str
+    prompt_text: str
+    winning_scope_type: str
+    winning_scope_id: str | None
+
+
+class ExecutionPromptLayers(BaseModel):
+    """Application-controlled root and subordinate instruction layers."""
+
+    root_system_prompt: str
+    resolved_core_prompts: list[ExecutionCorePrompt] = Field(default_factory=list)
+    project_instructions: str | None = None
+
+
+class ExecutionPromptContextBuildError(ValueError):
+    """AVA could not resolve all application-controlled instructions for a run."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        self.error_code = error_code
+        super().__init__(message)
+
+
 class RunContext(BaseModel):
     """The AVA-constructed context for exactly one run.
 
@@ -131,6 +158,7 @@ class RunContext(BaseModel):
     conversation_id: str | None = None
     source_user_message_id: str | None = None
     messages: list[ContextMessage] = Field(default_factory=list)
+    prompt_layers: ExecutionPromptLayers | None = None
 
     @property
     def has_messages(self) -> bool:
@@ -150,9 +178,19 @@ def execution_context_messages(
     used only when no durable context exists, which keeps legacy unlinked runs
     on their existing single-message behavior.
     """
+    layers: list[ContextMessage] = []
+    if context is not None and context.prompt_layers is not None:
+        prompt_layers = context.prompt_layers
+        layers.append(ContextMessage(role=MessageRole.SYSTEM, content=prompt_layers.root_system_prompt))
+        layers.extend(
+            ContextMessage(role=MessageRole.SYSTEM, content=core_prompt.prompt_text)
+            for core_prompt in prompt_layers.resolved_core_prompts
+        )
+        if prompt_layers.project_instructions:
+            layers.append(ContextMessage(role=MessageRole.SYSTEM, content=prompt_layers.project_instructions))
     if context is not None and context.messages:
-        return list(context.messages)
-    return [ContextMessage(role=MessageRole.USER, content=prompt)]
+        return [*layers, *context.messages]
+    return [*layers, ContextMessage(role=MessageRole.USER, content=prompt)]
 
 
 # ============================================================
@@ -173,6 +211,7 @@ class CreateConversationRequest(BaseModel):
     """
 
     title: str | None = None
+    folder_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 
@@ -189,6 +228,34 @@ class UpdateConversationRequest(BaseModel):
         if not value.strip():
             raise ValueError("title must not be blank")
         return value
+
+
+class SetConversationPinnedRequest(BaseModel):
+    """Pin-only mutation; rename remains a separate, title-required contract."""
+
+    is_pinned: StrictBool
+    contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
+
+
+class SetConversationArchivedRequest(BaseModel):
+    """Archive or restore a conversation without exposing other metadata."""
+
+    is_archived: StrictBool
+    contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
+
+
+class SetConversationFolderRequest(BaseModel):
+    """Assign a conversation to a folder, or null to unassign it."""
+
+    folder_id: str | None
+    contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
+
+
+class SetConversationProjectRequest(BaseModel):
+    """Assign a conversation to a Project, or null to unassign it."""
+
+    project_id: str | None
+    contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 
 class CreateMessageRequest(BaseModel):
@@ -225,12 +292,25 @@ class CreateMessageRequest(BaseModel):
 
 
 class ConversationResponse(BaseModel):
-    """Response contract describing an AVA conversation."""
+    """Response contract describing an AVA conversation.
+
+    Phases 5.44 and 5.45 add narrow pin and archive write paths. Folder and
+    Project metadata remain separate nullable relationships.
+    ``is_pinned`` and ``is_archived`` are descriptive (presentational pin, and a
+    reversible hidden state that keeps the conversation and all of its messages,
+    runs, and events), while ``folder_id`` and ``project_id`` are nullable,
+    independent relationships represented by IDs. Related objects are not
+    embedded in this response.
+    """
 
     conversation_id: str
     title: str
     created_at: datetime
     updated_at: datetime
+    is_pinned: bool = False
+    is_archived: bool = False
+    folder_id: str | None = None
+    project_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 

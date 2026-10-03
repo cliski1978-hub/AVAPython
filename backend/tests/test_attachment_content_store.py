@@ -142,14 +142,14 @@ def test_put_accepts_storage_key_and_streaming_source() -> None:
 # ============================================================
 
 
-def test_content_port_exposes_no_delete_or_metadata_operations() -> None:
-    """No delete/remove/purge/list/rename/metadata operations exist on the port."""
+def test_content_port_exposes_delete_but_no_metadata_operations() -> None:
+    """Hard-delete cleanup is supported without adding metadata operations."""
     operations = {
         name
         for name, member in getmembers(AttachmentContentStore)
         if not name.startswith("_") and callable(member)
     }
-    assert operations == {"put", "open", "exists"}
+    assert operations == {"put", "open", "exists", "delete"}
 
 
 # ============================================================
