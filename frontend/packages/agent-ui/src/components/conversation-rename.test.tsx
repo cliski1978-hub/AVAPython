@@ -59,7 +59,7 @@ function type(element: Element, value: string) {
   });
 }
 
-function pressKey(element: Element, key: string) {
+function pressKey(element: Element | Document, key: string) {
   act(() => {
     element.dispatchEvent(
       new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
@@ -77,6 +77,10 @@ function renameInput(): HTMLInputElement | null {
 
 function menuItem(): Element | null {
   return document.querySelector('[data-conversation-rename]');
+}
+
+function deleteMenuItem(): Element | null {
+  return document.querySelector('[data-conversation-delete]');
 }
 
 function rowSelectButton(id: string): Element | null {
@@ -209,6 +213,34 @@ describe("ConversationList rename actions", () => {
     expect(container.textContent).toContain("New Title");
   });
 
+  it("guards duplicate Enter submissions while a rename request is pending", async () => {
+    let resolveRename!: () => void;
+    const onRename = vi.fn<(_id: string, _title: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { resolveRename = resolve; }),
+    );
+    render(
+      <ConversationList
+        conversations={[conversation("c1", "Old Title")]}
+        activeConversationId="c1"
+        onNewChat={noop}
+        onSelect={noop}
+        onRename={onRename}
+      />,
+    );
+    click(actionsButton("Old Title")!);
+    click(menuItem()!);
+    const input = renameInput()!;
+    type(input, "New Title");
+    pressKey(input, "Enter");
+    pressKey(input, "Enter");
+
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(renameInput()?.disabled).toBe(true);
+    await act(async () => resolveRename());
+    await flush();
+    expect(renameInput()).toBeNull();
+  });
+
   it("cancels the rename on Escape without calling the backend", () => {
     const onRename = vi.fn<(_id: string, _title: string) => Promise<void>>(
     async () => undefined,
@@ -257,6 +289,49 @@ describe("ConversationList rename actions", () => {
     expect(onRename).not.toHaveBeenCalled();
     expect(renameInput()).toBeNull();
     expect(container.textContent).toContain("Old Title");
+  });
+
+  it("requires confirmation before delete and cancel/Escape never calls the delete handler", async () => {
+    const onDelete = vi.fn<(_id: string) => Promise<void>>(async () => undefined);
+    render(
+      <ConversationList
+        conversations={[conversation("c1", "Architecture Review")]}
+        activeConversationId="c1"
+        onNewChat={noop}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+    click(actionsButton("Architecture Review")!);
+    expect(deleteMenuItem()?.textContent).toBe("Delete");
+    click(deleteMenuItem()!);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Delete “Architecture Review” permanently?');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("cannot be undone");
+    pressKey(document, "Escape");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("calls the delete handler only after the destructive confirmation", async () => {
+    const onDelete = vi.fn<(_id: string) => Promise<void>>(async () => undefined);
+    render(
+      <ConversationList
+        conversations={[conversation("c1", "Architecture Review")]}
+        activeConversationId="c1"
+        onNewChat={noop}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+    click(actionsButton("Architecture Review")!);
+    click(deleteMenuItem()!);
+    expect(onDelete).not.toHaveBeenCalled();
+    const confirm = Array.from(document.querySelectorAll('[role="dialog"] button')).find((button) => button.textContent === "Delete permanently");
+    click(confirm!);
+    await flush();
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith("c1");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("does not select the conversation when opening the menu or choosing Rename", () => {

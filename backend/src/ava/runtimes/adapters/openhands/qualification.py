@@ -115,7 +115,8 @@ async def run_native_tool_call_trial(
         actions = [event for event in events if event.__class__.__name__ == "ActionEvent"]
         terminal_actions = [event for event in actions if getattr(event, "tool_name", None) == AVA_TERMINAL_TOOL_NAME]
         observations = [
-            event for event in events
+            event
+            for event in events
             if event.__class__.__name__ == "ObservationEvent"
             and getattr(event, "tool_name", None) == AVA_TERMINAL_TOOL_NAME
         ]
@@ -171,17 +172,22 @@ async def run_openhands_workflow(
 
     def capture(event: Any) -> None:
         tool_name = getattr(event, "tool_name", None)
-        observed.append((
-            event.__class__.__name__,
-            str(tool_name) if tool_name else None,
-            int((time.monotonic() - started) * 1000),
-        ))
+        observed.append(
+            (
+                event.__class__.__name__,
+                str(tool_name) if tool_name else None,
+                int((time.monotonic() - started) * 1000),
+            )
+        )
 
     cancelled = False
     try:
         agent = ControlledAgent(
             llm=LLM(
-                model=f"openai/{model_id}", base_url=endpoint, api_key="local-ava", temperature=temperature,
+                model=f"openai/{model_id}",
+                base_url=endpoint,
+                api_key="local-ava",
+                temperature=temperature,
                 litellm_extra_body={"options": {"num_ctx": context_window}},
             ),
             tools=tools,
@@ -189,8 +195,12 @@ async def run_openhands_workflow(
         )
         conversation_factory: Any = ControlledConversation
         conversation = await asyncio.to_thread(
-            conversation_factory, agent=agent, workspace=str(workspace.local_path),
-            persistence_dir=None, visualizer=None, callbacks=[capture],
+            conversation_factory,
+            agent=agent,
+            workspace=str(workspace.local_path),
+            persistence_dir=None,
+            visualizer=None,
+            callbacks=[capture],
             max_iteration_per_run=max_iterations,
         )
         await asyncio.to_thread(conversation.send_message, prompt)
@@ -203,7 +213,8 @@ async def run_openhands_workflow(
         actions = [event for event in events if event.__class__.__name__ == "ActionEvent"]
         terminal_actions = [event for event in actions if getattr(event, "tool_name", None) == AVA_TERMINAL_TOOL_NAME]
         observations = [
-            event for event in events
+            event
+            for event in events
             if event.__class__.__name__ == "ObservationEvent"
             and getattr(event, "tool_name", None) == AVA_TERMINAL_TOOL_NAME
         ]
@@ -214,12 +225,10 @@ async def run_openhands_workflow(
         return OpenHandsWorkflowTrace(
             tool_names=tool_names,
             terminal_arguments=tuple(
-                str(getattr(getattr(event, "tool_call", None), "arguments", ""))
-                for event in terminal_actions
+                str(getattr(getattr(event, "tool_call", None), "arguments", "")) for event in terminal_actions
             ),
             terminal_failures=sum(
-                bool(getattr(getattr(event, "observation", None), "is_error", False))
-                for event in observations
+                bool(getattr(getattr(event, "observation", None), "is_error", False)) for event in observations
             ),
             sandbox_requests=len(recorder.requests),
             final_response=final_response,

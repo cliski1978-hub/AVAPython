@@ -422,7 +422,7 @@ def test_v7_upgrades_a_v6_database_and_preserves_every_configured_record(tmp_pat
                 "(runtime_configuration_id, runtime_type, display_name, enabled) VALUES (?, ?, ?, ?)",
                 (RUNTIME_NATIVE, "native", "Native AVA", True),
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(7, 19))
         with database.connect() as connection:
             assert connection.execute(
                 "SELECT provider_id, endpoint, credential_reference FROM provider_connections"
@@ -456,7 +456,7 @@ def test_v7_upgrades_a_v6_database_with_phase_4_data_untouched(tmp_path) -> None
                 "VALUES ('doc-1', 'T', '<p>x</p>', 'html', "
                 "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(7, 19))
         with database.connect() as connection:
             for table in ("conversations", "messages", "runs", "run_events", "documents"):
                 expected = 0 if table in {"messages", "run_events"} else 1

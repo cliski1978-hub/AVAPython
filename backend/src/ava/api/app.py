@@ -23,12 +23,15 @@ from fastapi.responses import JSONResponse
 
 from ava.api.routes.attachments import router as attachments_router
 from ava.api.routes.capabilities import router as capabilities_router
+from ava.api.routes.conversation_folders import router as conversation_folders_router
 from ava.api.routes.conversations import router as conversations_router
+from ava.api.routes.core_prompts import router as core_prompts_router
 from ava.api.routes.documents import router as documents_router
 from ava.api.routes.execution_profiles import router as execution_profiles_router
 from ava.api.routes.health import router as health_router
 from ava.api.routes.model_providers import router as model_providers_router
 from ava.api.routes.models import router as models_router
+from ava.api.routes.projects import router as projects_router
 from ava.api.routes.runs import router as runs_router
 from ava.api.routes.runtimes import router as runtimes_router
 from ava.api.routes.settings import router as settings_router
@@ -46,6 +49,7 @@ from ava.infrastructure.composition import (
     create_attachment_content_store,
     create_command_execution_policy,
     create_configured_model_provider_factory,
+    create_conversation_hard_delete_coordinator,
     create_credential_resolver,
     create_execution_configuration_resolver,
     create_model_orchestrator,
@@ -53,6 +57,7 @@ from ava.infrastructure.composition import (
     create_model_qualification_store,
     create_model_registry,
     create_model_resource_manager,
+    create_project_file_content_store,
     create_runtime_registry,
     create_sandboxed_command_runner,
     create_workspace_registry,
@@ -63,11 +68,20 @@ from ava.runtimes import RuntimeResolver
 from ava.services.attachment_service import AttachmentService
 from ava.services.capability_service import CapabilityService
 from ava.services.context_construction_service import ContextConstructionService
+from ava.services.conversation_folder_service import ConversationFolderService
 from ava.services.conversation_service import ConversationService
+from ava.services.core_prompt_assignment_service import CorePromptAssignmentService
+from ava.services.core_prompt_service import CorePromptService
 from ava.services.document_service import DocumentService
+from ava.services.effective_prompt_resolver import EffectivePromptResolver
 from ava.services.execution_profile_service import ExecutionProfileService
+from ava.services.execution_prompt_context_service import ExecutionPromptContextService
 from ava.services.model_discovery_service import ModelDiscoveryService
 from ava.services.model_provider_discovery_service import ModelProviderDiscoveryService
+from ava.services.project_execution_defaults_resolver import ProjectExecutionDefaultsResolver
+from ava.services.project_execution_defaults_service import ProjectExecutionDefaultsService
+from ava.services.project_file_service import ProjectFileService
+from ava.services.project_service import ProjectService
 from ava.services.run_lifecycle_service import RunLifecycleService
 from ava.services.run_recovery_service import RunRecoveryService
 from ava.services.run_service import RunService
@@ -204,6 +218,11 @@ def create_app(
     # instances the Settings API writes to.
     application_persistence = create_application_persistence(settings)
     app.state.persistence = application_persistence
+    project_execution_defaults_resolver = ProjectExecutionDefaultsResolver(
+        conversations=application_persistence.conversation_repository,
+        projects=application_persistence.project_repository,
+    )
+    app.state.project_execution_defaults_resolver = project_execution_defaults_resolver
     app.state.configuration_bootstrap_status = bootstrap_execution_configuration(
         settings, application_persistence, runtime_registry
     )
@@ -224,6 +243,21 @@ def create_app(
         hosting_requirement=hosting_requirement,
     )
     app.state.execution_configuration_resolver = execution_configuration_resolver
+
+    # Prompt resolution is AVA-owned and read-only. It is composed before the
+    # agent so the execution adapter can resolve once after selecting the
+    # actual runtime, then hand the runtime a complete neutral context.
+    effective_prompt_resolver = EffectivePromptResolver(
+        prompts=application_persistence.core_prompt_repository,
+        assignments=application_persistence.core_prompt_assignment_repository,
+        conversations=application_persistence.conversation_repository,
+        runtime_ids=runtime_registry.list(),
+    )
+    app.state.effective_prompt_resolver = effective_prompt_resolver
+    app.state.execution_prompt_context_service = ExecutionPromptContextService(
+        resolver=effective_prompt_resolver,
+        projects=application_persistence.project_repository,
+    )
 
     # The workspace registry/resolver are composed once at startup. The
     # registry starts empty and resolution performs no filesystem, shell, or
@@ -252,6 +286,8 @@ def create_app(
         workspace_resolver=workspace_resolver,
         hosting_requirement=hosting_requirement,
         persisted_configuration_resolver=execution_configuration_resolver,
+        project_execution_defaults_resolver=project_execution_defaults_resolver,
+        prompt_context_builder=app.state.execution_prompt_context_service,
     )
     app.state.agent_port = agent_port
     # Physical attachment content (Step 4.14.D) is selected independently of
@@ -259,6 +295,7 @@ def create_app(
     # one shared content store that AttachmentService (Step 4.14.E) consumes.
     # It stays off application_persistence, which remains metadata/database-only.
     app.state.attachment_content_store = create_attachment_content_store(settings)
+    app.state.project_file_content_store = create_project_file_content_store(settings)
     # The attachment service (Step 4.14.E) is composed once over the shared
     # content store and the metadata repository, and consumes both purely
     # through ports. The routes consuming it (Step 4.14.F) resolve it at
@@ -293,11 +330,45 @@ def create_app(
         run_repository=application_persistence.run_repository,
         lifecycle=app.state.run_lifecycle_service,
     )
+    hard_delete_coordinator = create_conversation_hard_delete_coordinator(application_persistence)
     app.state.conversation_service = ConversationService(
         conversation_repository=application_persistence.conversation_repository,
         message_repository=application_persistence.message_repository,
         run_repository=application_persistence.run_repository,
         run_event_repository=application_persistence.run_event_repository,
+        hard_delete_coordinator=hard_delete_coordinator,
+        attachment_content_store=app.state.attachment_content_store,
+        project_repository=application_persistence.project_repository,
+        folder_repository=application_persistence.conversation_folder_repository,
+    )
+    app.state.conversation_folder_service = ConversationFolderService(
+        folder_repository=application_persistence.conversation_folder_repository,
+        conversation_repository=application_persistence.conversation_repository,
+    )
+    app.state.project_file_service = ProjectFileService(
+        projects=application_persistence.project_repository,
+        files=application_persistence.project_file_repository,
+        content=app.state.project_file_content_store,
+    )
+    app.state.project_service = ProjectService(
+        project_repository=application_persistence.project_repository,
+        project_file_service=app.state.project_file_service,
+    )
+    app.state.project_execution_defaults_service = ProjectExecutionDefaultsService(
+        projects=application_persistence.project_repository,
+        models=application_persistence.model_configuration_repository,
+        runtimes=app.state.runtime_resolver,
+    )
+    app.state.core_prompt_service = CorePromptService(
+        core_prompt_repository=application_persistence.core_prompt_repository
+    )
+    app.state.core_prompt_assignment_service = CorePromptAssignmentService(
+        assignments=application_persistence.core_prompt_assignment_repository,
+        prompts=application_persistence.core_prompt_repository,
+        projects=application_persistence.project_repository,
+        folders=application_persistence.conversation_folder_repository,
+        conversations=application_persistence.conversation_repository,
+        runtime_ids=runtime_registry.list(),
     )
     app.state.document_service = DocumentService(
         document_repository=application_persistence.document_repository,
@@ -367,6 +438,9 @@ def create_app(
     app.include_router(health_router)
     app.include_router(capabilities_router)
     app.include_router(conversations_router)
+    app.include_router(conversation_folders_router)
+    app.include_router(projects_router)
+    app.include_router(core_prompts_router)
     app.include_router(documents_router)
     app.include_router(attachments_router)
     app.include_router(model_providers_router)
@@ -390,10 +464,7 @@ async def handle_settings_validation_error(request: Request, exc: Exception) -> 
         return await handle_unhandled_exception(request, exc)
     if not request.url.path.startswith("/settings"):
         return await request_validation_exception_handler(request, exc)
-    errors = [
-        {key: value for key, value in error.items() if key != "input"}
-        for error in exc.errors()
-    ]
+    errors = [{key: value for key, value in error.items() if key != "input"} for error in exc.errors()]
     return JSONResponse(
         status_code=422,
         content={"detail": jsonable_encoder(errors)},

@@ -244,9 +244,7 @@ class UnsupportedRuntimeModelBindingError(ValueError):
     """Selected provider cannot be represented for an external runtime."""
 
 
-def bind_model_provider(
-    provider: ModelProviderPort, binding: ConfiguredModelBinding
-) -> RuntimeModelBinding:
+def bind_model_provider(provider: ModelProviderPort, binding: ConfiguredModelBinding) -> RuntimeModelBinding:
     """Bridge a stable AVA binding to an external runtime's model binding.
 
     The provider owns connection data (protocol, endpoint, credential); the
@@ -255,9 +253,7 @@ def bind_model_provider(
     """
     binder = provider if isinstance(provider, RuntimeModelBindingPort) else None
     if binder is None:
-        raise UnsupportedRuntimeModelBindingError(
-            "Selected model provider does not support external runtime binding"
-        )
+        raise UnsupportedRuntimeModelBindingError("Selected model provider does not support external runtime binding")
     return binder.create_runtime_model_binding(
         model_id=binding.model_id,
         provider_id=binding.provider_id,

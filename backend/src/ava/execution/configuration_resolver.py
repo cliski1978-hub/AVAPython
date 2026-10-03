@@ -58,6 +58,7 @@ from ava.execution.persisted_execution import (
     ModelProviderMismatchError,
     PersistedExecutionConfiguration,
     PersistedModelConfiguration,
+    PersistedRuntimeConfiguration,
     ProviderAdapterNotRegisteredError,
     ProviderConstructionFailedError,
     RuntimeAdapterNotRegisteredError,
@@ -169,34 +170,70 @@ class ExecutionConfigurationResolver:
             raise ExecutionDefaultsNotConfiguredError
         return resolved
 
-    def resolve_model_configuration(self, model_id: str) -> PersistedModelConfiguration | None:
+    def application_defaults(self) -> ApplicationExecutionDefaults | None:
+        """Return the configured application defaults without resolving either axis."""
+        return self._repositories.execution_defaults.get()
+
+    def resolve_application_runtime(self) -> PersistedRuntimeConfiguration | None:
+        """Resolve only the application runtime default, preserving per-axis fallback."""
+        defaults = self.application_defaults()
+        if defaults is None:
+            return None
+        runtime_configuration = self._require_runtime_configuration(defaults)
+        return PersistedRuntimeConfiguration(
+            runtime=self._resolve_runtime(runtime_configuration),
+            runtime_key=runtime_configuration.runtime_type,
+            runtime_configuration_id=runtime_configuration.runtime_configuration_id,
+        )
+
+    def resolve_model_configuration(
+        self,
+        model_id: str,
+        *,
+        runtime_type: str | None = None,
+        skip_if_unavailable: bool = False,
+        expected_provider_connection_id: str | None = None,
+        require_configured: bool = False,
+    ) -> PersistedModelConfiguration | None:
         """Resolve one configured model by id, or ``None`` if it is not one.
 
-        ``None`` is reserved for "no configured model has this id", which is a
-        normal answer the caller resolves against its bootstrap catalog. Every
-        other failure — a disabled model or connection, a missing connection, an
-        inconsistent pairing, an unregistered adapter, a credential failure —
-        raises, so selecting a configured model that cannot run fails the run
-        instead of silently executing a different one.
+        ``None`` means either that the id is not configured, or (only when
+        ``skip_if_unavailable`` is true) that the referenced model or its
+        connection is missing/disabled and the caller may fall through. Other
+        failures — an inconsistent pairing, an unregistered adapter, a
+        credential failure — remain explicit errors.
         """
         model = self._repositories.model_configurations.get(model_id)
         if model is None:
+            if require_configured:
+                raise ConfiguredReferenceMissingError(_MODEL_CONFIGURATION, model_id)
+            return None
+        if skip_if_unavailable and not model.enabled:
             return None
         if not model.enabled:
             raise ConfiguredReferenceDisabledError(_MODEL_CONFIGURATION, model.model_id)
         connection = self._repositories.provider_connections.get(model.provider_connection_id)
         if connection is None:
+            if skip_if_unavailable:
+                return None
             raise ConfiguredReferenceMissingError(_PROVIDER_CONNECTION, model.provider_connection_id)
         if not connection.enabled:
+            if skip_if_unavailable:
+                return None
             raise ConfiguredReferenceDisabledError(_PROVIDER_CONNECTION, connection.provider_connection_id)
         self._require_relationship(model, connection)
+        if (
+            expected_provider_connection_id is not None
+            and connection.provider_connection_id != expected_provider_connection_id
+        ):
+            raise ModelProviderMismatchError(model.model_id, expected_provider_connection_id)
         model_profile = _profile_for(model, connection)
         try:
             self._model_orchestrator.select(
                 ModelSelectionRequest(
                     explicit_model_id=model_profile.model_id,
                     preferred_provider_id=connection.provider_id,
-                    runtime_id=self._runtime_type_for(model_profile),
+                    runtime_id=runtime_type or self._runtime_type_for(model_profile),
                     hosting_requirement=self._hosting_requirement,
                 ),
                 registry=ModelRegistry((model_profile,)),
@@ -221,9 +258,7 @@ class ExecutionConfigurationResolver:
         defaults = self._repositories.execution_defaults.get()
         if defaults is None:
             return profile.provider_id
-        runtime_configuration = self._repositories.runtime_configurations.get(
-            defaults.default_runtime_configuration_id
-        )
+        runtime_configuration = self._repositories.runtime_configurations.get(defaults.default_runtime_configuration_id)
         if runtime_configuration is None:
             return profile.provider_id
         return runtime_configuration.runtime_type
@@ -274,17 +309,11 @@ class ExecutionConfigurationResolver:
     # ============================================================
 
     def _require_connection(self, defaults: ApplicationExecutionDefaults) -> ProviderConnection:
-        connection = self._repositories.provider_connections.get(
-            defaults.default_provider_connection_id
-        )
+        connection = self._repositories.provider_connections.get(defaults.default_provider_connection_id)
         if connection is None:
-            raise ConfiguredReferenceMissingError(
-                _PROVIDER_CONNECTION, defaults.default_provider_connection_id
-            )
+            raise ConfiguredReferenceMissingError(_PROVIDER_CONNECTION, defaults.default_provider_connection_id)
         if not connection.enabled:
-            raise ConfiguredReferenceDisabledError(
-                _PROVIDER_CONNECTION, connection.provider_connection_id
-            )
+            raise ConfiguredReferenceDisabledError(_PROVIDER_CONNECTION, connection.provider_connection_id)
         return connection
 
     def _require_model(self, defaults: ApplicationExecutionDefaults) -> ModelConfiguration:
@@ -295,25 +324,17 @@ class ExecutionConfigurationResolver:
             raise ConfiguredReferenceDisabledError(_MODEL_CONFIGURATION, model.model_id)
         return model
 
-    def _require_runtime_configuration(
-        self, defaults: ApplicationExecutionDefaults
-    ) -> RuntimeConfiguration:
-        runtime_configuration = self._repositories.runtime_configurations.get(
-            defaults.default_runtime_configuration_id
-        )
+    def _require_runtime_configuration(self, defaults: ApplicationExecutionDefaults) -> RuntimeConfiguration:
+        runtime_configuration = self._repositories.runtime_configurations.get(defaults.default_runtime_configuration_id)
         if runtime_configuration is None:
-            raise ConfiguredReferenceMissingError(
-                _RUNTIME_CONFIGURATION, defaults.default_runtime_configuration_id
-            )
+            raise ConfiguredReferenceMissingError(_RUNTIME_CONFIGURATION, defaults.default_runtime_configuration_id)
         if not runtime_configuration.enabled:
             raise ConfiguredReferenceDisabledError(
                 _RUNTIME_CONFIGURATION, runtime_configuration.runtime_configuration_id
             )
         return runtime_configuration
 
-    def _require_relationship(
-        self, model: ModelConfiguration, connection: ProviderConnection
-    ) -> None:
+    def _require_relationship(self, model: ModelConfiguration, connection: ProviderConnection) -> None:
         """Revalidate the model/provider pairing that ``set`` validated on write.
 
         Normal writes forbid re-pointing a model; read-time validation also
@@ -395,18 +416,14 @@ class ExecutionConfigurationResolver:
         try:
             return resolve_connection_credential(connection, self._credential_resolver)
         except CredentialError:
-            raise CredentialResolutionFailedError(
-                connection.provider_connection_id
-            ) from None
+            raise CredentialResolutionFailedError(connection.provider_connection_id) from None
 
     # ============================================================
     # END: Execution abstraction mapping
     # ============================================================
 
 
-def _profile_for(
-    model: ModelConfiguration, connection: ProviderConnection
-) -> ModelProfile:
+def _profile_for(model: ModelConfiguration, connection: ProviderConnection) -> ModelProfile:
     """Derive the execution-time ``ModelProfile`` for a configured model.
 
     This is the transformation Phase 5.4 specified and deliberately did not

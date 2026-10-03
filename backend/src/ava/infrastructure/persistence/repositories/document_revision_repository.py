@@ -82,8 +82,7 @@ class RelationalDocumentRevisionRepository(DocumentRevisionRepository):
     def get(self, document_id: str, revision_id: str) -> DocumentRevisionRecord | None:
         with self._database.connect() as connection:
             row = connection.execute(
-                f"SELECT {_REVISION_COLUMNS} FROM document_revisions "
-                "WHERE document_id = ? AND revision_id = ?",
+                f"SELECT {_REVISION_COLUMNS} FROM document_revisions WHERE document_id = ? AND revision_id = ?",
                 (document_id, revision_id),
             ).fetchone()
         return row_to_document_revision_record(row) if row is not None else None

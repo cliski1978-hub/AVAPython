@@ -55,8 +55,12 @@ def bootstrap_provider_config_valid(provider_id: str, endpoint: str) -> bool:
 
 
 def construct_compatible_provider(
-    *, provider_id: str, endpoint: str, model_name: str,
-    credential: SecretValue | None = None, http_client: httpx.AsyncClient | None = None,
+    *,
+    provider_id: str,
+    endpoint: str,
+    model_name: str,
+    credential: SecretValue | None = None,
+    http_client: httpx.AsyncClient | None = None,
     capabilities: ModelCapabilities | None = None,
 ) -> OpenAICompatibleModelProvider:
     """Single construction boundary shared by bootstrap and persisted flows.
@@ -66,8 +70,11 @@ def construct_compatible_provider(
     reports chat-only, and the runtime then completes the run in one shot.
     """
     return OpenAICompatibleModelProvider(
-        base_url=endpoint, model_name=model_name, provider_name=provider_id,
-        api_key=credential.reveal() if credential is not None else None, http_client=http_client,
+        base_url=endpoint,
+        model_name=model_name,
+        provider_name=provider_id,
+        api_key=credential.reveal() if credential is not None else None,
+        http_client=http_client,
         capabilities=capabilities,
     )
 
@@ -99,9 +106,7 @@ class ConfiguredModelProviderFactory(ModelProviderFactory):
     ) -> None:
         self._installed = installed_provider_ids
         self._default_endpoint = default_endpoint
-        self._http_client = http_client or httpx.AsyncClient(
-            timeout=_CONFIGURED_PROVIDER_TIMEOUT
-        )
+        self._http_client = http_client or httpx.AsyncClient(timeout=_CONFIGURED_PROVIDER_TIMEOUT)
         self._owns_http_client = http_client is None
 
     def create(
@@ -156,6 +161,7 @@ def installed_provider_adapter_ids(registry: ModelProviderRegistry) -> frozenset
     """
     # A different registered port must never be reinterpreted as this protocol.
     return frozenset(
-        provider_id for provider_id in registry.list()
+        provider_id
+        for provider_id in registry.list()
         if isinstance(registry.get(provider_id), OpenAICompatibleModelProvider)
     )

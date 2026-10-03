@@ -54,6 +54,8 @@ export interface AgentRunApi {
     execution?: RunExecutionOverride,
     workspaceId?: string | null,
   ): void;
+  /** Clears this conversation's local stream observer and recovery marker. */
+  forgetConversation(conversationId: string): void;
   /** True while the backend run id is being created (no Stop available yet). */
   isStarting: boolean;
   /** True while the active conversation has a run in progress. */
@@ -110,6 +112,13 @@ export function AgentRunProvider({
     },
     [],
   );
+
+  const forgetConversation = useCallback((conversationId: string) => {
+    const controller = observers.current.get(conversationId);
+    observers.current.delete(conversationId);
+    recoveryKeys.current.delete(conversationId);
+    controller?.abort();
+  }, []);
 
   useEffect(() => {
     const owned = observers.current;
@@ -287,6 +296,7 @@ export function AgentRunProvider({
       stopRun: stopRunFn,
       retryMessage: retryMessageFn,
       regenerateMessage: regenerateMessageFn,
+      forgetConversation,
       isStarting,
       isRunning,
       isStopping,
@@ -297,6 +307,7 @@ export function AgentRunProvider({
       stopRunFn,
       retryMessageFn,
       regenerateMessageFn,
+      forgetConversation,
       isStarting,
       isRunning,
       isStopping,

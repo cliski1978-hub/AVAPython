@@ -103,6 +103,21 @@ vi.mock("@ava/api-client", async (importOriginal) => {
         return { ...message, created_at: TS, updated_at: TS, contract_version: "v1" as const };
       },
     ),
+    updateConversation: vi.fn().mockImplementation(
+      async (_client: unknown, conversationId: string, request: { title?: string | null }) => {
+        const current = serverConversations.find((item) => item.conversation_id === conversationId);
+        if (current == null) throw new Error("not found");
+        const updated = { ...current, title: request.title ?? current.title };
+        serverConversations = serverConversations.map((item) => item.conversation_id === conversationId ? updated : item);
+        return { ...updated, created_at: TS, updated_at: TS, is_pinned: false, is_archived: false, folder_id: null, contract_version: "v1" as const };
+      },
+    ),
+    listConversationFolders: vi.fn().mockResolvedValue({ folders: [{ folder_id: "folder-1", name: "Work", position: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }] }),
+    setConversationFolder: vi.fn().mockImplementation(async (_client: unknown, conversationId: string, request: { folder_id: string | null }) => {
+      const current = serverConversations.find((item) => item.conversation_id === conversationId);
+      if (current == null) throw new Error("not found");
+      return { ...current, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", folder_id: request.folder_id, is_pinned: false, is_archived: false, contract_version: "v1" as const };
+    }),
     startRun: vi.fn().mockImplementation(
       async (
         _client: unknown,
@@ -266,6 +281,7 @@ function CacheProbe({ conversationId }: { conversationId: string }) {
       data-cache-content={assistant?.content ?? ""}
       data-cache-phase={cached?.run?.uiPhase ?? "idle"}
       data-cache-run={cached?.run?.runId ?? ""}
+      data-cache-folder={cached?.folderId ?? ""}
     />
   );
 }
@@ -278,6 +294,9 @@ function Harness({ probeId }: { probeId: string }) {
       <button type="button" onClick={() => void run.submitPrompt("long prompt")}>
         start-a
       </button>
+      <button type="button" onClick={() => void conversation.moveConversation("conversation-1", "folder-1")}>
+        move-a-to-work
+      </button>
       <span data-testid="is-running">{String(run.isRunning)}</span>
       <CacheProbe conversationId={probeId} />
       <ConversationList
@@ -285,7 +304,9 @@ function Harness({ probeId }: { probeId: string }) {
         activeConversationId={conversation.activeConversation?.id ?? null}
         onNewChat={() => void conversation.createConversation()}
         onSelect={(id) => void conversation.selectConversation(id)}
-        onRename={conversation.renameConversation}
+        onRename={async (id, title) => {
+          await conversation.renameConversation(id, title);
+        }}
         error={conversation.state.error ?? null}
       />
       <ConversationView conversation={conversation.activeConversation} />
@@ -396,6 +417,48 @@ describe("background conversation reconciliation after navigation", () => {
     });
     expect(transcriptText()).not.toContain("HelloHello");
     expect(assistants()).toHaveLength(1);
+  });
+
+  it("allows renaming a streaming background conversation without losing its observer", async () => {
+    await renderWorkspace();
+    const runId = await startRunInA();
+    fireEvent.click(conversationItem("conversation-2"));
+    await waitFor(() => expect(conversationItem("conversation-2").getAttribute("aria-current")).toBe("true"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversation actions for long prompt" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const input = screen.getByRole("textbox", { name: "Rename conversation" });
+    fireEvent.change(input, { target: { value: "Renamed A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(conversationItem("conversation-1").getAttribute("title")).toBe("Renamed A"));
+    expect(conversationItem("conversation-2").getAttribute("aria-current")).toBe("true");
+    expect(runs.get(runId)?.status).toBe("running");
+    expect(observers.has(runId)).toBe(true);
+
+    await emit(runId, { event_type: "message_content", payload: { content: "Continued after rename" } });
+    await waitFor(() => expect(cacheContent("conversation-1")).toBe("Continued after rename"));
+    fireEvent.click(conversationItem("conversation-1"));
+    await waitFor(() => expect(transcriptText()).toContain("Continued after rename"));
+  });
+
+  it("keeps observing an active run while its conversation moves into a folder", async () => {
+    await renderWorkspace();
+    const runId = await startRunInA();
+
+    fireEvent.click(screen.getByRole("button", { name: "move-a-to-work" }));
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="cache-conversation-1"]')?.getAttribute("data-cache-folder")).toBe("folder-1");
+    });
+    expect(observers.has(runId)).toBe(true);
+    expect(runs.get(runId)?.status).toBe("running");
+
+    await emit(runId, { event_type: "message_content", payload: { content: "Still streaming after move" } });
+    await waitFor(() => expect(cacheContent("conversation-1")).toBe("Still streaming after move"));
+    fireEvent.click(conversationItem("conversation-2"));
+    await waitFor(() => expect(conversationItem("conversation-2").getAttribute("aria-current")).toBe("true"));
+    fireEvent.click(conversationItem("conversation-1"));
+    await waitFor(() => expect(transcriptText()).toContain("Still streaming after move"));
   });
 
   it("shows a response that completed while the conversation was hidden", async () => {

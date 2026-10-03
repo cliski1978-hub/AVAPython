@@ -64,8 +64,14 @@ class RelationalModelConfigurationRepository(ModelConfigurationRepository):
             connection.execute(
                 "UPDATE model_configurations SET provider_model_name = ?, display_name = ?, hosting_mode = ?, "
                 "capabilities = ?, enabled = ? WHERE model_id = ?",
-                (configuration.provider_model_name, configuration.display_name, configuration.hosting_mode.value,
-                 _dump_capabilities(configuration.capabilities), configuration.enabled, configuration.model_id),
+                (
+                    configuration.provider_model_name,
+                    configuration.display_name,
+                    configuration.hosting_mode.value,
+                    _dump_capabilities(configuration.capabilities),
+                    configuration.enabled,
+                    configuration.model_id,
+                ),
             )
         return configuration
 

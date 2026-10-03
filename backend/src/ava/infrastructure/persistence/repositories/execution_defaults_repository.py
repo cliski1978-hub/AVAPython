@@ -12,9 +12,7 @@ from ava.repositories.model_configuration_repository import ModelConfigurationRe
 from ava.repositories.provider_connection_repository import ProviderConnectionRepository
 from ava.repositories.runtime_configuration_repository import RuntimeConfigurationRepository
 
-_COLUMNS = (
-    "default_provider_connection_id, default_model_id, default_runtime_configuration_id"
-)
+_COLUMNS = "default_provider_connection_id, default_model_id, default_runtime_configuration_id"
 _SINGLETON_ID = 1
 
 
@@ -52,13 +50,9 @@ class RelationalExecutionDefaultsRepository(ExecutionDefaultsRepository):
         with self._database.transaction() as connection:
             validate_execution_defaults(
                 defaults=defaults,
-                provider_connection=self._provider_connections.get(
-                    defaults.default_provider_connection_id
-                ),
+                provider_connection=self._provider_connections.get(defaults.default_provider_connection_id),
                 model_configuration=self._model_configurations.get(defaults.default_model_id),
-                runtime_configuration=self._runtime_configurations.get(
-                    defaults.default_runtime_configuration_id
-                ),
+                runtime_configuration=self._runtime_configurations.get(defaults.default_runtime_configuration_id),
             )
             values = (
                 defaults.default_provider_connection_id,

@@ -13,13 +13,15 @@ import {
   type ExecutionProfile,
   type WorkspaceInfo,
 } from "@ava/agent-ui";
-import type { ApiClient } from "@ava/api-client";
-import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getWorkspaces, subscribeConnectivity } from "@ava/api-client";
+import { ApiError, type ApiClient } from "@ava/api-client";
+import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getWorkspaces, listProjects, listProjectConversations, subscribeConnectivity } from "@ava/api-client";
 import { DocumentProvider, DocumentWorkspace } from "@ava/document-core";
-import { SettingsWorkspace } from "@ava/settings-core";
+import { CorePromptScopeAssignments, SettingsWorkspace, type AssignablePromptScope } from "@ava/settings-core";
+import { ProjectsWorkspace } from "./ProjectsWorkspace";
 import type { SettingsSectionId } from "@ava/ui-core";
 import {
   AppShell,
+  Modal,
   StatusIndicator,
   defaultTheme,
   type StatusState,
@@ -31,10 +33,9 @@ import { WorkspaceTabs, type WorkspaceId } from "./WorkspaceTabs";
 /**
  * Shared AVA application workspace used by both Web and Desktop.
  *
- * Owns the workspace selection between the AI Conversation and the Document
- * workspace. Both panes stay mounted so in-session state (conversation
- * messages, editor content) survives switching. Persistence is intentionally
- * not implemented.
+ * Owns navigation between chat, document, settings, and Projects surfaces.
+ * Their stateful providers and panes remain mounted when hidden so
+ * conversation runs and in-session editor state survive destination changes.
  */
 
 export interface AppWorkspaceProps {
@@ -42,6 +43,31 @@ export interface AppWorkspaceProps {
 }
 
 type AppStatus = "checking" | "healthy" | "unhealthy" | "unavailable";
+type ProjectSummary = Awaited<ReturnType<typeof listProjects>>["projects"][number];
+type PromptScopeDialog = { scopeType: "conversation" | "folder"; scopeId: string; scopeLabel: string };
+
+function browserPath(): string {
+  return typeof window === "undefined" ? "/" : window.location.pathname;
+}
+
+function isProjectsPath(path: string): boolean {
+  return path === "/projects" || path.startsWith("/projects/");
+}
+
+function projectIdFromPath(path: string): string | null {
+  const match = path.match(/^\/projects\/([^/]+)\/?$/);
+  if (match == null) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function isApiErrorCode(error: ApiError, errorCode: string): boolean {
+  return typeof error.body === "object" && error.body !== null && "error_code" in error.body &&
+    error.body.error_code === errorCode;
+}
 
 const t = defaultTheme;
 
@@ -96,11 +122,33 @@ function WorkspacePane({
 
 function WorkspaceContent({ client }: { client: ApiClient }) {
   const {
-    conversations,
+    conversationList,
+    activeConversations,
+    archivedConversations,
     activeConversation,
     createConversation,
     selectConversation,
     renameConversation,
+    deleteConversation,
+    searchQuery,
+    searchLoading,
+    searchError,
+    setSearchQuery,
+    reloadConversations,
+    folders,
+    foldersLoading,
+    folderError,
+    reloadFolders,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveConversation,
+    createConversationInFolder,
+    createConversationInProject,
+    setConversationProject,
+    setConversationPinned,
+    setConversationArchived,
+    reconcileDeletedProject,
     state,
   } = useConversationState();
   const {
@@ -108,15 +156,18 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
     stopRun,
     retryMessage,
     regenerateMessage,
+    forgetConversation,
     isStarting,
     isRunning,
     isStopping,
   } = useAgentRun();
 
-  const [workspace, setWorkspace] = useState<WorkspaceId>("chat");
+  const [routePath, setRoutePath] = useState(browserPath);
+  const [workspace, setWorkspace] = useState<WorkspaceId>(() => isProjectsPath(browserPath()) ? "projects" : "chat");
   const [documentOpened, setDocumentOpened] = useState(false);
   const [settingsOpened, setSettingsOpened] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("providers");
+  const [promptScopeDialog, setPromptScopeDialog] = useState<PromptScopeDialog | null>(null);
   const [status, setStatus] = useState<AppStatus>("checking");
   const connectivityVersion = useRef(0);
   const [runtimes, setRuntimes] = useState<RuntimeDiscoveryItem[]>([]);
@@ -133,6 +184,167 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [workspacesUnavailable, setWorkspacesUnavailable] = useState(false);
+  const [sidebarProjects, setSidebarProjects] = useState<ProjectSummary[]>([]);
+  const deletedProjectIds = useRef(new Set<string>());
+  const [sidebarProjectsLoading, setSidebarProjectsLoading] = useState(true);
+  const [sidebarProjectsError, setSidebarProjectsError] = useState<string | null>(null);
+  const [projectConversationIds, setProjectConversationIds] = useState<Record<string, string[]>>({});
+  const [projectConversationLoading, setProjectConversationLoading] = useState<Record<string, boolean>>({});
+  const [projectConversationErrors, setProjectConversationErrors] = useState<Record<string, string | null>>({});
+  const [projectConversationRevision, setProjectConversationRevision] = useState(0);
+  const projectConversationLoads = useRef(new Set<string>());
+  const projectConversationReloads = useRef(new Set<string>());
+
+  const refreshSidebarProjects = async () => {
+    setSidebarProjectsLoading(true);
+    setSidebarProjectsError(null);
+    try {
+      const response = await listProjects(client);
+      setSidebarProjects(response.projects.filter((project) => !deletedProjectIds.current.has(project.id)));
+    } catch {
+      setSidebarProjectsError("Projects are temporarily unavailable.");
+    } finally {
+      setSidebarProjectsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setSidebarProjectsLoading(true);
+    void listProjects(client).then((response) => {
+      if (!cancelled) {
+        setSidebarProjects(response.projects.filter((project) => !deletedProjectIds.current.has(project.id)));
+        setSidebarProjectsError(null);
+      }
+    }).catch(() => {
+      if (!cancelled) setSidebarProjectsError("Projects are temporarily unavailable.");
+    }).finally(() => {
+      if (!cancelled) setSidebarProjectsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [client]);
+
+  const loadProjectConversations = async (projectId: string, force = false) => {
+    if (projectConversationLoads.current.has(projectId)) {
+      if (force) projectConversationReloads.current.add(projectId);
+      return;
+    }
+    if (!force && Object.prototype.hasOwnProperty.call(projectConversationIds, projectId)) return;
+    projectConversationLoads.current.add(projectId);
+    setProjectConversationLoading((current) => ({ ...current, [projectId]: true }));
+    setProjectConversationErrors((current) => ({ ...current, [projectId]: null }));
+    try {
+      const response = await listProjectConversations(client, projectId);
+      setProjectConversationIds((current) => ({
+        ...current,
+        [projectId]: response.conversations.map((conversation) => conversation.conversation_id),
+      }));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && isApiErrorCode(error, "project_not_found")) {
+        setSidebarProjects((current) => current.filter((project) => project.id !== projectId));
+        deleteProjectConversationCache(projectId);
+        void refreshSidebarProjects();
+      }
+      setProjectConversationErrors((current) => ({
+        ...current,
+        [projectId]: "This Project's conversations could not be loaded.",
+      }));
+    } finally {
+      projectConversationLoads.current.delete(projectId);
+      setProjectConversationLoading((current) => ({ ...current, [projectId]: false }));
+      if (projectConversationReloads.current.delete(projectId)) {
+        void Promise.resolve().then(() => loadProjectConversations(projectId, true));
+      }
+    }
+  };
+
+  const deleteProjectConversationCache = (projectId: string) => {
+    setProjectConversationIds((current) => {
+      const next = { ...current };
+      delete next[projectId];
+      return next;
+    });
+  };
+
+  const handleNewProjectConversation = async (projectId: string) => {
+    const conversationId = await createConversationInProject(projectId);
+    setWorkspace("chat");
+    navigatePath("/");
+    await selectConversation(conversationId);
+    await loadProjectConversations(projectId, true);
+    setProjectConversationRevision((revision) => revision + 1);
+  };
+
+  const handleNewFolderConversation = async (folderId: string) => {
+    const conversationId = await createConversationInFolder(folderId);
+    setWorkspace("chat");
+    navigatePath("/");
+    await selectConversation(conversationId);
+  };
+
+  const handleProjectConversationMove = async (conversationId: string, projectId: string | null) => {
+    const current = state.conversations.find((conversation) => conversation.id === conversationId);
+    try {
+      await setConversationProject(conversationId, projectId);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && isApiErrorCode(error, "project_not_found")) {
+        await refreshSidebarProjects();
+      }
+      if (error instanceof ApiError && error.status === 404 && isApiErrorCode(error, "conversation_not_found")) {
+        setProjectConversationRevision((revision) => revision + 1);
+      }
+      throw error;
+    }
+    const affected = new Set([current?.projectId ?? null, projectId].filter((id): id is string => id != null));
+    await Promise.all([...affected].map((id) => loadProjectConversations(id, true)));
+    setProjectConversationRevision((revision) => revision + 1);
+  };
+
+  const updateConversationProjectMetadata = async (
+    conversationId: string,
+    update: (id: string, value: boolean) => Promise<void>,
+    value: boolean,
+  ) => {
+    const projectId = state.conversations.find((conversation) => conversation.id === conversationId)?.projectId;
+    await update(conversationId, value);
+    if (projectId != null) await loadProjectConversations(projectId, true);
+    setProjectConversationRevision((revision) => revision + 1);
+  };
+
+  const handleProjectDeleted = (projectId: string) => {
+    deletedProjectIds.current.add(projectId);
+    setSidebarProjects((current) => current.filter((project) => project.id !== projectId));
+    deleteProjectConversationCache(projectId);
+    reconcileDeletedProject(projectId);
+    setProjectConversationRevision((revision) => revision + 1);
+  };
+
+  const handleProjectArchived = (project: ProjectSummary) => {
+    if (deletedProjectIds.current.has(project.id)) return;
+    setSidebarProjects((current) => current.map((item) => item.id === project.id ? project : item));
+  };
+
+  const handleProjectUpdated = (project: ProjectSummary) => {
+    if (deletedProjectIds.current.has(project.id)) return;
+    setSidebarProjects((current) => current.map((item) => item.id === project.id ? project : item));
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      const nextPath = browserPath();
+      setRoutePath(nextPath);
+      setWorkspace(isProjectsPath(nextPath) ? "projects" : "chat");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const navigatePath = (path: string) => {
+    if (typeof window !== "undefined" && window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+    setRoutePath(path);
+  };
 
   useEffect(() => subscribeConnectivity((next) => {
     connectivityVersion.current += 1;
@@ -212,6 +424,11 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
 
   const handleWorkspaceSelect = (next: WorkspaceId) => {
     setWorkspace(next);
+    if (next === "projects") {
+      navigatePath("/projects");
+    } else if (isProjectsPath(routePath)) {
+      navigatePath("/");
+    }
     if (next === "document") {
       setDocumentOpened(true);
     }
@@ -280,12 +497,64 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       showSidebar={workspace === "chat"}
       sidebarChildren={
         <ConversationList
-          conversations={conversations}
+          conversations={conversationList}
+          activeConversations={activeConversations}
+          archivedConversations={archivedConversations}
           activeConversationId={activeConversation?.id ?? null}
           onNewChat={createConversation}
           onSelect={selectConversation}
-          onRename={renameConversation}
-          error={state.error ?? null}
+          onRename={async (id, title) => {
+            const projectId = state.conversations.find((conversation) => conversation.id === id)?.projectId;
+            try {
+              await renameConversation(id, title);
+              if (projectId != null) await loadProjectConversations(projectId, true);
+              setProjectConversationRevision((revision) => revision + 1);
+            } catch (error) {
+              if (error instanceof ApiError && error.status === 404) {
+                forgetConversation(id);
+              }
+              throw error;
+            }
+          }}
+          onDelete={async (id) => {
+            await deleteConversation(id);
+            forgetConversation(id);
+            setProjectConversationRevision((revision) => revision + 1);
+          }}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchLoading={searchLoading}
+          searchError={searchError}
+          conversationsLoading={state.loading === true}
+          conversationLoadError={state.loadError ?? null}
+          onRetryConversations={() => void reloadConversations()}
+          folders={folders}
+          foldersLoading={foldersLoading}
+          folderError={folderError}
+          onRetryFolders={() => void reloadFolders()}
+          onCreateFolder={createFolder}
+          onRenameFolder={renameFolder}
+          onDeleteFolder={deleteFolder}
+          onMoveConversation={moveConversation}
+          onNewChatInFolder={handleNewFolderConversation}
+          projects={sidebarProjects}
+          projectsLoading={sidebarProjectsLoading}
+          projectsError={sidebarProjectsError}
+          onRetryProjects={() => void refreshSidebarProjects()}
+          projectConversationIds={projectConversationIds}
+          projectConversationLoading={projectConversationLoading}
+          projectConversationErrors={projectConversationErrors}
+          onExpandProject={(projectId) => {
+            void loadProjectConversations(projectId);
+          }}
+          onNewChatInProject={handleNewProjectConversation}
+          onRetryProjectConversations={(projectId) => void loadProjectConversations(projectId, true)}
+          onSetConversationProject={handleProjectConversationMove}
+          onSetConversationPinned={(id, pinned) => updateConversationProjectMetadata(id, setConversationPinned, pinned)}
+          onSetConversationArchived={(id, archived) => updateConversationProjectMetadata(id, setConversationArchived, archived)}
+          onOpenConversationSystemPrompts={(id, title) => setPromptScopeDialog({ scopeType: "conversation", scopeId: id, scopeLabel: `Conversation: ${title}` })}
+          onOpenFolderSystemPrompts={(id, name) => setPromptScopeDialog({ scopeType: "folder", scopeId: id, scopeLabel: `Folder: ${name}` })}
+          error={state.loadError == null ? state.error ?? null : null}
         />
       }
       mainContent={
@@ -328,6 +597,41 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
               <SettingsWorkspace client={client} initialSection={settingsSection} key={settingsSection} />
             </WorkspacePane>
           )}
+          <WorkspacePane visible={workspace === "projects"} id="projects-workspace">
+            <ProjectsWorkspace
+              client={client}
+              active={workspace === "projects"}
+              projectId={projectIdFromPath(routePath)}
+              onOpenProject={(id) => navigatePath(`/projects/${encodeURIComponent(id)}`)}
+              onBackToProjects={() => navigatePath("/projects")}
+              conversations={state.conversations}
+              activeConversationId={activeConversation?.id ?? null}
+              onOpenConversation={(id) => {
+                setWorkspace("chat");
+                navigatePath("/");
+                void selectConversation(id);
+              }}
+              onCreateConversation={handleNewProjectConversation}
+              conversationsRevision={projectConversationRevision}
+              onProjectCreated={(project) => {
+                deletedProjectIds.current.delete(project.id);
+                void refreshSidebarProjects();
+              }}
+              onProjectDeleted={handleProjectDeleted}
+              onProjectArchived={handleProjectArchived}
+              onProjectUpdated={handleProjectUpdated}
+            />
+          </WorkspacePane>
+          <Modal
+            open={promptScopeDialog != null}
+            title={promptScopeDialog == null ? "System Prompts" : `System Prompts — ${promptScopeDialog.scopeLabel}`}
+            onClose={() => setPromptScopeDialog(null)}
+            primaryAction="Done"
+            onPrimaryAction={() => setPromptScopeDialog(null)}
+            width={720}
+          >
+            {promptScopeDialog != null && <CorePromptScopeAssignments client={client} scopeType={promptScopeDialog.scopeType as AssignablePromptScope} scopeId={promptScopeDialog.scopeId} scopeLabel={promptScopeDialog.scopeLabel} />}
+          </Modal>
         </>
       }
       prompt={

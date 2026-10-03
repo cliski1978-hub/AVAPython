@@ -22,8 +22,14 @@ class RelationalProviderConnectionRepository(ProviderConnectionRepository):
                     "INSERT INTO provider_connections "
                     "(provider_connection_id, provider_id, display_name, endpoint, enabled, credential_reference) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (connection.provider_connection_id, connection.provider_id, connection.display_name,
-                     connection.endpoint, connection.enabled, connection.credential_reference),
+                    (
+                        connection.provider_connection_id,
+                        connection.provider_id,
+                        connection.display_name,
+                        connection.endpoint,
+                        connection.enabled,
+                        connection.credential_reference,
+                    ),
                 )
         except sqlite3.Error as exc:
             raise translate_database_error(
@@ -59,8 +65,13 @@ class RelationalProviderConnectionRepository(ProviderConnectionRepository):
             database_connection.execute(
                 "UPDATE provider_connections SET display_name = ?, endpoint = ?, enabled = ?, "
                 "credential_reference = ? WHERE provider_connection_id = ?",
-                (connection.display_name, connection.endpoint, connection.enabled,
-                 connection.credential_reference, connection.provider_connection_id),
+                (
+                    connection.display_name,
+                    connection.endpoint,
+                    connection.enabled,
+                    connection.credential_reference,
+                    connection.provider_connection_id,
+                ),
             )
         return connection
 

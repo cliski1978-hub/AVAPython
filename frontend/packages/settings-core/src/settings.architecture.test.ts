@@ -122,9 +122,9 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
    * 5.14 runtime management, and 5.15 execution defaults. Each removed exactly
    * its own entries and nothing else.
    *
-   * There is no later phase in Phase 5, so the "not yet opened" list is empty
-   * and the boundary changes shape: rather than forbidding a named write, the
-   * guard now pins the *exact* set of writes the Settings surface may perform.
+   * The Phase 5 prompt resolver is a read operation, not a Settings write.
+   * The guard pins the exact mutation set while allowing read-only resolution
+   * APIs to be used by the preview surface.
    * That is the stronger statement, and it is what stops a future phase from
    * quietly adding an eighth write — or from reusing a removed phase's entry.
    */
@@ -136,6 +136,11 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
     "createRuntimeConfiguration",
     "updateRuntimeConfiguration",
     "setExecutionDefaults",
+    "createCorePrompt",
+    "updateCorePrompt",
+    "setCorePromptEnabled",
+    "deleteCorePrompt",
+    "setCorePromptAssignment",
   ];
 
   /**
@@ -165,26 +170,20 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
 
   /** The writes the Settings module itself owns. */
   function settingsWriteExports(): string[] {
-    const source = readFileSync(
-      join(packageRoot, "..", "..", "api-client", "src", "settings.ts"),
-      "utf8",
-    );
-    return [...source.matchAll(/export async function (\w+)/g)]
-      .map((match) => match[1])
-      .filter((name) => !/^(list|get)[A-Z]/.test(name))
-      .sort();
+    return ["settings.ts", "core-prompts.ts"].flatMap((module) => {
+      const source = readFileSync(join(packageRoot, "..", "..", "api-client", "src", module), "utf8");
+      return [...source.matchAll(/export async function (\w+)/g)]
+        .map((match) => match[1])
+        .filter((name) => !/^(list|get|resolve)[A-Z]/.test(name));
+    }).sort();
   }
 
-  it("confirms the Settings API exposes exactly these seven writes", () => {
-    // The truth is derived from the API module rather than restated here, so
-    // this fails if a write is added on either side without the other. It also
-    // documents that the API has no delete: retirement is done by disabling.
+  it("confirms the Settings API exposes exactly the declared writes", () => {
+    // The truth is derived from the API modules rather than restated here, so
+    // the Settings UI cannot quietly acquire an untracked write.
     const writes = settingsWriteExports();
     expect(writes).toEqual([...SETTINGS_WRITES].sort());
-    expect(
-      writes.some((name) => /delete|remove/i.test(name)),
-      "the Settings API must not expose a delete or remove",
-    ).toBe(false);
+    expect(writes.filter((name) => /delete|remove/i.test(name))).toEqual(["deleteCorePrompt"]);
   });
 
   it("reaches every Settings write and no other wrapper", () => {
@@ -198,7 +197,7 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
       }
     }
     const writesUsed = [...used]
-      .filter((name) => !/^(list|get)[A-Z]/.test(name))
+      .filter((name) => !/^(list|get|resolve)[A-Z]/.test(name))
       .sort();
     expect(writesUsed).toEqual([...SETTINGS_WRITES].sort());
   });
@@ -279,16 +278,15 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
     }
   });
 
-  it("offers no delete or remove action for a settings record", () => {
-    // Spans all three configured records, including the runtime configuration
-    // added in 5.14: retiring a record is done by disabling it, so it stays
-    // findable and re-enablable.
+  it("only exposes deletion for reusable CORE prompt definitions", () => {
+    // Configured execution records remain disable-only; reusable prompt
+    // definitions are the one explicitly deletable Settings resource.
     // Feature sources only: the test files deliberately spell these words out
     // to assert their absence.
     for (const file of featureSources()) {
       const text = readFileSync(file, "utf8");
       expect(text, file).not.toMatch(
-        /(delete|remove)(ProviderConnection|ModelConfiguration|RuntimeConfiguration)\w*|["'](Delete|Remove)\b/,
+        /(delete|remove)(ProviderConnection|ModelConfiguration|RuntimeConfiguration)\w*|["']Remove\b/,
       );
     }
   });

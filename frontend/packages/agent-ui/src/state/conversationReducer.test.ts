@@ -43,11 +43,33 @@ describe("conversationReducer", () => {
     expect(typeof state.conversations[0].createdAt).toBe("string");
   });
 
-  it("keeps newest conversations first", () => {
+  it("keeps the active conversation independent of server list position", () => {
     let state = conversationReducer(emptyState, { type: "conversation:create" });
     state = conversationReducer(state, { type: "conversation:create" });
     expect(state.conversations).toHaveLength(2);
-    expect(state.activeConversationId).toBe(state.conversations[0].id);
+    expect(state.activeConversationId).toBe(state.conversations[1].id);
+  });
+
+  it("applies server ordering without changing selection or dropping local-only records", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const firstId = state.conversations[0].id;
+    state = conversationReducer(state, { type: "conversation:create" });
+    const secondId = state.conversations[1].id;
+    state = conversationReducer(state, { type: "conversation:create" });
+    const localOnlyId = state.conversations[2].id;
+    const activeId = state.activeConversationId;
+
+    state = conversationReducer(state, {
+      type: "conversation:reorder",
+      conversationIds: [secondId, firstId],
+    });
+
+    expect(state.conversations.map((conversation) => conversation.id)).toEqual([
+      secondId,
+      firstId,
+      localOnlyId,
+    ]);
+    expect(state.activeConversationId).toBe(activeId);
   });
 
   it("selects a known conversation and becomes active", () => {
@@ -155,7 +177,7 @@ describe("conversationReducer", () => {
       content: "Message A1",
     });
     state = conversationReducer(state, { type: "conversation:create" });
-    const b = state.conversations[0].id;
+    const b = state.conversations[1].id;
     state = conversationReducer(state, {
       type: "conversation:addUserMessage",
       conversationId: b,
@@ -328,7 +350,7 @@ describe("conversation:setRunState", () => {
     let state = conversationReducer(emptyState, { type: "conversation:create" });
     const a = state.conversations[0].id;
     state = conversationReducer(state, { type: "conversation:create" });
-    const b = state.conversations[0].id;
+    const b = state.conversations[1].id;
     state = conversationReducer(state, {
       type: "conversation:setRunState",
       conversationId: a,

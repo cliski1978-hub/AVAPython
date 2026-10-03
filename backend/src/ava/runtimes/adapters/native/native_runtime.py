@@ -79,9 +79,7 @@ class NativeRuntime(AgentRuntimePort):
             model_name = model_binding.provider_model_name
         try:
             model_request = ModelRequest(messages=_model_messages(context, request.prompt))
-            task = asyncio.create_task(
-                model_provider.generate(model_request, model_name=model_name)
-            )
+            task = asyncio.create_task(model_provider.generate(model_request, model_name=model_name))
             self._run_tasks[run_id] = task
             response = await task
             result = RuntimeRunResult(status=RunStatus.COMPLETED, content=response.content)
@@ -92,9 +90,7 @@ class NativeRuntime(AgentRuntimePort):
             # would make every provider problem indistinguishable at the public
             # boundary, which is exactly what the taxonomy exists to prevent.
             logger.warning("Model provider failure for run %s: %s", run_id, exc)
-            result = RuntimeRunResult(
-                status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code
-            )
+            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code)
         except Exception:
             logger.exception("Unexpected model provider failure for run %s", run_id)
             result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT)
@@ -109,9 +105,15 @@ class NativeRuntime(AgentRuntimePort):
         return result
 
     async def execute_streaming(
-        self, *, run_id: str, request: RunRequest, model_provider: ModelProviderPort,
-        on_content: Callable[[str], None], workspace: RuntimeWorkspaceBinding | None = None,
-        model_binding: ConfiguredModelBinding | None = None, context: RunContext | None = None,
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        model_provider: ModelProviderPort,
+        on_content: Callable[[str], None],
+        workspace: RuntimeWorkspaceBinding | None = None,
+        model_binding: ConfiguredModelBinding | None = None,
+        context: RunContext | None = None,
     ) -> RuntimeRunResult:
         """Consume provider deltas immediately and publish full content snapshots."""
         if not model_provider.get_capabilities().streaming:
@@ -157,9 +159,7 @@ class NativeRuntime(AgentRuntimePort):
             result = RuntimeRunResult(status=RunStatus.CANCELLED)
         except ModelProviderError as exc:
             logger.warning("Model provider streaming failure for run %s: %s", run_id, exc)
-            result = RuntimeRunResult(
-                status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code
-            )
+            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code)
         except Exception:
             logger.exception("Unexpected model provider streaming failure for run %s", run_id)
             result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT)

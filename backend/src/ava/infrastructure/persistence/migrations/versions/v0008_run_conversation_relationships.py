@@ -9,8 +9,14 @@ VERSION = 8
 NAME = "durable conversation run relationships"
 EXPECTED_TABLES = ("runs",)
 EXPECTED_COLUMNS = (
-    "run_id", "status", "created_at", "updated_at", "execution_selection",
-    "conversation_id", "source_user_message_id", "assistant_message_id",
+    "run_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "execution_selection",
+    "conversation_id",
+    "source_user_message_id",
+    "assistant_message_id",
 )
 
 

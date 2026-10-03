@@ -50,8 +50,22 @@ def test_create_conversation_returns_201_and_response_shape() -> None:
     with make_client() as client:
         body = create_conversation(client, title="My Project")
 
-    assert set(body) == {"conversation_id", "title", "created_at", "updated_at", "contract_version"}
+    assert set(body) == {
+        "conversation_id",
+        "title",
+        "created_at",
+        "updated_at",
+        "is_pinned",
+        "is_archived",
+        "folder_id",
+        "project_id",
+        "contract_version",
+    }
     assert body["title"] == "My Project"
+    assert body["is_pinned"] is False
+    assert body["is_archived"] is False
+    assert body["folder_id"] is None
+    assert body["project_id"] is None
     assert body["contract_version"] == CONTRACT_VERSION
 
 
@@ -60,6 +74,28 @@ def test_create_conversation_defaults_title() -> None:
     with make_client() as client:
         body = create_conversation(client)
     assert body["title"] == "New Conversation"
+
+
+def test_create_conversation_in_folder_sets_folder_atomically_without_project_membership() -> None:
+    """Folder creation is one create request and never infers Project ownership."""
+    with make_client() as client:
+        folder_response = client.post("/conversation-folders", json={"name": "Engineering"})
+        assert folder_response.status_code == 201
+        folder_id = folder_response.json()["id"]
+
+        response = client.post("/conversations", json={"folder_id": folder_id})
+
+    assert response.status_code == 201
+    assert response.json()["folder_id"] == folder_id
+    assert response.json()["project_id"] is None
+
+
+def test_create_conversation_rejects_a_missing_folder() -> None:
+    with make_client() as client:
+        response = client.post("/conversations", json={"folder_id": "missing-folder"})
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "conversation_folder_not_found"
 
 
 def test_create_conversation_mints_valid_ava_owned_uuid() -> None:
@@ -73,15 +109,16 @@ def test_create_conversation_mints_valid_ava_owned_uuid() -> None:
 
 def test_create_conversation_timestamps_are_utc_iso() -> None:
     """Timestamps serialize as timezone-aware ISO strings."""
-    from datetime import UTC, datetime
+    from datetime import datetime
 
     with make_client() as client:
         body = create_conversation(client)
     for raw in (body["created_at"], body["updated_at"]):
         parsed = datetime.fromisoformat(raw)
         assert parsed.tzinfo is not None
-        assert parsed.utcoffset() is not None
-        assert parsed.utcoffset().total_seconds() == UTC.utcoffset(None).total_seconds()
+        offset = parsed.utcoffset()
+        assert offset is not None
+        assert offset.total_seconds() == 0
 
 
 def test_create_conversation_duplicate_maps_to_409() -> None:
@@ -97,8 +134,20 @@ def test_create_conversation_duplicate_maps_to_409() -> None:
         def get(self, conversation_id: str) -> ConversationRecord | None:
             return None
 
-        def list(self) -> list[ConversationRecord]:
+        def list(self, search: str | None = None) -> list[ConversationRecord]:
             return []
+
+        def set_pinned(self, conversation_id: str, is_pinned: bool) -> ConversationRecord | None:
+            return None
+
+        def set_archived(self, conversation_id: str, is_archived: bool) -> ConversationRecord | None:
+            return None
+
+        def set_folder(self, conversation_id: str, folder_id: str | None) -> ConversationRecord | None:
+            return None
+
+        def set_project(self, conversation_id: str, project_id: str | None) -> ConversationRecord | None:
+            return None
 
         def update_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
             return None
@@ -133,16 +182,24 @@ def test_list_conversations_is_empty_until_a_create() -> None:
     assert response.json() == {"contract_version": CONTRACT_VERSION, "conversations": []}
 
 
-def test_list_conversations_in_insertion_order() -> None:
+def test_list_conversations_in_canonical_order() -> None:
     with make_client() as client:
         first = create_conversation(client, title="First")
-        create_conversation(client, title="Second")
+        second = create_conversation(client, title="Second")
         response = client.get("/conversations")
 
     assert response.status_code == 200
     body = dict(response.json())
-    assert [c["title"] for c in body["conversations"]] == ["First", "Second"]
-    assert body["conversations"][0]["conversation_id"] == first["conversation_id"]
+    expected = sorted(
+        [first, second], key=lambda item: item["conversation_id"]
+    )
+    expected.sort(
+        key=lambda item: (item["is_pinned"], item["updated_at"], item["created_at"]),
+        reverse=True,
+    )
+    assert [c["conversation_id"] for c in body["conversations"]] == [
+        item["conversation_id"] for item in expected
+    ]
 
 
 # ============================================================

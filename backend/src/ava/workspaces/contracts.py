@@ -29,6 +29,7 @@ class ResolvedWorkspace:
     root_path: Path | None
     permissions: WorkspacePermissions
 
+
 @dataclass(frozen=True)
 class RuntimeWorkspaceBinding:
     workspace_id: str

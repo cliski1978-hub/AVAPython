@@ -117,10 +117,10 @@ beforeEach(() => {
 });
 
 describe("Settings section navigation", () => {
-  it("shows the four sections and starts on Providers", async () => {
+  it("shows the settings sections and starts on Providers", async () => {
     await renderSettings();
 
-    for (const label of ["Providers", "Models", "Runtimes", "Defaults"]) {
+    for (const label of ["Providers", "Models", "Runtimes", "Defaults", "System Prompts"]) {
       expect(sectionTab(label)).toBeTruthy();
     }
     expect(sectionTab("Providers").getAttribute("aria-selected")).toBe("true");

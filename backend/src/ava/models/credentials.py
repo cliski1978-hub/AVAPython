@@ -178,9 +178,7 @@ class CredentialReference:
             raise CredentialReferenceError("Credential reference must be a non-blank string")
         scheme, separator, location = reference.strip().partition(":")
         if not separator:
-            raise CredentialReferenceError(
-                "Credential reference must name a scheme, as in 'env:OPENAI_API_KEY'"
-            )
+            raise CredentialReferenceError("Credential reference must name a scheme, as in 'env:OPENAI_API_KEY'")
         return cls(scheme=scheme.strip(), location=location.strip())
 
     def text(self) -> str:
@@ -220,9 +218,7 @@ class CredentialResolver(ABC):
         raise NotImplementedError
 
 
-def resolve_connection_credential(
-    connection: ProviderConnection, resolver: CredentialResolver
-) -> SecretValue | None:
+def resolve_connection_credential(connection: ProviderConnection, resolver: CredentialResolver) -> SecretValue | None:
     """Resolve the credential a connection needs, if any.
 
     Returns ``None`` for a credential-free connection (``credential_reference``

@@ -348,9 +348,7 @@ class RunService:
             )
 
         if result.status == RunStatus.FAILED:
-            response = self._terminal_response(
-                self._fail_transition, run_id, request, result, pass_result=True
-            )
+            response = self._terminal_response(self._fail_transition, run_id, request, result, pass_result=True)
             logger.debug("Run %s failed", run_id)
             return response
 
@@ -526,9 +524,7 @@ class RunService:
         recorded state stands.
         """
         try:
-            self._lifecycle.record_reported_terminal(
-                run_id, status, payload=_AGENT_FAILURE_PAYLOAD
-            )
+            self._lifecycle.record_reported_terminal(run_id, status, payload=_AGENT_FAILURE_PAYLOAD)
         except InvalidRunTransitionError as exc:
             logger.info(
                 "Run %s is already %s; agent-reported %s was rejected",
@@ -562,9 +558,7 @@ class RunService:
             return None
         if self._context_service is None:
             raise RunRelationshipError("linked runs require a context construction service")
-        return self._context_service.build_for_source(
-            request.conversation_id, request.source_user_message_id
-        )
+        return self._context_service.build_for_source(request.conversation_id, request.source_user_message_id)
 
     def _resolve_supersession(self, request: RunRequest) -> RunRequest:
         """Re-anchor a retry/regenerate request onto durable persistence.
@@ -603,35 +597,22 @@ class RunService:
         if prior.conversation_id is None:
             raise RunNotSupersedableError("retry target run is not conversation-linked")
         if prior.conversation_id != request.conversation_id:
-            raise RunNotSupersedableError(
-                "retry target run belongs to a different conversation"
-            )
+            raise RunNotSupersedableError("retry target run belongs to a different conversation")
         if not can_be_superseded(prior.status):
             # An active run is never a retry or regenerate target: the current
             # attempt must settle before its turn can be branched. Concurrency
             # rules for genuinely concurrent turns are a later phase.
-            raise RunNotSupersedableError(
-                f"retry target run is {prior.status.value} and must settle first"
-            )
+            raise RunNotSupersedableError(f"retry target run is {prior.status.value} and must settle first")
         source_user_message_id = prior.source_user_message_id
         if source_user_message_id is None:
-            raise RunNotSupersedableError(
-                "retry target run has no durable source user message"
-            )
-        if (
-            request.source_user_message_id is not None
-            and request.source_user_message_id != source_user_message_id
-        ):
-            raise RunNotSupersedableError(
-                "retry target run answers a different source user message"
-            )
+            raise RunNotSupersedableError("retry target run has no durable source user message")
+        if request.source_user_message_id is not None and request.source_user_message_id != source_user_message_id:
+            raise RunNotSupersedableError("retry target run answers a different source user message")
         if self._message_repository is None:
             raise RunRelationshipError("linked runs require a message repository")
         source = self._message_repository.get(prior.conversation_id, source_user_message_id)
         if source is None or source.role != MessageRole.USER:
-            raise RunNotSupersedableError(
-                "retry target run's source user message is no longer durable"
-            )
+            raise RunNotSupersedableError("retry target run's source user message is no longer durable")
         # Rebuilding the request (rather than mutating it) re-runs contract
         # validation, and the object stored on PreparedRun is exactly what was
         # executed rather than what the client claimed.

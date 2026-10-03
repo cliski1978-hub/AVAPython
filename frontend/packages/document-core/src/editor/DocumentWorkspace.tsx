@@ -63,7 +63,7 @@ const surfaceStyle: CSSProperties = {
 };
 
 export function DocumentWorkspace() {
-  const { state, activeDocument, updateDocumentContent, createDocument, selectDocument, renameDocument, saveDocument, closeDocument } = useDocuments();
+  const { state, activeDocument, reloadDocuments, updateDocumentContent, createDocument, selectDocument, renameDocument, saveDocument, closeDocument } = useDocuments();
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const activeDocumentRef = useRef(activeDocument);
@@ -179,7 +179,7 @@ export function DocumentWorkspace() {
   return (
     <div style={{ ...surfaceStyle, flexDirection: "row" }}>
       <nav className="ava-doc-nav" aria-label="Documents">
-        <div className="ava-doc-nav-header"><strong>Documents</strong><Button variant="primary" ariaLabel="New Document" disabled={state.isCreating} onClick={createFromNavigation}>New</Button></div>
+        <div className="ava-doc-nav-header"><strong>Documents</strong><Button variant="primary" ariaLabel="New Document" disabled={state.isCreating || state.loading === true || state.loadError != null} onClick={createFromNavigation}>New</Button></div>
         {state.documents.map((document) => (
           <button
             className="ava-doc-nav-item"
@@ -192,7 +192,17 @@ export function DocumentWorkspace() {
         ))}
       </nav>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
-      {activeDocument == null ? (
+      {activeDocument == null && state.loading === true ? (
+        <div className="ava-doc-empty" role="status" data-documents-loading="">
+          <strong>Loading documents…</strong>
+        </div>
+      ) : activeDocument == null && state.loadError != null ? (
+        <div className="ava-doc-empty" role="alert" aria-label="Documents could not be loaded." data-documents-load-error="">
+          <strong>Documents could not be loaded.</strong>
+          <span>Check the backend connection and retry.</span>
+          <Button variant="primary" onClick={() => void reloadDocuments()}>Retry loading documents</Button>
+        </div>
+      ) : activeDocument == null ? (
         <div className="ava-doc-empty"><strong>No document open</strong><span>Create a document to start writing.</span><Button variant="primary" ariaLabel="New Document" disabled={state.isCreating} onClick={createDocument}>New Document</Button></div>
       ) : <>
       <div className="ava-doc-header" aria-label="Document details">

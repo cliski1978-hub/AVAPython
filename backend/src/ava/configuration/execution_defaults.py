@@ -70,19 +70,13 @@ def validate_execution_defaults(
     if model_configuration is None:
         raise ValueError(f"Unknown model configuration: {defaults.default_model_id}")
     if runtime_configuration is None:
-        raise ValueError(
-            f"Unknown runtime configuration: {defaults.default_runtime_configuration_id}"
-        )
+        raise ValueError(f"Unknown runtime configuration: {defaults.default_runtime_configuration_id}")
     if not provider_connection.enabled:
-        raise ValueError(
-            f"Provider connection is disabled: {provider_connection.provider_connection_id}"
-        )
+        raise ValueError(f"Provider connection is disabled: {provider_connection.provider_connection_id}")
     if not model_configuration.enabled:
         raise ValueError(f"Model configuration is disabled: {model_configuration.model_id}")
     if not runtime_configuration.enabled:
-        raise ValueError(
-            f"Runtime configuration is disabled: {runtime_configuration.runtime_configuration_id}"
-        )
+        raise ValueError(f"Runtime configuration is disabled: {runtime_configuration.runtime_configuration_id}")
     if model_configuration.provider_connection_id != provider_connection.provider_connection_id:
         raise ValueError(
             f"Model configuration {model_configuration.model_id} does not belong to provider "

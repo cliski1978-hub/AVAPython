@@ -10,6 +10,12 @@ from ava.contracts.attachments import (
     AttachmentStatus,
 )
 from ava.contracts.capabilities import CapabilityName
+from ava.contracts.conversation_folders import (
+    ConversationFolderListResponse,
+    ConversationFolderResponse,
+    CreateConversationFolderRequest,
+    UpdateConversationFolderRequest,
+)
 from ava.contracts.conversations import (
     ContextMessage,
     ConversationListResponse,
@@ -17,13 +23,30 @@ from ava.contracts.conversations import (
     ConversationResponse,
     CreateConversationRequest,
     CreateMessageRequest,
+    ExecutionCorePrompt,
+    ExecutionPromptContextBuildError,
+    ExecutionPromptLayers,
     MessageResponse,
     MessageRole,
     MessageStatus,
     RunContext,
+    SetConversationArchivedRequest,
+    SetConversationFolderRequest,
+    SetConversationPinnedRequest,
     UpdateConversationRequest,
     assistant_status_for_run,
     execution_context_messages,
+)
+from ava.contracts.core_prompts import (
+    CorePromptListResponse,
+    CorePromptResponse,
+    CreateCorePromptRequest,
+    EffectivePromptSetResponse,
+    PromptResolutionContextResponse,
+    ResolveCorePromptsRequest,
+    ResolvedCorePromptResponse,
+    SetCorePromptEnabledRequest,
+    UpdateCorePromptRequest,
 )
 from ava.contracts.documents import (
     ContentFormat,
@@ -46,6 +69,20 @@ from ava.contracts.models import (
     ModelRequest,
     ModelResponse,
 )
+from ava.contracts.project_files import (
+    CreateProjectFileRequest,
+    ProjectFileListResponse,
+    ProjectFileResponse,
+)
+from ava.contracts.projects import (
+    CreateProjectRequest,
+    ProjectExecutionDefaultsResponse,
+    ProjectListResponse,
+    ProjectResponse,
+    SetProjectArchivedRequest,
+    UpdateProjectExecutionDefaultsRequest,
+    UpdateProjectRequest,
+)
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import (
     CapabilitiesResponse,
@@ -61,6 +98,7 @@ from ava.contracts.responses import (
 )
 from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
 from ava.contracts.version import CONTRACT_VERSION
+from ava.repositories.core_prompt import CorePromptCategory
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -71,10 +109,21 @@ __all__ = [
     "CapabilitiesResponse",
     "CapabilityName",
     "ContentFormat",
+    "CorePromptCategory",
+    "CorePromptListResponse",
+    "CorePromptResponse",
     "ConversationListResponse",
     "ConversationMessagesResponse",
     "ConversationResponse",
+    "ConversationFolderResponse",
+    "ConversationFolderListResponse",
     "CreateConversationRequest",
+    "CreateCorePromptRequest",
+    "ExecutionCorePrompt",
+    "ExecutionPromptContextBuildError",
+    "ExecutionPromptLayers",
+    "EffectivePromptSetResponse",
+    "CreateConversationFolderRequest",
     "CreateDocumentRequest",
     "CreateMessageRequest",
     "DocumentListResponse",
@@ -96,6 +145,19 @@ __all__ = [
     "ModelProviderHealthStatus",
     "ModelRequest",
     "ModelResponse",
+    "CreateProjectRequest",
+    "ProjectExecutionDefaultsResponse",
+    "CreateProjectFileRequest",
+    "ProjectFileListResponse",
+    "ProjectFileResponse",
+    "ProjectListResponse",
+    "ProjectResponse",
+    "PromptResolutionContextResponse",
+    "ResolvedCorePromptResponse",
+    "ResolveCorePromptsRequest",
+    "SetProjectArchivedRequest",
+    "UpdateProjectRequest",
+    "UpdateProjectExecutionDefaultsRequest",
     "ContextMessage",
     "MessageResponse",
     "MessageRole",
@@ -111,7 +173,13 @@ __all__ = [
     "RuntimeDiscoveryResponse",
     "RuntimeCapabilities",
     "RuntimeInfo",
+    "SetConversationArchivedRequest",
+    "SetConversationFolderRequest",
+    "SetConversationPinnedRequest",
+    "SetCorePromptEnabledRequest",
     "UpdateConversationRequest",
+    "UpdateCorePromptRequest",
+    "UpdateConversationFolderRequest",
     "UpdateDocumentRequest",
     "assistant_status_for_run",
     "execution_context_messages",

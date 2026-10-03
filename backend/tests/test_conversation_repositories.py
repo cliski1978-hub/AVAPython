@@ -55,8 +55,49 @@ class MemoryConversationRepository(ConversationRepository):
     def get(self, conversation_id: str) -> ConversationRecord | None:
         return self._conversations.get(conversation_id)
 
-    def list(self) -> list[ConversationRecord]:
-        return list(self._conversations.values())
+    def list(self, search: str | None = None) -> list[ConversationRecord]:
+        records = list(self._conversations.values())
+        records.sort(key=lambda record: record.conversation_id)
+        records.sort(
+            key=lambda record: (record.is_pinned, record.updated_at, record.created_at),
+            reverse=True,
+        )
+        if search is None or not search.strip():
+            return records
+        needle = search.strip().lower()
+        return [record for record in records if needle in record.title.lower()]
+
+    def set_pinned(self, conversation_id: str, is_pinned: bool) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None:
+            return None
+        updated = replace(record, is_pinned=is_pinned)
+        self._conversations[conversation_id] = updated
+        return updated
+
+    def set_archived(self, conversation_id: str, is_archived: bool) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None:
+            return None
+        updated = replace(record, is_archived=is_archived)
+        self._conversations[conversation_id] = updated
+        return updated
+
+    def set_folder(self, conversation_id: str, folder_id: str | None) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None:
+            return None
+        updated = replace(record, folder_id=folder_id)
+        self._conversations[conversation_id] = updated
+        return updated
+
+    def set_project(self, conversation_id: str, project_id: str | None) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None:
+            return None
+        updated = replace(record, project_id=project_id)
+        self._conversations[conversation_id] = updated
+        return updated
 
     def update_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
         record = self._conversations.get(conversation_id)
@@ -126,7 +167,7 @@ def test_conversation_repository_is_implementable_by_in_memory_fake() -> None:
     assert renamed.updated_at >= renamed.created_at
 
     repo.create("conv-2", title="Second")
-    assert [c.conversation_id for c in repo.list()] == ["conv-1", "conv-2"]
+    assert [c.conversation_id for c in repo.list()] == ["conv-2", "conv-1"]
 
     assert repo.get("ghost") is None
     assert repo.update_title("ghost", "x") is None
@@ -265,18 +306,18 @@ def test_message_identity_and_conversation_association_are_preserved() -> None:
 def test_conversation_store_records_are_the_same_conversation_record_type() -> None:
     """No duplicate conversation-record type exists."""
     from ava.repositories import ConversationRecord as PortConversationRecord
-    from ava.services.conversation_store import ConversationRecord as StoreConversationRecord
+    from ava.services import conversation_store
 
-    assert StoreConversationRecord is PortConversationRecord
+    assert vars(conversation_store)["ConversationRecord"] is PortConversationRecord
     record = ConversationStore().create("conv-1", title="T")
     assert isinstance(record, PortConversationRecord)
 
 
 def test_message_store_records_are_the_same_message_record_type() -> None:
     from ava.repositories import MessageRecord as PortMessageRecord
-    from ava.services.message_store import MessageRecord as StoreMessageRecord
+    from ava.services import message_store
 
-    assert StoreMessageRecord is PortMessageRecord
+    assert vars(message_store)["MessageRecord"] is PortMessageRecord
 
 
 def test_conversation_store_now_implements_conversation_repository() -> None:
@@ -369,6 +410,7 @@ def test_conversation_port_types_are_ava_owned_or_stdlib_only() -> None:
             ConversationRepository.create,
             ConversationRepository.get,
             ConversationRepository.list,
+            ConversationRepository.set_project,
             ConversationRepository.update_title,
         ],
         MessageRepository: [

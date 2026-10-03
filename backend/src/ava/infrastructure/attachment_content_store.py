@@ -53,9 +53,7 @@ class LocalAttachmentContentStore(AttachmentContentStore):
     def __init__(self, root_dir: Path) -> None:
         root = Path(root_dir)
         if root.exists() and not root.is_dir():
-            raise ValueError(
-                f"Attachment content storage root is not a directory: {root}"
-            )
+            raise ValueError(f"Attachment content storage root is not a directory: {root}")
         root.mkdir(parents=True, exist_ok=True)
         #: Canonical absolute root used for containment checks. Resolved once:
         #: every candidate key resolves against the real root, so a symlinked
@@ -69,9 +67,7 @@ class LocalAttachmentContentStore(AttachmentContentStore):
     ) -> StoredContentInfo:
         final = self._resolve(storage_key)
         if final.exists():
-            raise ValueError(
-                f"Attachment content already exists for storage key: {storage_key}"
-            )
+            raise ValueError(f"Attachment content already exists for storage key: {storage_key}")
         final.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=_TEMP_PREFIX, dir=final.parent)
         total = 0
@@ -84,9 +80,7 @@ class LocalAttachmentContentStore(AttachmentContentStore):
                     total += len(chunk)
                     out.write(chunk)
             if final.exists():
-                raise ValueError(
-                    f"Attachment content already exists for storage key: {storage_key}"
-                )
+                raise ValueError(f"Attachment content already exists for storage key: {storage_key}")
             os.replace(tmp_name, final)
         except BaseException:
             with contextlib.suppress(OSError):
@@ -100,9 +94,7 @@ class LocalAttachmentContentStore(AttachmentContentStore):
     ) -> BinaryIO:
         final = self._resolve(storage_key)
         if not final.is_file():
-            raise FileNotFoundError(
-                f"Attachment content not found for storage key: {storage_key}"
-            )
+            raise FileNotFoundError(f"Attachment content not found for storage key: {storage_key}")
         return final.open("rb")
 
     def exists(
@@ -111,6 +103,15 @@ class LocalAttachmentContentStore(AttachmentContentStore):
     ) -> bool:
         final = self._resolve(storage_key)
         return final.is_file()
+
+    def delete(self, storage_key: str) -> bool:
+        """Delete stored bytes by validated logical key, returning false if absent."""
+        final = self._resolve(storage_key)
+        try:
+            final.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def _resolve(self, storage_key: str) -> Path:
         """Validate a logical key and resolve it strictly inside the root.
@@ -125,16 +126,10 @@ class LocalAttachmentContentStore(AttachmentContentStore):
             raise ValueError("Attachment storage key must not be empty")
         raw = Path(storage_key)
         if raw.is_absolute():
-            raise ValueError(
-                f"Attachment storage key must be a relative logical key: {storage_key!r}"
-            )
+            raise ValueError(f"Attachment storage key must be a relative logical key: {storage_key!r}")
         if ".." in raw.parts:
-            raise ValueError(
-                f"Attachment storage key must not contain parent traversal: {storage_key!r}"
-            )
+            raise ValueError(f"Attachment storage key must not contain parent traversal: {storage_key!r}")
         final = (self._root / raw).resolve(strict=False)
         if final == self._root or self._root not in final.parents:
-            raise ValueError(
-                f"Attachment storage key escapes the storage root: {storage_key!r}"
-            )
+            raise ValueError(f"Attachment storage key escapes the storage root: {storage_key!r}")
         return final

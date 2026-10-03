@@ -15,14 +15,29 @@ NAME = "model configurations"
 EXPECTED_TABLES: tuple[str, ...] = ("model_configurations",)
 EXPECTED_COLUMNS: dict[str, tuple[str, ...]] = {
     "model_configurations": (
-        "id", "model_id", "provider_connection_id", "provider_model_name", "display_name",
-        "hosting_mode", "capabilities", "enabled",
+        "id",
+        "model_id",
+        "provider_connection_id",
+        "provider_model_name",
+        "display_name",
+        "hosting_mode",
+        "capabilities",
+        "enabled",
     ),
 }
-_ALLOWED_COEXISTING_TABLES = frozenset({
-    "runs", "run_events", "conversations", "messages", "documents", "document_revisions",
-    "attachments", "provider_connections", "ava_schema_migrations",
-})
+_ALLOWED_COEXISTING_TABLES = frozenset(
+    {
+        "runs",
+        "run_events",
+        "conversations",
+        "messages",
+        "documents",
+        "document_revisions",
+        "attachments",
+        "provider_connections",
+        "ava_schema_migrations",
+    }
+)
 STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE model_configurations (
@@ -51,7 +66,8 @@ def verify_structure(connection: sqlite3.Connection) -> None:
     elif tuple(table_columns(connection, "model_configurations")) != EXPECTED_COLUMNS["model_configurations"]:
         violations.append("model_configurations columns do not match expected layout")
     unexpected = [
-        table for table in sorted(present_tables(connection))
+        table
+        for table in sorted(present_tables(connection))
         if table not in EXPECTED_TABLES and table not in _ALLOWED_COEXISTING_TABLES and not table.startswith("sqlite_")
     ]
     if unexpected:

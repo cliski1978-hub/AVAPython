@@ -14,6 +14,7 @@ lifecycle owns connections/transactions/dispose.
 
 from ava.infrastructure.persistence.composition import (
     PersistenceRepositories,
+    create_relational_conversation_hard_delete_coordinator,
     create_relational_repositories,
 )
 from ava.infrastructure.persistence.database import SqliteDatabase, translate_database_error
@@ -41,6 +42,7 @@ __all__ = [
     "SqliteDatabase",
     "UnsupportedSchemaVersionError",
     "create_relational_repositories",
+    "create_relational_conversation_hard_delete_coordinator",
     "default_registry",
     "translate_database_error",
 ]

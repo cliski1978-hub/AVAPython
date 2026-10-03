@@ -64,8 +64,20 @@ class _FailingConversationRepository(ConversationRepository):
     def get(self, conversation_id: str) -> ConversationRecord | None:
         return None
 
-    def list(self) -> list[ConversationRecord]:
+    def list(self, search: str | None = None) -> list[ConversationRecord]:
         return []
+
+    def set_pinned(self, conversation_id: str, is_pinned: bool) -> ConversationRecord | None:
+        return None
+
+    def set_archived(self, conversation_id: str, is_archived: bool) -> ConversationRecord | None:
+        return None
+
+    def set_folder(self, conversation_id: str, folder_id: str | None) -> ConversationRecord | None:
+        return None
+
+    def set_project(self, conversation_id: str, project_id: str | None) -> ConversationRecord | None:
+        return None
 
     def update_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
         return None
@@ -134,7 +146,7 @@ def test_create_conversation_uses_aware_utc_timestamps() -> None:
 
 def test_create_conversation_maps_duplicate_to_domain_error() -> None:
     service = ConversationService(
-        conversation_repository=_FailingConversationRepository(),  # type: ignore[abstract]
+        conversation_repository=_FailingConversationRepository(),
         message_repository=MessageStore(),
     )
     with pytest.raises(DuplicateConversationError):
@@ -165,16 +177,22 @@ def test_get_conversation_returns_created_conversation() -> None:
     assert fetched.title == "Known"
 
 
-def test_list_conversations_in_insertion_order() -> None:
+def test_list_conversations_in_canonical_order() -> None:
     service = make_service()
     first = service.create_conversation(title="First")
     second = service.create_conversation(title="Second")
 
     conversations = service.list_conversations()
     assert isinstance(conversations, ConversationListResponse)
+    expected = sorted(
+        [first, second], key=lambda item: item.conversation_id
+    )
+    expected.sort(
+        key=lambda item: (item.is_pinned, item.updated_at, item.created_at),
+        reverse=True,
+    )
     assert [c.conversation_id for c in conversations.conversations] == [
-        first.conversation_id,
-        second.conversation_id,
+        item.conversation_id for item in expected
     ]
 
 
@@ -202,7 +220,8 @@ def test_rename_conversation_updates_title_and_updated_at() -> None:
     assert renamed is not None
     assert renamed.title == "New"
     assert renamed.updated_at >= before
-    assert service.get_conversation(created.conversation_id).title == "New"
+    reloaded = service.get_conversation(created.conversation_id)
+    assert reloaded is not None and reloaded.title == "New"
 
 
 def test_rename_unknown_conversation_returns_none() -> None:
@@ -284,7 +303,7 @@ def test_append_message_maps_duplicate_to_domain_error() -> None:
     conversation_store.create("conv-seeded", title="Seeded")
     failing = ConversationService(
         conversation_repository=conversation_store,
-        message_repository=_FailingMessageRepository(),  # type: ignore[abstract]
+        message_repository=_FailingMessageRepository(),
     )
     with pytest.raises(DuplicateMessageError):
         failing.append_message("conv-seeded", content="Hi")
@@ -321,7 +340,8 @@ def test_list_messages_is_none_for_unknown_conversation() -> None:
 def test_list_messages_is_empty_for_new_conversation() -> None:
     service = make_service()
     conversation = service.create_conversation()
-    assert service.list_messages(conversation.conversation_id).messages == []
+    messages = service.list_messages(conversation.conversation_id)
+    assert messages is not None and messages.messages == []
 
 
 def test_get_message_scoped_to_conversation() -> None:

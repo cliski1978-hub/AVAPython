@@ -26,9 +26,7 @@ _RUN_COLUMNS = (
 #: The statuses a run may still hold when a cancellation request arrives. A
 #: settled run is never marked as having been cancelled on purpose: the request
 #: would have arrived too late to be true.
-_ACTIVE_STATUS_VALUES: tuple[str, ...] = tuple(
-    status.value for status in ACTIVE_RUN_STATUSES
-)
+_ACTIVE_STATUS_VALUES: tuple[str, ...] = tuple(status.value for status in ACTIVE_RUN_STATUSES)
 
 # ============================================================
 # BEGIN: Relational Run Repository
@@ -92,9 +90,7 @@ class RelationalRunRepository(RunRepository):
 
     def list_run_ids(self) -> list[str]:
         with self._database.connect() as connection:
-            rows = connection.execute(
-                "SELECT run_id FROM runs ORDER BY created_at ASC, run_id ASC"
-            ).fetchall()
+            rows = connection.execute("SELECT run_id FROM runs ORDER BY created_at ASC, run_id ASC").fetchall()
         return [row["run_id"] for row in rows]
 
     def list_active(self) -> list[RunRecord]:
@@ -107,8 +103,7 @@ class RelationalRunRepository(RunRepository):
         placeholders = ", ".join("?" for _ in _ACTIVE_STATUS_VALUES)
         with self._database.connect() as connection:
             rows = connection.execute(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE status IN ({placeholders}) "
-                "ORDER BY created_at ASC, run_id ASC",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE status IN ({placeholders}) ORDER BY created_at ASC, run_id ASC",
                 _ACTIVE_STATUS_VALUES,
             ).fetchall()
         return [row_to_run_record(row) for row in rows]

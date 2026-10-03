@@ -142,7 +142,7 @@ def test_v4_migrates_a_phase_4_database_without_changing_existing_rows(tmp_path)
                 "INSERT INTO conversations (conversation_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
                 ("conversation-1", "Phase 4", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [4, 5, 6, 7, 8, 9]
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(4, 19))
         with database.connect() as connection:
             row = connection.execute(
                 "SELECT title FROM conversations WHERE conversation_id = 'conversation-1'"

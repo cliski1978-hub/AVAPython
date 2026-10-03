@@ -147,7 +147,11 @@ class ContainedFileEditorExecutor(FileEditorExecutor):
     """Installed executor equipped with the contained editor."""
 
     def __init__(
-        self, workspace_root: str, *, read_only: bool = False, context: ToolRunContext | None = None,
+        self,
+        workspace_root: str,
+        *,
+        read_only: bool = False,
+        context: ToolRunContext | None = None,
     ) -> None:
         self.editor: FileEditor = ContainedFileEditor(workspace_root=workspace_root, read_only=read_only)
         self.allowed_edits_files: set[Path] | None = None
@@ -159,15 +163,21 @@ class ContainedFileEditorExecutor(FileEditorExecutor):
         if context.revoked.is_set():
             context.record(FILE_EDITOR_TOOL_NAME, operation, "denied", "run_cancelled")
             return FileEditorObservation.from_text(
-                text="Run cancelled", command=action.command, is_error=True,
+                text="Run cancelled",
+                command=action.command,
+                is_error=True,
             )
         try:
             # Invoke the editor directly so typed denials do not get flattened
             # into SDK error strings containing user paths or file contents.
             result = self.editor(
-                command=action.command, path=action.path, file_text=action.file_text,
-                view_range=action.view_range, old_str=action.old_str,
-                new_str=action.new_str, insert_line=action.insert_line,
+                command=action.command,
+                path=action.path,
+                file_text=action.file_text,
+                view_range=action.view_range,
+                old_str=action.old_str,
+                new_str=action.new_str,
+                insert_line=action.insert_line,
             )
         except FileSecurityError as exc:
             context.record(FILE_EDITOR_TOOL_NAME, operation, "denied", exc.reason_code)
@@ -176,15 +186,21 @@ class ContainedFileEditorExecutor(FileEditorExecutor):
             logger.exception("Contained file operation failed")
             context.record(FILE_EDITOR_TOOL_NAME, operation, "failure", "file_operation_failed")
             return FileEditorObservation.from_text(
-                text="File operation failed", command=action.command, is_error=True,
+                text="File operation failed",
+                command=action.command,
+                is_error=True,
             )
         context.record(
-            FILE_EDITOR_TOOL_NAME, operation, "failure" if result.is_error else "success",
+            FILE_EDITOR_TOOL_NAME,
+            operation,
+            "failure" if result.is_error else "success",
             "file_operation_failed" if result.is_error else "allowed",
         )
         if result.is_error:
             return FileEditorObservation.from_text(
-                text="File operation failed", command=action.command, is_error=True,
+                text="File operation failed",
+                command=action.command,
+                is_error=True,
             )
         return result
 
@@ -200,11 +216,16 @@ class AvaFileEditorTool(FileEditorTool):
 
     @classmethod
     def create(
-        cls, conv_state: Any, *, read_only: bool = False, security_context_id: str | None = None,
+        cls,
+        conv_state: Any,
+        *,
+        read_only: bool = False,
+        security_context_id: str | None = None,
     ) -> list["AvaFileEditorTool"]:
         workspace_root = conv_state.workspace.working_dir
         executor = ContainedFileEditorExecutor(
-            workspace_root=workspace_root, read_only=read_only,
+            workspace_root=workspace_root,
+            read_only=read_only,
             context=get_context(security_context_id) if security_context_id is not None else None,
         )
         description = _file_editor_description(workspace_root, conv_state, read_only=read_only)

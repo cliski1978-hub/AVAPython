@@ -44,9 +44,7 @@ router = APIRouter(tags=["documents"])
     status_code=201,
     responses={409: {"model": ErrorResponse}},
 )
-async def create_document(
-    request: Request, body: CreateDocumentRequest
-) -> DocumentResponse | JSONResponse:
+async def create_document(request: Request, body: CreateDocumentRequest) -> DocumentResponse | JSONResponse:
     """Create an AVA document.
 
     Ava generates the document identifier in the service layer; the route
@@ -99,9 +97,7 @@ async def list_documents(request: Request) -> DocumentListResponse:
     response_model=DocumentResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_document(
-    request: Request, document_id: str
-) -> DocumentResponse | JSONResponse:
+async def get_document(request: Request, document_id: str) -> DocumentResponse | JSONResponse:
     """Return an AVA document as a snapshot, or ``404`` if unknown."""
     service: DocumentService = request.app.state.document_service
     document = service.get_document(document_id)
@@ -125,9 +121,7 @@ async def get_document(
     response_model=DocumentRevisionListResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def list_revisions(
-    request: Request, document_id: str
-) -> DocumentRevisionListResponse | JSONResponse:
+async def list_revisions(request: Request, document_id: str) -> DocumentRevisionListResponse | JSONResponse:
     """Return a document's immutable revision history, or ``404`` if unknown.
 
     Revisions are returned in ``revision_number`` ascending order. The
@@ -147,9 +141,7 @@ async def list_revisions(
     response_model=DocumentRevisionResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_revision(
-    request: Request, document_id: str, revision_id: str
-) -> DocumentRevisionResponse | JSONResponse:
+async def get_revision(request: Request, document_id: str, revision_id: str) -> DocumentRevisionResponse | JSONResponse:
     """Return an exact document-scoped revision, or ``404`` when missing.
 
     Unknowable in three cases, all returning ``404``: unknown document,

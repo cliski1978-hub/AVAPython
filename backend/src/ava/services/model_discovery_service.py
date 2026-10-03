@@ -127,9 +127,7 @@ class ModelDiscoveryService:
         credential never reach discovery.
         """
         if self._provider_connections is not None:
-            connection: ProviderConnection | None = self._provider_connections.get(
-                configuration.provider_connection_id
-            )
+            connection: ProviderConnection | None = self._provider_connections.get(configuration.provider_connection_id)
             if connection is not None:
                 return connection.provider_id
         return configuration.provider_connection_id

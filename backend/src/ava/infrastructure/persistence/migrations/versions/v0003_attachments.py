@@ -149,9 +149,7 @@ def _structure_violations(connection: sqlite3.Connection) -> list[str]:
     unexpected = [
         table
         for table in sorted(present_tables(connection))
-        if table not in EXPECTED_TABLES
-        and table not in _ALLOWED_COEXISTING_TABLES
-        and not table.startswith("sqlite_")
+        if table not in EXPECTED_TABLES and table not in _ALLOWED_COEXISTING_TABLES and not table.startswith("sqlite_")
     ]
     if unexpected:
         violations.append(f"unexpected tables {unexpected}")

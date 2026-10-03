@@ -8,7 +8,8 @@ adapters; inputs and outputs use AVA contracts.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from typing import Protocol
 
 from pydantic import BaseModel
 
@@ -53,6 +54,18 @@ class ExecutionConfigurationError(ValueError):
 
     #: Stable, non-secret reason for logs and diagnostics.
     reason = "execution_configuration_invalid"
+
+
+class ExecutionPromptContextBuilderPort(Protocol):
+    """AVA-owned seam for resolving instructions after runtime selection."""
+
+    def build(
+        self,
+        context: RunContext | None,
+        *,
+        runtime_key: str,
+        capabilities: Collection[CapabilityName],
+    ) -> RunContext: ...
 
 
 class AgentRunResult(BaseModel):

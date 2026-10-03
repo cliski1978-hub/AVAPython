@@ -6,6 +6,7 @@ serialization helpers (UTC timestamps, deterministic JSON, execution
 selection round-trip) that the relational adapters build on.
 """
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -48,6 +49,7 @@ def test_schema_is_bootstrapped_on_first_connect() -> None:
         "model_configurations",
         "runtime_configurations",
         "application_execution_defaults",
+        "projects",
     } <= tables
     assert "ava_schema_migrations" in tables
     database.dispose()
@@ -71,9 +73,10 @@ def test_schema_bootstrap_is_idempotent() -> None:
         "provider_connections",
         "runtime_configurations",
         "application_execution_defaults",
+        "projects",
     } <= tables
     with database.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 9
+        assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 18
     database.dispose()
 
 
@@ -182,7 +185,7 @@ def test_translate_database_error_maps_other_failures_to_persistence_error() -> 
     assert isinstance(translated, Exception)
 
 
-def _make_duplicate_integrity_error() -> Exception:
+def _make_duplicate_integrity_error() -> sqlite3.IntegrityError:
     import sqlite3
 
     database = SqliteDatabase(":memory:")
@@ -199,7 +202,7 @@ def _make_duplicate_integrity_error() -> Exception:
     return exc_info.value
 
 
-def _make_operational_error() -> Exception:
+def _make_operational_error() -> sqlite3.OperationalError:
     import sqlite3
 
     database = SqliteDatabase(":memory:")

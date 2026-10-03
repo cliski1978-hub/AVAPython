@@ -37,9 +37,7 @@ class InMemoryAttachmentContentStore(AttachmentContentStore):
         source: BinaryIO,
     ) -> StoredContentInfo:
         if storage_key in self._contents:
-            raise ValueError(
-                f"Attachment content already exists for storage key: {storage_key}"
-            )
+            raise ValueError(f"Attachment content already exists for storage key: {storage_key}")
         chunks: list[bytes] = []
         total = 0
         while True:
@@ -58,9 +56,7 @@ class InMemoryAttachmentContentStore(AttachmentContentStore):
         try:
             content = self._contents[storage_key]
         except KeyError:
-            raise FileNotFoundError(
-                f"Attachment content not found for storage key: {storage_key}"
-            ) from None
+            raise FileNotFoundError(f"Attachment content not found for storage key: {storage_key}") from None
         return BytesIO(content)
 
     def exists(
@@ -68,6 +64,10 @@ class InMemoryAttachmentContentStore(AttachmentContentStore):
         storage_key: str,
     ) -> bool:
         return storage_key in self._contents
+
+    def delete(self, storage_key: str) -> bool:
+        """Delete stored bytes by key, returning false when absent."""
+        return self._contents.pop(storage_key, None) is not None
 
     def clear(self) -> None:
         """Drop all stored content; the store returns to its initial state."""

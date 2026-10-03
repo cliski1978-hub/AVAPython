@@ -26,14 +26,50 @@ class ConversationRecord:
 
     ``created_at`` and ``updated_at`` are timezone-aware UTC timestamps
     (``datetime.now(UTC)`` semantics); durable adapters must preserve
-    aware-UTC round-tripping. No archive field exists yet: lifecycle
-    management (archive/delete) is deliberately out of Step 4.4 scope.
+    aware-UTC round-tripping.
+
+    Organization metadata (Phase 5.42) is descriptive only. ``is_pinned`` and
+    ``is_archived`` default to ``False`` and ``folder_id`` to ``None``, so every
+    existing construction site keeps working unchanged.
+
+    ``is_pinned``
+        Marks a conversation that later sorting and display treat as pinned.
+        Purely presentational: it never affects execution, run lifecycle, or
+        durability.
+
+    ``is_archived``
+        A reversible hidden state. The conversation stays in the database and
+        archiving never removes messages, runs, or events — archive is not
+        delete. Listing is still unfiltered, so no conversation disappears.
+
+    ``folder_id``
+        A nullable, AVA-owned folder identifier expressing an organizational
+        relationship only. It is not an execution reference. Folder identity
+        is represented separately; referential integrity is not enforced by
+        this domain record.
+
+    ``project_id``
+        A nullable relationship to one Project workspace. It is independent
+        from folder membership and is not an execution reference in this
+        phase. Project existence is validated by the service on assignment.
     """
 
     conversation_id: str
     title: str
     created_at: datetime
     updated_at: datetime
+    is_pinned: bool = False
+    is_archived: bool = False
+    folder_id: str | None = None
+    project_id: str | None = None
+
+
+def normalize_conversation_search(search: str | None) -> str | None:
+    """Trim a title-search term; an empty result means an unfiltered list."""
+    if search is None:
+        return None
+    normalized = search.strip()
+    return normalized or None
 
 
 # ============================================================
@@ -53,21 +89,37 @@ class ConversationRepository(ABC):
 
     * ``create`` — open a new conversation; a duplicate id is an error.
     * ``get`` — read the current conversation snapshot, or ``None``.
-    * ``list`` — enumerate conversations in stable insertion order.
+    * ``list`` — enumerate conversations in canonical pin/activity order,
+      optionally filtering title substrings case-insensitively.
     * ``update_title`` — rename a conversation, refreshing ``updated_at``.
 
     Deliberately not part of this port: conversation identity generation,
-    archive/delete lifecycle management, sessions, transactions, query
-    language, and observability helpers (``clear``).
+    sessions, transactions, query language, and observability helpers
+    (``clear``).
+
+    Folder assignment and delete are absent by design. Pin and archive state
+    are writable through their dedicated narrow methods. ``ConversationRecord``
+    carries the organization fields so the domain
+    can express them, but folder assignment and delete remain outside this port until their
+    corresponding steps define those behaviors.
     """
 
     @abstractmethod
-    def create(self, conversation_id: str, *, title: str) -> ConversationRecord:
+    def create(
+        self,
+        conversation_id: str,
+        *,
+        title: str,
+        project_id: str | None = None,
+        folder_id: str | None = None,
+    ) -> ConversationRecord:
         """Create a new conversation record.
 
         Args:
             conversation_id: The AVA-generated conversation identifier.
             title: The conversation's initial title.
+            project_id: Optional Project owner, written with the initial record.
+            folder_id: Optional organizational Folder, written with the initial record.
 
         Returns:
             The newly created snapshot.
@@ -77,18 +129,52 @@ class ConversationRepository(ABC):
         """
         raise NotImplementedError
 
+    def list_by_project(self, project_id: str) -> Collection[ConversationRecord]:
+        """Return matching Project conversations in canonical list order.
+
+        Implementations with query support should override this narrow read;
+        this default preserves compatibility for small test adapters.
+        """
+        return [record for record in self.list() if record.project_id == project_id]
+
     @abstractmethod
     def get(self, conversation_id: str) -> ConversationRecord | None:
         """Return the conversation's current snapshot, or ``None`` if unknown."""
         raise NotImplementedError
 
     @abstractmethod
-    def list(self) -> Collection[ConversationRecord]:
-        """Return all conversations in stable insertion order.
+    def list(self, search: str | None = None) -> Collection[ConversationRecord]:
+        """Return conversations in canonical order, optionally title-filtered.
+
+        Missing, empty, and whitespace-only terms return every conversation.
+        Non-empty terms match title substrings without regard to case.
+        Pinned records come first, then ``updated_at`` descending, then
+        ``created_at`` descending, then ``conversation_id`` ascending.
 
         Returns:
-            An ordered immutable snapshot of every conversation.
+            An ordered snapshot of every matching conversation, without
+            changing the repository's stored collection order.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_pinned(self, conversation_id: str, is_pinned: bool) -> ConversationRecord | None:
+        """Set pin state only; preserve all other fields. Return None if unknown."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_archived(self, conversation_id: str, is_archived: bool) -> ConversationRecord | None:
+        """Set archive state only; preserve all other fields. Return None if unknown."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_folder(self, conversation_id: str, folder_id: str | None) -> ConversationRecord | None:
+        """Set the organizational folder only, preserving timestamps and state."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_project(self, conversation_id: str, project_id: str | None) -> ConversationRecord | None:
+        """Set the Project relationship only, preserving folder and timestamps."""
         raise NotImplementedError
 
     @abstractmethod

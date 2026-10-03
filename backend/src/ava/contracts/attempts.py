@@ -30,9 +30,7 @@ from ava.contracts.responses import RunStatus
 
 #: Prior statuses a retry may supersede. A failure and a stopped run both
 #: left the user without a usable response for that turn.
-RETRYABLE_RUN_STATUSES: frozenset[RunStatus] = frozenset(
-    {RunStatus.FAILED, RunStatus.CANCELLED}
-)
+RETRYABLE_RUN_STATUSES: frozenset[RunStatus] = frozenset({RunStatus.FAILED, RunStatus.CANCELLED})
 
 #: Prior statuses a regenerate may supersede. Regeneration is the user's
 #: request for a different answer to a turn that already produced one.

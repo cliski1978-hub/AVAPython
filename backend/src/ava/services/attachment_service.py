@@ -169,30 +169,22 @@ class AttachmentService:
                 )
             )
         except ValueError as exc:
-            raise AttachmentStorageError(
-                f"Failed to record attachment metadata: {exc}"
-            ) from exc
+            raise AttachmentStorageError(f"Failed to record attachment metadata: {exc}") from exc
 
         try:
             info = self._content_store.put(storage_key, source)
         except Exception as exc:
             self._mark_failed(attachment_id)
-            raise AttachmentStorageError(
-                f"Failed to store attachment content: {exc}"
-            ) from exc
+            raise AttachmentStorageError(f"Failed to store attachment content: {exc}") from exc
 
         try:
             present = self._content_store.exists(storage_key)
         except Exception as exc:
             self._mark_failed(attachment_id)
-            raise AttachmentStorageError(
-                f"Failed to verify attachment content: {exc}"
-            ) from exc
+            raise AttachmentStorageError(f"Failed to verify attachment content: {exc}") from exc
         if not present:
             self._mark_failed(attachment_id)
-            raise AttachmentStorageError(
-                "Attachment content verification failed: content is not present after put"
-            )
+            raise AttachmentStorageError("Attachment content verification failed: content is not present after put")
 
         try:
             finalized = self._repository.update_state(
@@ -214,13 +206,10 @@ class AttachmentService:
                     "The record may remain pending and referenced content may be orphaned."
                 ) from exc
             raise AttachmentStorageError(
-                "Attachment content stored but the final metadata transition failed; "
-                "the record was marked failed."
+                "Attachment content stored but the final metadata transition failed; the record was marked failed."
             ) from exc
         if finalized is None:
-            raise AttachmentStorageError(
-                "Attachment content stored but its metadata is missing during finalization."
-            )
+            raise AttachmentStorageError("Attachment content stored but its metadata is missing during finalization.")
         return finalized
 
     def get_attachment(self, attachment_id: str) -> AttachmentRecord | None:
@@ -257,8 +246,7 @@ class AttachmentService:
             return None
         if record.status is not AttachmentStatus.AVAILABLE:
             raise AttachmentStateError(
-                f"Cannot open content for attachment {attachment_id}: "
-                f"status is {record.status.value}"
+                f"Cannot open content for attachment {attachment_id}: status is {record.status.value}"
             )
         try:
             stream = self._content_store.open(record.storage_key)

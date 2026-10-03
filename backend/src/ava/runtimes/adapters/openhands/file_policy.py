@@ -43,9 +43,11 @@ def build_openhands_tools(
     capabilities = capabilities or RuntimeCapabilities()
     decisions = {}
     for tool_id in (FILE_EDITOR_TOOL_NAME, "ava_terminal"):
-        decision = authorization_policy.evaluate(
-            tool_id=tool_id, capabilities=capabilities, workspace=workspace
-        ) if authorization_policy is not None else None
+        decision = (
+            authorization_policy.evaluate(tool_id=tool_id, capabilities=capabilities, workspace=workspace)
+            if authorization_policy is not None
+            else None
+        )
         allowed = decision is not None and decision.allowed
         reason = decision.reason_code if decision else "tool_disabled"
         if allowed and tool_id == "ava_terminal" and (command_policy is None or command_runner is None):
@@ -71,11 +73,16 @@ def build_openhands_tools(
             register_terminal_context,
         )
 
-        tools.append(Tool(name=AVA_TERMINAL_TOOL_NAME, params={
-            "terminal_context_id": register_terminal_context(
-                workspace=workspace, policy=command_policy, runner=command_runner, context=context
-            ),
-        }))
+        tools.append(
+            Tool(
+                name=AVA_TERMINAL_TOOL_NAME,
+                params={
+                    "terminal_context_id": register_terminal_context(
+                        workspace=workspace, policy=command_policy, runner=command_runner, context=context
+                    ),
+                },
+            )
+        )
     return tools
 
 

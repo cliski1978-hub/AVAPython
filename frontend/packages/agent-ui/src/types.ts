@@ -86,6 +86,12 @@ export interface Conversation {
   id: string;
   title: string;
   messages: ConversationMessage[];
+  /** Organization metadata carried by conversation list API snapshots. */
+  isPinned?: boolean;
+  isArchived?: boolean;
+  folderId?: string | null;
+  /** Project workspace membership, independent from folder organization. */
+  projectId?: string | null;
   /** Run lifecycle state for the most recent run started in this conversation. */
   run?: ConversationRunState;
   createdAt?: string;

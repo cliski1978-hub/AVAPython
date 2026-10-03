@@ -22,13 +22,21 @@ from ava.contracts.conversations import (
     MessageStatus,
     assistant_status_for_run,
 )
+from ava.repositories.attachment_content_store import AttachmentContentStore
+from ava.repositories.conversation_folder_repository import ConversationFolderRepository
+from ava.repositories.conversation_hard_delete import (
+    ActiveConversationRunDeletionError,
+    ConversationHardDeleteCoordinator,
+)
 from ava.repositories.conversation_repository import (
     ConversationRecord,
     ConversationRepository,
 )
 from ava.repositories.message_repository import MessageRecord, MessageRepository
+from ava.repositories.project_repository import ProjectRepository
 from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import RunRepository
+from ava.services.project_service import ProjectNotFoundError
 
 DEFAULT_CONVERSATION_TITLE = "New Conversation"
 
@@ -46,8 +54,21 @@ class DuplicateConversationError(Exception):
     """Raised when a conversation identifier collides with an existing one."""
 
 
+class ConversationFolderNotFoundForCreationError(Exception):
+    """Raised when a new conversation names a Folder that no longer exists."""
+
+
 class DuplicateMessageError(Exception):
     """Raised when a message identifier collides with an existing one."""
+
+
+class ConversationHasActiveRunError(Exception):
+    """Raised when hard deletion would remove a conversation with an active run."""
+
+    def __init__(self, conversation_id: str, run_ids: tuple[str, ...]) -> None:
+        self.conversation_id = conversation_id
+        self.run_ids = run_ids
+        super().__init__(f"Conversation has active runs: {', '.join(run_ids)}")
 
 
 # ============================================================
@@ -79,13 +100,23 @@ class ConversationService:
         message_repository: MessageRepository,
         run_repository: RunRepository | None = None,
         run_event_repository: RunEventRepository | None = None,
+        hard_delete_coordinator: ConversationHardDeleteCoordinator | None = None,
+        attachment_content_store: AttachmentContentStore | None = None,
+        project_repository: ProjectRepository | None = None,
+        folder_repository: ConversationFolderRepository | None = None,
     ) -> None:
         self._conversation_repository = conversation_repository
         self._message_repository = message_repository
         self._run_repository = run_repository
         self._run_event_repository = run_event_repository
+        self._hard_delete_coordinator = hard_delete_coordinator
+        self._attachment_content_store = attachment_content_store
+        self._project_repository = project_repository
+        self._folder_repository = folder_repository
 
-    def create_conversation(self, title: str | None = None) -> ConversationResponse:
+    def create_conversation(
+        self, title: str | None = None, *, folder_id: str | None = None
+    ) -> ConversationResponse:
         """Create a new conversation, returning its response contract.
 
         Args:
@@ -98,16 +129,48 @@ class ConversationService:
         Raises:
             DuplicateConversationError: If a conversation identifier collides.
         """
+        if folder_id is not None:
+            if self._folder_repository is None:
+                raise RuntimeError("Folder conversation creation is not configured")
+            if self._folder_repository.get(folder_id) is None:
+                raise ConversationFolderNotFoundForCreationError(folder_id)
+        return self._create_conversation(title=title, project_id=None, folder_id=folder_id)
+
+    def create_conversation_in_project(self, project_id: str, title: str | None = None) -> ConversationResponse:
+        """Create a conversation with Project membership in its first durable write.
+
+        Archived Projects remain readable and writable: Project archive is
+        informational in the current lifecycle model and does not block edits.
+        """
+        if self._project_repository is None:
+            raise RuntimeError("Project conversation creation is not configured")
+        if self._project_repository.get(project_id) is None:
+            raise ProjectNotFoundError(project_id)
+        return self._create_conversation(title=title, project_id=project_id, folder_id=None)
+
+    def _create_conversation(
+        self, *, title: str | None, project_id: str | None, folder_id: str | None
+    ) -> ConversationResponse:
+        """Share normal identity, title, timestamp, and persistence semantics."""
         resolved_title = (title or "").strip() or DEFAULT_CONVERSATION_TITLE
         try:
-            record = self._conversation_repository.create(
-                str(uuid4()),
-                title=resolved_title,
-            )
+            conversation_id = str(uuid4())
+            if folder_id is not None:
+                record = self._conversation_repository.create(
+                    conversation_id,
+                    title=resolved_title,
+                    folder_id=folder_id,
+                )
+            elif project_id is None:
+                record = self._conversation_repository.create(conversation_id, title=resolved_title)
+            else:
+                record = self._conversation_repository.create(
+                    conversation_id,
+                    title=resolved_title,
+                    project_id=project_id,
+                )
         except ValueError as exc:
-            raise DuplicateConversationError(
-                f"Conversation already exists: {exc}"
-            ) from exc
+            raise DuplicateConversationError(f"Conversation already exists: {exc}") from exc
         return _conversation_to_response(record)
 
     def get_conversation(self, conversation_id: str) -> ConversationResponse | None:
@@ -117,12 +180,19 @@ class ConversationService:
             return None
         return _conversation_to_response(record)
 
-    def list_conversations(self) -> ConversationListResponse:
-        """Return all conversations in stable insertion order."""
-        records = self._conversation_repository.list()
-        return ConversationListResponse(
-            conversations=[_conversation_to_response(record) for record in records]
-        )
+    def list_conversations(self, search: str | None = None) -> ConversationListResponse:
+        """Return the canonical ordered list, optionally searching titles."""
+        records = self._conversation_repository.list(search)
+        return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
+
+    def list_project_conversations(self, project_id: str) -> ConversationListResponse:
+        """Validate a Project, then return all of its conversations in canonical order."""
+        if self._project_repository is None:
+            raise RuntimeError("Project conversation listing is not configured")
+        if self._project_repository.get(project_id) is None:
+            raise ProjectNotFoundError(project_id)
+        records = self._conversation_repository.list_by_project(project_id)
+        return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
 
     def update_title(self, conversation_id: str, title: str) -> ConversationResponse | None:
         """Rename a conversation, returning the updated conversation.
@@ -145,6 +215,47 @@ class ConversationService:
         if record is None:
             return None
         return _conversation_to_response(record)
+
+    def set_pinned(self, conversation_id: str, is_pinned: bool) -> ConversationResponse | None:
+        """Persist the requested pin state, returning the updated snapshot."""
+        record = self._conversation_repository.set_pinned(conversation_id, is_pinned)
+        return _conversation_to_response(record) if record is not None else None
+
+    def set_archived(self, conversation_id: str, is_archived: bool) -> ConversationResponse | None:
+        """Persist the requested archive state, returning the updated snapshot."""
+        record = self._conversation_repository.set_archived(conversation_id, is_archived)
+        return _conversation_to_response(record) if record is not None else None
+
+    def set_project(self, conversation_id: str, project_id: str | None) -> ConversationResponse | None:
+        """Assign, move, or unassign a Project without changing conversation activity."""
+        if self._conversation_repository.get(conversation_id) is None:
+            return None
+        if project_id is not None:
+            if self._project_repository is None:
+                raise RuntimeError("Project assignment is not configured")
+            if self._project_repository.get(project_id) is None:
+                raise ProjectNotFoundError(project_id)
+        record = self._conversation_repository.set_project(conversation_id, project_id)
+        return _conversation_to_response(record) if record is not None else None
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Permanently delete a conversation and its owned records.
+
+        Returns false for an unknown conversation. This service operation is
+        internal; transport routes are added separately.
+        """
+        if self._hard_delete_coordinator is None:
+            raise RuntimeError("Conversation hard delete is not configured")
+        try:
+            deletion = self._hard_delete_coordinator.delete(conversation_id)
+        except ActiveConversationRunDeletionError as exc:
+            raise ConversationHasActiveRunError(exc.conversation_id, exc.run_ids) from exc
+        if deletion is None:
+            return False
+        if self._attachment_content_store is not None:
+            for storage_key in deletion.attachment_storage_keys:
+                self._attachment_content_store.delete(storage_key)
+        return True
 
     def append_message(
         self,
@@ -260,6 +371,10 @@ def _conversation_to_response(record: ConversationRecord) -> ConversationRespons
         title=record.title,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        is_pinned=record.is_pinned,
+        is_archived=record.is_archived,
+        folder_id=record.folder_id,
+        project_id=record.project_id,
     )
 
 

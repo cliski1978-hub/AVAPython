@@ -6,6 +6,7 @@ import { ExecutionDefaultsSection } from "../sections/ExecutionDefaultsSection";
 import { ModelConfigurationsSection } from "../sections/ModelConfigurationsSection";
 import { ProviderConnectionsSection } from "../sections/ProviderConnectionsSection";
 import { RuntimeConfigurationsSection } from "../sections/RuntimeConfigurationsSection";
+import { SystemPromptsSection } from "../sections/SystemPromptsSection";
 import {
   DEFAULT_SETTINGS_SECTION,
   SettingsSectionNav,
@@ -58,6 +59,8 @@ function sectionBody(
       return <RuntimeConfigurationsSection client={client} />;
     case "defaults":
       return <ExecutionDefaultsSection client={client} />;
+    case "system-prompts":
+      return <SystemPromptsSection client={client} />;
   }
 }
 

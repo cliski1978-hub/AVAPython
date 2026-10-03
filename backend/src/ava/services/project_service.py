@@ -1,0 +1,118 @@
+"""Application behavior for Project lifecycle and metadata."""
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from ava.contracts.projects import UpdateProjectRequest
+from ava.repositories.project import ProjectRecord
+from ava.repositories.project_repository import ProjectRepository
+from ava.services.project_file_service import ProjectFileService
+
+
+class ProjectNotFoundError(Exception):
+    """Raised when an operation targets an unknown Project."""
+
+    def __init__(self, project_id: str) -> None:
+        self.project_id = project_id
+        super().__init__(f"Unknown Project: {project_id}")
+
+
+class InvalidProjectNameError(ValueError):
+    """Raised when a Project name is blank after trimming."""
+
+
+class DuplicateProjectIdentityError(Exception):
+    """Raised if the generated Project identity collides with a stored ID."""
+
+
+class ProjectService:
+    """Own Project identity, name, timestamp, archive, and delete semantics."""
+
+    def __init__(
+        self, *, project_repository: ProjectRepository, project_file_service: ProjectFileService | None = None
+    ) -> None:
+        self._projects = project_repository
+        self._project_files = project_file_service
+
+    def create_project(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        instructions: str | None = None,
+    ) -> ProjectRecord:
+        normalized_name = self._normalize_name(name)
+        now = datetime.now(UTC)
+        project = ProjectRecord(
+            id=str(uuid4()),
+            name=normalized_name,
+            description=description,
+            instructions=instructions,
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            return self._projects.create(project)
+        except ValueError as exc:
+            raise DuplicateProjectIdentityError("Could not create Project due to an identity collision.") from exc
+
+    def get_project(self, project_id: str) -> ProjectRecord:
+        project = self._projects.get(project_id)
+        if project is None:
+            raise ProjectNotFoundError(project_id)
+        return project
+
+    def list_projects(self) -> list[ProjectRecord]:
+        """Return all Projects, including archived ones, in repository order."""
+        return list(self._projects.list())
+
+    def update_project(self, project_id: str, request: UpdateProjectRequest) -> ProjectRecord:
+        current = self.get_project(project_id)
+        normalized_name = self._normalize_name(request.name)
+        updated = replace(
+            current,
+            name=normalized_name,
+            description=(request.description if "description" in request.model_fields_set else current.description),
+            instructions=(request.instructions if "instructions" in request.model_fields_set else current.instructions),
+            updated_at=self._next_updated_at(current.updated_at),
+        )
+        persisted = self._projects.update(updated)
+        if persisted is None:
+            raise ProjectNotFoundError(project_id)
+        return persisted
+
+    def set_archived(self, project_id: str, is_archived: bool) -> ProjectRecord:
+        current = self.get_project(project_id)
+        if current.is_archived == is_archived:
+            return current
+        updated = replace(
+            current,
+            is_archived=is_archived,
+            updated_at=self._next_updated_at(current.updated_at),
+        )
+        persisted = self._projects.update(updated)
+        if persisted is None:
+            raise ProjectNotFoundError(project_id)
+        return persisted
+
+    def delete_project(self, project_id: str) -> None:
+        if self._project_files is not None:
+            self._project_files.delete_project(project_id)
+        elif not self._projects.delete(project_id):
+            raise ProjectNotFoundError(project_id)
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized:
+            raise InvalidProjectNameError("Project name must not be blank.")
+        return normalized
+
+    @staticmethod
+    def _next_updated_at(previous: datetime) -> datetime:
+        now = datetime.now(UTC)
+        if now <= previous:
+            return previous + timedelta(microseconds=1)
+        return now

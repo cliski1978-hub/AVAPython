@@ -1687,8 +1687,8 @@ def test_execution_defaults_adapters_conform_to_their_port() -> None:
     assert issubclass(ExecutionDefaultsStore, ExecutionDefaultsRepository)
 
 
-def test_persistence_schema_introduces_no_later_phase_tables() -> None:
-    """The migrations create only the approved framework + Phase 5.3 tables.
+def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
+    """The migrations contain framework tables and completed Phase 5 domains.
 
     The default migrations create ``runs``, ``run_events``, ``conversations``,
     ``messages``, ``documents`` (Step 4.7), ``document_revisions``
@@ -1709,22 +1709,34 @@ def test_persistence_schema_introduces_no_later_phase_tables() -> None:
     assert sorted(created) == [
         "application_execution_defaults",
         "attachments",
+        "conversation_folders",
         "conversations",
+        "core_prompt_assignments",
+        "core_prompts",
         "document_revisions",
         "documents",
         "idx_attachments_owner",
+        "idx_conversation_folders_name",
+        "idx_conversations_project",
         "idx_messages_conversation_order",
+        "idx_project_files_project_id",
         "idx_run_events_one_terminal",
         "idx_runs_assistant_message",
         "idx_runs_cancellation_requested",
         "idx_runs_conversation",
         "idx_runs_source_user_message",
+        "ix_core_prompt_assignments_prompt_order",
+        "ix_core_prompt_assignments_scope_order",
         "messages",
         "model_configurations",
+        "project_files",
+        "projects",
         "provider_connections",
         "run_events",
         "runs",
         "runtime_configurations",
+        "ux_core_prompt_assignment_global",
+        "ux_core_prompt_assignment_target",
     ]
     forbidden = ("approval", "audit", "model_invocation", "qualification")
     for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
@@ -1861,7 +1873,7 @@ def test_relational_adapters_are_constructed_only_inside_the_persistence_package
 
 
 def test_application_persistence_carries_all_activated_ports() -> None:
-    """ApplicationPersistence selects every activated port through one seam.
+    """ApplicationPersistence selects every implemented durable domain port.
 
     ``ApplicationPersistence`` carries run, run-event, conversation, message,
     provider-connection,
@@ -1885,8 +1897,13 @@ def test_application_persistence_carries_all_activated_ports() -> None:
         "document_repository",
         "document_revision_repository",
         "attachment_repository",
+        "conversation_folder_repository",
+        "core_prompt_assignment_repository",
+        "core_prompt_repository",
         "document_write_coordinator",
         "database",
+        "project_repository",
+        "project_file_repository",
     }
 
     app_text = (API_DIR / "app.py").read_text(encoding="utf-8")
@@ -1921,8 +1938,8 @@ def test_conversation_routes_remain_persistence_neutral() -> None:
     assert not any(name.startswith(forbidden) for name in imports)
 
 
-def test_migration_versions_include_execution_defaults_and_run_relationships() -> None:
-    """The codebase ships Phase 4 schemas plus Phase 5.3–5.8 configuration.
+def test_migration_versions_include_all_completed_phase_five_domains() -> None:
+    """The migration ledger includes all completed Phase 4/5 schema work.
 
     Steps 4.8/4.9/4.10/4.11/4.12 activate existing schema only — no migrations
     are added — Step 4.13.C adds exactly one (the document revision history,
@@ -1947,6 +1964,15 @@ def test_migration_versions_include_execution_defaults_and_run_relationships() -
         "v0007_application_execution_defaults.py",
         "v0008_run_conversation_relationships.py",
         "v0009_run_cancellation_request.py",
+        "v0010_conversation_organization_metadata.py",
+        "v0011_conversation_folders.py",
+        "v0012_projects.py",
+        "v0013_conversation_project_relationship.py",
+        "v0014_conversation_project_index.py",
+        "v0015_core_prompts.py",
+        "v0016_core_prompt_assignments.py",
+        "v0017_project_execution_defaults.py",
+        "v0018_project_files.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)
@@ -2605,3 +2631,54 @@ def test_runtime_and_agent_adapters_do_not_own_partial_content_persistence() -> 
         for path in _iter_python_files(directory):
             imports = _ava_imports(ast.parse(path.read_text(encoding="utf-8")))
             assert not any(name.startswith(forbidden) for name in imports), path
+
+
+def test_project_file_domain_stays_out_of_storage_and_knowledge_implementations() -> None:
+    """Project file metadata ports cannot reach adapters or future RAG layers."""
+    project_file_modules = (
+        REPOSITORIES_DIR / "project_file.py",
+        REPOSITORIES_DIR / "project_file_repository.py",
+        REPOSITORIES_DIR / "project_file_content.py",
+        CONTRACTS_DIR / "project_files.py",
+    )
+    forbidden = {"api", "infrastructure", "services", "agents", "models", "knowledge", "rag"}
+    for path in project_file_modules:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        violations = _ava_sibling_imports(tree) & forbidden
+        assert not violations, f"{path} must remain a domain/port/contract module: {violations}"
+
+
+def test_knowledge_ports_are_provider_neutral_and_avoid_storage_adapters() -> None:
+    """Knowledge identity and ports cannot bind AVA to a vendor or adapter."""
+    knowledge_paths = (
+        REPOSITORIES_DIR / "knowledge.py",
+        REPOSITORIES_DIR / "knowledge_ports.py",
+    )
+    forbidden_modules = FORBIDDEN_IMPORTS | {
+        "chromadb",
+        "faiss",
+        "langchain_core",
+        "llama_index",
+        "llamaindex",
+        "pinecone",
+        "pgvector",
+        "qdrant_client",
+        "sentence_transformers",
+        "weaviate",
+    }
+    forbidden_siblings = {"api", "agents", "execution", "infrastructure", "models", "runtimes", "services"}
+    for path in knowledge_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        vendor_imports = _top_level_imports(tree) & forbidden_modules
+        assert not vendor_imports, f"{path} imports provider/framework modules: {vendor_imports}"
+        sibling_imports = _ava_sibling_imports(tree) & forbidden_siblings
+        assert not sibling_imports, f"{path} imports adapters or runtime layers: {sibling_imports}"
+
+
+def test_project_file_domain_does_not_import_knowledge() -> None:
+    """Canonical Project File identity cannot depend on future Knowledge types."""
+    project_file = REPOSITORIES_DIR / "project_file.py"
+    tree = ast.parse(project_file.read_text(encoding="utf-8"), filename=str(project_file))
+
+    knowledge_imports = {name for name in _ava_imports(tree) if ".knowledge" in name or ".rag" in name}
+    assert not knowledge_imports, f"Project File domain must not import Knowledge: {knowledge_imports}"

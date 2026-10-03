@@ -115,9 +115,7 @@ class RelationalDocumentWriteCoordinator:
                     updated_at=document.updated_at,
                 )
             except sqlite3.Error as exc:
-                raise translate_database_error(
-                    exc, entity="Document", key=document.document_id
-                ) from exc
+                raise translate_database_error(exc, entity="Document", key=document.document_id) from exc
             try:
                 revision = self._revision_repository._append_on(
                     connection,
@@ -173,9 +171,7 @@ class RelationalDocumentWriteCoordinator:
                     updated_at=document.updated_at,
                 )
             except sqlite3.Error as exc:
-                raise translate_database_error(
-                    exc, entity="Document", key=document.document_id
-                ) from exc
+                raise translate_database_error(exc, entity="Document", key=document.document_id) from exc
             if current is None:
                 raise ValueError(f"Document not found: {document.document_id}")
             try:

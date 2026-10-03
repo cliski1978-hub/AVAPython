@@ -105,9 +105,7 @@ class TokenEstimator(ABC):
     """
 
     @abstractmethod
-    def estimate_messages(
-        self, messages: Sequence[ContextMessage], *, model_id: str | None = None
-    ) -> int:
+    def estimate_messages(self, messages: Sequence[ContextMessage], *, model_id: str | None = None) -> int:
         """Return the estimated token cost of ``messages`` in order.
 
         Args:
@@ -132,9 +130,7 @@ class DeterministicTokenEstimator(TokenEstimator):
     can only over-estimate, so the window never depends on a favorable guess.
     """
 
-    def estimate_messages(
-        self, messages: Sequence[ContextMessage], *, model_id: str | None = None
-    ) -> int:
+    def estimate_messages(self, messages: Sequence[ContextMessage], *, model_id: str | None = None) -> int:
         """Return the summed estimate for ``messages``.
 
         Additive by construction, so a turn's cost is the sum of its messages'
@@ -339,13 +335,8 @@ class ContextWindowManager:
         preamble, turns = _partition_turns(messages)
         mandatory_turn = turns[-1] if turns else []
         optional_turns = turns[:-1]
-        optional_costs = [
-            self._estimator.estimate_messages(turn, model_id=model_id)
-            for turn in optional_turns
-        ]
-        mandatory_cost = self._estimator.estimate_messages(
-            [*preamble, *mandatory_turn], model_id=model_id
-        )
+        optional_costs = [self._estimator.estimate_messages(turn, model_id=model_id) for turn in optional_turns]
+        mandatory_cost = self._estimator.estimate_messages([*preamble, *mandatory_turn], model_id=model_id)
         kept_from = len(optional_turns)
         running = mandatory_cost
         while kept_from > 0 and running + optional_costs[kept_from - 1] <= budget:

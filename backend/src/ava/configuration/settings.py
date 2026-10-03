@@ -76,6 +76,15 @@ def _env_attachment_storage(name: str, default: str) -> str:
     return raw
 
 
+def _env_project_file_storage(name: str, default: str) -> str:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw not in {"memory", "local"}:
+        raise ValueError(f"{name} must be one of: memory, local")
+    return raw
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an int from the environment with a default."""
     raw = os.getenv(name, "")
@@ -126,9 +135,7 @@ class Settings:
     # Persistence provider (Phase 4). "memory" (the default) keeps the
     # in-memory stores; "relational" activates the durable SQLite adapters for
     # every Phase 4 domain over one shared database.
-    persistence_provider: str = field(
-        default_factory=lambda: _env_persistence_provider("AVA_PERSISTENCE", "memory")
-    )
+    persistence_provider: str = field(default_factory=lambda: _env_persistence_provider("AVA_PERSISTENCE", "memory"))
     # Database location used when ``persistence_provider`` is ``relational``.
     persistence_database_url: str = field(
         default_factory=lambda: _env_str("AVA_PERSISTENCE_DATABASE_URL", "ava.sqlite3")
@@ -140,19 +147,21 @@ class Settings:
     # content store; ``local`` selects the local-filesystem adapter and requires
     # an explicit ``AVA_ATTACHMENT_STORAGE_ROOT``. In ``memory`` mode the root
     # may be absent and is ignored.
-    attachment_storage: str = field(
-        default_factory=lambda: _env_attachment_storage("AVA_ATTACHMENT_STORAGE", "memory")
-    )
+    attachment_storage: str = field(default_factory=lambda: _env_attachment_storage("AVA_ATTACHMENT_STORAGE", "memory"))
     # Filesystem root used when ``attachment_storage`` is ``local``.
-    attachment_storage_root: str = field(
-        default_factory=lambda: _env_str("AVA_ATTACHMENT_STORAGE_ROOT", "")
+    attachment_storage_root: str = field(default_factory=lambda: _env_str("AVA_ATTACHMENT_STORAGE_ROOT", ""))
+
+    # Project files use a distinct content lifecycle and storage root.
+    project_file_storage: str = field(
+        default_factory=lambda: _env_project_file_storage("AVA_PROJECT_FILE_STORAGE", "memory")
     )
+    project_file_storage_root: str = field(default_factory=lambda: _env_str("AVA_PROJECT_FILE_STORAGE_ROOT", ""))
 
     def __post_init__(self) -> None:
         if self.attachment_storage == "local" and not self.attachment_storage_root.strip():
-            raise ValueError(
-                "AVA_ATTACHMENT_STORAGE=local requires AVA_ATTACHMENT_STORAGE_ROOT to be set"
-            )
+            raise ValueError("AVA_ATTACHMENT_STORAGE=local requires AVA_ATTACHMENT_STORAGE_ROOT to be set")
+        if self.project_file_storage == "local" and not self.project_file_storage_root.strip():
+            raise ValueError("AVA_PROJECT_FILE_STORAGE=local requires AVA_PROJECT_FILE_STORAGE_ROOT to be set")
 
     @property
     def resolved_model_id(self) -> str:

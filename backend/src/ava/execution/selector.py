@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, replace
 
 from ava.contracts.execution import RunExecutionOverride
 from ava.contracts.requests import RunRequest
@@ -11,6 +12,12 @@ from ava.execution.persisted_execution import (
     PersistedModelConfiguration,
 )
 from ava.execution.routing import AutomaticExecutionRoutingPolicy
+from ava.execution.selection import (
+    ExecutionSelectionSource,
+    ProjectExecutionDefaultsResolverPort,
+    ProjectExecutionPreference,
+    ResolvedExecutionSelection,
+)
 from ava.models.bindings import ConfiguredModelBinding, ModelBindingResolver, model_binding_from_profile
 from ava.models.contracts import ModelProviderPort
 from ava.models.model_registry import ModelProfile
@@ -18,7 +25,9 @@ from ava.models.registry import ModelProviderRegistry
 from ava.models.resolver import ModelProviderResolver
 from ava.runtimes.contracts import AgentRuntimePort
 from ava.runtimes.registry import RuntimeRegistry
-from ava.runtimes.resolver import RuntimeResolver
+from ava.runtimes.resolver import RuntimeResolver, UnknownRuntimeError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,14 +53,27 @@ class ResolvedExecution:
     model_provider: ModelProviderPort = field(repr=False)
     model_binding: ConfiguredModelBinding
     model_profile: ModelProfile
+    runtime_key: str
     source: ExecutionConfigurationSource = ExecutionConfigurationSource.BOOTSTRAP
     provider_connection_id: str | None = None
     runtime_configuration_id: str | None = None
+    runtime_selection_source: ExecutionSelectionSource = ExecutionSelectionSource.BOOTSTRAP
+    model_selection_source: ExecutionSelectionSource = ExecutionSelectionSource.BOOTSTRAP
+    project_id: str | None = None
+
+    @property
+    def selection(self) -> ResolvedExecutionSelection:
+        """Return effective identities and per-axis provenance for diagnostics."""
+        return ResolvedExecutionSelection(
+            runtime_key=self.runtime_key,
+            runtime_source=self.runtime_selection_source,
+            model_id=self.model_binding.model_id,
+            model_source=self.model_selection_source,
+            project_id=self.project_id,
+        )
 
     @classmethod
-    def from_persisted_configuration(
-        cls, configuration: PersistedExecutionConfiguration
-    ) -> "ResolvedExecution":
+    def from_persisted_configuration(cls, configuration: PersistedExecutionConfiguration) -> "ResolvedExecution":
         """Adapt a validated persisted selection onto the execution boundary.
 
         Persisted resolution returns the same four execution objects a bootstrap
@@ -65,6 +87,7 @@ class ResolvedExecution:
             model_provider=configuration.model_provider,
             model_binding=configuration.model_binding,
             model_profile=configuration.model_profile,
+            runtime_key=configuration.runtime_type,
             source=ExecutionConfigurationSource.PERSISTED,
             provider_connection_id=configuration.provider_connection_id,
             runtime_configuration_id=configuration.runtime_configuration_id,
@@ -86,6 +109,7 @@ class ExecutionSelector:
         model_orchestrator: ModelOrchestrator | None = None,
         hosting_requirement: ModelHostingRequirement | None = None,
         persisted_configuration_resolver: PersistedExecutionConfigurationResolverPort | None = None,
+        project_execution_defaults_resolver: ProjectExecutionDefaultsResolverPort | None = None,
     ) -> None:
         self._runtime = runtime_resolver
         self._provider = model_provider_resolver
@@ -104,8 +128,198 @@ class ExecutionSelector:
         self._model_orchestrator = model_orchestrator
         self._hosting_requirement = hosting_requirement
         self._persisted = persisted_configuration_resolver
+        self._project_defaults = project_execution_defaults_resolver
 
-    def resolve(self, override: RunExecutionOverride | None = None) -> ResolvedExecution:
+    def resolve(
+        self,
+        override: RunExecutionOverride | None = None,
+        *,
+        conversation_id: str | None = None,
+    ) -> ResolvedExecution:
+        """Resolve run selection, with Project and application preferences per axis."""
+        project = (
+            self._project_defaults.resolve_for_conversation(conversation_id)
+            if self._project_defaults is not None and conversation_id is not None
+            else None
+        )
+        if override is not None and override.mode == "auto":
+            # Auto is an explicit routing policy and retains its pre-Project
+            # semantics; it does not silently become a Project preference.
+            return replace(
+                self._resolve_without_project_defaults(override),
+                runtime_selection_source=ExecutionSelectionSource.EXPLICIT,
+                model_selection_source=ExecutionSelectionSource.EXPLICIT,
+                project_id=project.project_id if project is not None else None,
+            )
+        if project is not None and (project.runtime_key is not None or project.model_id is not None):
+            return self._resolve_with_project_defaults(override, project)
+
+        resolved = self._resolve_without_project_defaults(override)
+        runtime_source = (
+            ExecutionSelectionSource.EXPLICIT
+            if override is not None and override.runtime_id is not None
+            else (
+                ExecutionSelectionSource.APPLICATION
+                if resolved.source == ExecutionConfigurationSource.PERSISTED
+                else ExecutionSelectionSource.BOOTSTRAP
+            )
+        )
+        model_source = (
+            ExecutionSelectionSource.EXPLICIT
+            if override is not None and (override.model_id is not None or override.model_provider_id is not None)
+            else (
+                ExecutionSelectionSource.APPLICATION
+                if resolved.source == ExecutionConfigurationSource.PERSISTED
+                else ExecutionSelectionSource.BOOTSTRAP
+            )
+        )
+        return replace(
+            resolved,
+            runtime_selection_source=runtime_source,
+            model_selection_source=model_source,
+            project_id=project.project_id if project is not None else None,
+        )
+
+    def _resolve_with_project_defaults(
+        self,
+        override: RunExecutionOverride | None,
+        project: ProjectExecutionPreference,
+    ) -> ResolvedExecution:
+        """Resolve runtime and model independently across all preference tiers."""
+        defaults = self._persisted.application_defaults() if self._persisted is not None else None
+
+        # Runtime precedence: explicit → Project → application → bootstrap.
+        runtime_configuration_id: str | None = None
+        if override is not None and override.runtime_id is not None:
+            runtime_key = override.runtime_id
+            runtime = self._runtime.resolve(runtime_key)
+            runtime_source = ExecutionSelectionSource.EXPLICIT
+        else:
+            project_runtime: AgentRuntimePort | None = None
+            if project.runtime_key is not None:
+                try:
+                    project_runtime = self._runtime.resolve(project.runtime_key)
+                except UnknownRuntimeError:
+                    logger.info(
+                        "Ignoring unavailable Project runtime preference for Project %s",
+                        project.project_id,
+                    )
+            if project_runtime is not None:
+                runtime_key = project.runtime_key or ""
+                runtime = project_runtime
+                runtime_source = ExecutionSelectionSource.PROJECT
+            elif defaults is not None:
+                if self._persisted is None:
+                    raise RuntimeError("Application execution defaults resolver is unavailable")
+                configured_runtime = self._persisted.resolve_application_runtime()
+                if configured_runtime is None:
+                    raise RuntimeError("Application runtime defaults unexpectedly disappeared")
+                runtime_key = configured_runtime.runtime_key
+                runtime = configured_runtime.runtime
+                runtime_configuration_id = configured_runtime.runtime_configuration_id
+                runtime_source = ExecutionSelectionSource.APPLICATION
+            else:
+                runtime_key = self._default_runtime_id
+                runtime = self._runtime.resolve(runtime_key)
+                runtime_source = ExecutionSelectionSource.BOOTSTRAP
+
+        # Model precedence: explicit → Project → application → bootstrap.
+        # The selected model carries its provider connection; no Project or
+        # runtime selection is allowed to choose a provider independently.
+        names_explicit_model = override is not None and (
+            override.model_id is not None or override.model_provider_id is not None
+        )
+        configured_model: PersistedModelConfiguration | None = None
+        model_source: ExecutionSelectionSource
+        if names_explicit_model:
+            if override is not None and override.model_id is not None and self._persisted is not None:
+                configured_model = self._persisted.resolve_model_configuration(
+                    override.model_id, runtime_type=runtime_key
+                )
+            if configured_model is not None:
+                model_source = ExecutionSelectionSource.EXPLICIT
+            else:
+                profile = self._select_model(
+                    explicit_model_id=override.model_id if override else None,
+                    preferred_provider_id=override.model_provider_id if override else None,
+                    runtime_id=runtime_key,
+                )
+                return ResolvedExecution(
+                    runtime=runtime,
+                    model_provider=self._provider.resolve(profile.provider_id),
+                    model_binding=model_binding_from_profile(profile),
+                    model_profile=profile,
+                    runtime_key=runtime_key,
+                    runtime_configuration_id=runtime_configuration_id,
+                    runtime_selection_source=runtime_source,
+                    model_selection_source=ExecutionSelectionSource.EXPLICIT,
+                    project_id=project.project_id,
+                )
+        elif project.model_id is not None and self._persisted is not None:
+            configured_model = self._persisted.resolve_model_configuration(
+                project.model_id,
+                runtime_type=runtime_key,
+                skip_if_unavailable=True,
+            )
+            if configured_model is not None:
+                model_source = ExecutionSelectionSource.PROJECT
+            else:
+                model_source = ExecutionSelectionSource.BOOTSTRAP
+        else:
+            model_source = ExecutionSelectionSource.BOOTSTRAP
+
+        if configured_model is None:
+            # A stale Project reference is skipped. In particular, do not
+            # interpret a missing configured model id as a provider choice.
+            if defaults is not None:
+                if self._persisted is None:
+                    raise RuntimeError("Application execution defaults resolver is unavailable")
+                configured_model = self._persisted.resolve_model_configuration(
+                    defaults.default_model_id,
+                    runtime_type=runtime_key,
+                    expected_provider_connection_id=defaults.default_provider_connection_id,
+                    require_configured=True,
+                )
+                if configured_model is None:
+                    raise RuntimeError("Application model defaults unexpectedly disappeared")
+                model_source = ExecutionSelectionSource.APPLICATION
+            else:
+                profile = self._select_model(
+                    explicit_model_id=None,
+                    preferred_provider_id=None,
+                    runtime_id=runtime_key,
+                )
+                return ResolvedExecution(
+                    runtime=runtime,
+                    model_provider=self._provider.resolve(profile.provider_id),
+                    model_binding=model_binding_from_profile(profile),
+                    model_profile=profile,
+                    runtime_key=runtime_key,
+                    runtime_configuration_id=runtime_configuration_id,
+                    runtime_selection_source=runtime_source,
+                    model_selection_source=ExecutionSelectionSource.BOOTSTRAP,
+                    project_id=project.project_id,
+                )
+
+        if configured_model is None:
+            # Explicit model provider-only selection is resolved above. This is
+            # a defensive guard for malformed/incomplete resolver implementations.
+            raise ValueError("Unable to resolve execution model")
+        return ResolvedExecution(
+            runtime=runtime,
+            model_provider=configured_model.model_provider,
+            model_binding=configured_model.model_binding,
+            model_profile=configured_model.model_profile,
+            runtime_key=runtime_key,
+            source=ExecutionConfigurationSource.PERSISTED,
+            provider_connection_id=configured_model.provider_connection_id,
+            runtime_configuration_id=runtime_configuration_id,
+            runtime_selection_source=runtime_source,
+            model_selection_source=model_source,
+            project_id=project.project_id,
+        )
+
+    def _resolve_without_project_defaults(self, override: RunExecutionOverride | None = None) -> ResolvedExecution:
         """Resolve the execution for one run.
 
         Authority: persisted application defaults first, bootstrap second. A
@@ -162,6 +376,7 @@ class ExecutionSelector:
                 self._provider.resolve(decision.model_provider_id),
                 model_binding_from_profile(profile),
                 profile,
+                decision.runtime_id,
             )
         if persisted is not None:
             return self._resolve_override_onto_persisted(override, persisted, configured)
@@ -189,6 +404,7 @@ class ExecutionSelector:
             model_provider=self._provider.resolve(profile.provider_id),
             model_binding=model_binding_from_profile(profile),
             model_profile=profile,
+            runtime_key=runtime_id,
         )
 
     def _resolve_override_onto_persisted(
@@ -215,9 +431,11 @@ class ExecutionSelector:
         explicit_runtime_id = override.runtime_id if override is not None else None
         if explicit_runtime_id is None or explicit_runtime_id == persisted.runtime_type:
             runtime = persisted.runtime
+            resolved_runtime_key = persisted.runtime_type
             runtime_configuration_id: str | None = persisted.runtime_configuration_id
         else:
             runtime = self._runtime.resolve(explicit_runtime_id)
+            resolved_runtime_key = explicit_runtime_id
             runtime_configuration_id = None
         names_model = override is not None and (override.model_id is not None or override.model_provider_id is not None)
         if not names_model:
@@ -226,6 +444,7 @@ class ExecutionSelector:
                 model_provider=persisted.model_provider,
                 model_binding=persisted.model_binding,
                 model_profile=persisted.model_profile,
+                runtime_key=resolved_runtime_key,
                 source=ExecutionConfigurationSource.PERSISTED,
                 provider_connection_id=persisted.provider_connection_id,
                 runtime_configuration_id=runtime_configuration_id,
@@ -237,6 +456,7 @@ class ExecutionSelector:
                 configured,
                 override=override,
                 runtime=runtime,
+                runtime_key=resolved_runtime_key,
                 runtime_configuration_id=runtime_configuration_id,
             )
         profile = self._select_model(
@@ -249,6 +469,7 @@ class ExecutionSelector:
             model_provider=self._provider.resolve(profile.provider_id),
             model_binding=model_binding_from_profile(profile),
             model_profile=profile,
+            runtime_key=resolved_runtime_key,
             source=ExecutionConfigurationSource.BOOTSTRAP,
             runtime_configuration_id=runtime_configuration_id,
         )
@@ -260,6 +481,7 @@ class ExecutionSelector:
         override: RunExecutionOverride | None = None,
         runtime_id: str | None = None,
         runtime: AgentRuntimePort | None = None,
+        runtime_key: str | None = None,
         runtime_configuration_id: str | None = None,
     ) -> ResolvedExecution:
         """Build a run from one explicitly chosen configured model.
@@ -276,11 +498,13 @@ class ExecutionSelector:
         ):
             raise ValueError("model_id and model_provider_id must identify the same provider")
         resolved_runtime = runtime if runtime is not None else self._runtime.resolve(runtime_id or "")
+        resolved_runtime_key = runtime_key or runtime_id or resolved_runtime.get_runtime_info().runtime_id
         return ResolvedExecution(
             runtime=resolved_runtime,
             model_provider=configured.model_provider,
             model_binding=configured.model_binding,
             model_profile=configured.model_profile,
+            runtime_key=resolved_runtime_key,
             source=ExecutionConfigurationSource.PERSISTED,
             provider_connection_id=configured.provider_connection_id,
             runtime_configuration_id=runtime_configuration_id,

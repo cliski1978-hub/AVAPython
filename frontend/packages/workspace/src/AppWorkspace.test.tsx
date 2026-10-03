@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { ApiClient } from "@ava/api-client";
+import { ApiClient, ApiError } from "@ava/api-client";
 import {
   createDocument,
   getHealth,
@@ -8,7 +8,19 @@ import {
   listDocuments,
   listConversations,
   listMessages,
+  createMessage,
+  createConversation,
+  listProjects,
+  listProjectConversations,
+  listConversationFolders,
+  createProjectConversation,
+  setConversationProject,
+  setConversationPinned,
+  setConversationArchived,
+  setCorePromptAssignment,
+  getProject,
   startRun,
+  streamRun,
   updateDocument,
 } from "@ava/api-client";
 import {
@@ -17,6 +29,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppWorkspace } from "./AppWorkspace";
@@ -53,6 +66,33 @@ vi.mock("@ava/api-client", async (importOriginal) => {
     getWorkspaces: vi.fn().mockResolvedValue({
       contract_version: "v1",
       workspaces: [],
+    }),
+    listProjects: vi.fn().mockResolvedValue({ projects: [], contract_version: "v1" }),
+    listProjectConversations: vi.fn().mockResolvedValue({ conversations: [], contract_version: "v1" }),
+    listProjectFiles: vi.fn().mockResolvedValue({ project_id: "p-1", files: [], contract_version: "v1" }),
+    listConversationFolders: vi.fn().mockResolvedValue({ folders: [], contract_version: "v1" }),
+    createProjectConversation: vi.fn(),
+    setConversationProject: vi.fn(),
+    setConversationPinned: vi.fn(),
+    setConversationArchived: vi.fn(),
+    listCorePrompts: vi.fn().mockResolvedValue({ core_prompts: [{ id: "prompt-1", name: "Prompt One", description: null, prompt_text: "Inert", category: "general", is_enabled: true, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }], contract_version: "v1" }),
+    listCorePromptAssignmentsForScope: vi.fn().mockResolvedValue({ assignments: [], contract_version: "v1" }),
+    setCorePromptAssignment: vi.fn().mockResolvedValue({ core_prompt_id: "prompt-1", scope_type: "conversation", scope_id: "conversation-1", state: "enable", assignment_id: "assignment-1", created_at: null, updated_at: null, contract_version: "v1" }),
+    getProject: vi.fn().mockImplementation(async (_client: unknown, projectId: string) => ({
+      id: projectId,
+      name: "AVA Engineering",
+      description: "Engineering work",
+      instructions: "Inert instructions",
+      is_archived: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      contract_version: "v1",
+    })),
+    streamRun: vi.fn().mockImplementation(async (_client: unknown, _runId: string, options: { signal?: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        if (options.signal == null || options.signal.aborted) return resolve();
+        options.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
     }),
     listDocuments: vi.fn().mockResolvedValue({
       contract_version: "v1",
@@ -169,10 +209,56 @@ async function submitPrompt(text: string) {
 }
 
 describe("AppWorkspace", () => {
+  it("shows and retries a failed Documents bootstrap without treating it as empty", async () => {
+    vi.mocked(listDocuments)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ contract_version: "v1", documents: [] });
+
+    render(<StrictMode><AppWorkspace client={client} /></StrictMode>);
+    fireEvent.click(documentsTab());
+
+    expect(await screen.findByRole("alert", { name: "Documents could not be loaded." })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading documents" }));
+    expect(await screen.findByText("No document open")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "Documents could not be loaded." })).toBeNull());
+    expect(vi.mocked(listDocuments)).toHaveBeenCalledTimes(3);
+  });
+
+  it("recovers failed Conversations and Folder startup loads through in-place retry", async () => {
+    vi.mocked(listConversations)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({
+        contract_version: "v1",
+        conversations: [{ conversation_id: "recovered-chat", title: "Recovered after outage", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
+      });
+    vi.mocked(listConversationFolders)
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ folders: [], contract_version: "v1" });
+    vi.mocked(listMessages).mockResolvedValue({ contract_version: "v1", conversation_id: "recovered-chat", messages: [] });
+
+    render(<StrictMode><AppWorkspace client={client} /></StrictMode>);
+
+    await screen.findByText("Unable to load conversations.");
+    await screen.findByText("Unable to load folders. Conversations are shown without folders.");
+    fireEvent.click(await screen.findByRole("button", { name: "Retry loading conversations" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry loading folders" }));
+
+    expect((await screen.findAllByText("Recovered after outage")).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.queryByText("Unable to load conversations.")).toBeNull();
+      expect(screen.queryByText("Unable to load folders. Conversations are shown without folders.")).toBeNull();
+    });
+    expect(vi.mocked(listConversations)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(listConversationFolders)).toHaveBeenCalledTimes(3);
+  });
+
   it("opens the Settings section requested by a hydrated configuration failure", async () => {
     vi.mocked(listConversations).mockResolvedValueOnce({
       contract_version: "v1",
-      conversations: [{ conversation_id: "conversation-1", title: "Failed", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }],
+      conversations: [{ conversation_id: "conversation-1", title: "Failed", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
     });
     vi.mocked(listMessages).mockResolvedValueOnce({
       contract_version: "v1", conversation_id: "conversation-1", messages: [
@@ -190,6 +276,336 @@ describe("AppWorkspace", () => {
   beforeEach(() => {
     nextConversationId = 1;
     vi.clearAllMocks();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("adds Projects navigation and loads the list without disturbing the conversation shell", async () => {
+    vi.mocked(listProjects).mockResolvedValue({
+      contract_version: "v1",
+      projects: [{ id: "p-1", name: "AVA Engineering", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }],
+    });
+    render(<AppWorkspace client={client} />);
+    const projectsTab = screen.getByRole("tab", { name: "Projects" });
+    expect(projectsTab).toBeTruthy();
+    fireEvent.click(projectsTab);
+    expect(await screen.findByRole("heading", { name: "Projects" })).toBeTruthy();
+    expect(window.location.pathname).toBe("/projects");
+    expect(listProjects).toHaveBeenCalledWith(client);
+    expect(screen.getByRole("tab", { name: "Projects" }).getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    expect(await screen.findByLabelText("Message")).toBeTruthy();
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("loads Project chats lazily, creates in that Project, and keeps later global New Chat unscoped", async () => {
+    const project = { id: "p-chat", name: "Project Chat", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    vi.mocked(listConversations).mockResolvedValue({
+      conversations: [{ conversation_id: "existing-project-chat", title: "Existing Project chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" }],
+      contract_version: "v1",
+    });
+    vi.mocked(listProjects).mockResolvedValue({ projects: [project], contract_version: "v1" });
+    const existingProjectChat = { conversation_id: "existing-project-chat", title: "Existing Project chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    const newProjectChat = { conversation_id: "new-project-chat", title: "New Conversation", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    vi.mocked(listProjectConversations)
+      .mockResolvedValueOnce({ conversations: [existingProjectChat], contract_version: "v1" })
+      .mockResolvedValue({ conversations: [newProjectChat, existingProjectChat], contract_version: "v1" });
+    vi.mocked(createProjectConversation).mockResolvedValue({
+      ...newProjectChat,
+    });
+    render(<AppWorkspace client={client} />);
+
+    expect(await screen.findByText("Project Chat")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Expand Project Chat" }));
+    expect(await screen.findByRole("button", { name: "Existing Project chat" })).toBeTruthy();
+    expect(listProjectConversations).toHaveBeenCalledWith(client, project.id);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Chat in Project Chat" }));
+    await waitFor(() => expect(createProjectConversation).toHaveBeenCalledWith(client, project.id));
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Project first prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(createMessage).toHaveBeenCalledWith(client, "new-project-chat", expect.objectContaining({ content: "Project first prompt" })));
+    await waitFor(() => expect(startRun).toHaveBeenCalledWith(client, expect.objectContaining({ conversation_id: "new-project-chat", prompt: "Project first prompt" })));
+
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    await waitFor(() => expect(createConversation).toHaveBeenCalledWith(client));
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Global prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(createMessage).toHaveBeenCalledWith(client, "conversation-1", expect.objectContaining({ content: "Global prompt" })));
+    expect(createProjectConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Chat usable when the Project list fails to load", async () => {
+    vi.mocked(listProjects).mockRejectedValueOnce(new Error("project service unavailable"));
+    vi.mocked(listConversations).mockResolvedValueOnce({
+      conversations: [{ conversation_id: "global-chat", title: "Global chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
+      contract_version: "v1",
+    });
+    render(<AppWorkspace client={client} />);
+    expect((await screen.findAllByText("Global chat")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Projects are temporarily unavailable.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeTruthy();
+    expect(screen.getByLabelText("Message")).toBeTruthy();
+  });
+
+  it("opens conversation System Prompts without changing selection, transcript, or an active run", async () => {
+    vi.mocked(listConversations).mockResolvedValueOnce({
+      conversations: [{ conversation_id: "conversation-1", title: "Stay selected", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
+      contract_version: "v1",
+    });
+    vi.mocked(listMessages).mockResolvedValueOnce({ contract_version: "v1", conversation_id: "conversation-1", messages: [
+      { message_id: "user-existing", conversation_id: "conversation-1", role: "user", content: "Transcript remains", status: "complete", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" },
+    ] });
+    vi.mocked(startRun).mockResolvedValueOnce({ run_id: "prompt-run", status: "running", contract_version: "v1" });
+    let runSignal: AbortSignal | undefined;
+    vi.mocked(streamRun).mockImplementationOnce(async (_client, _runId, options) => {
+      runSignal = options.signal;
+      await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    render(<AppWorkspace client={client} />);
+    expect(await screen.findByText("Transcript remains")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep run active" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamRun).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Stay selected" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "System Prompts" }));
+    expect(await screen.findByRole("dialog", { name: "System Prompts — Conversation: Stay selected" })).toBeTruthy();
+    const assignment = await screen.findByRole("combobox", { name: "Assignment for Prompt One at Conversation: Stay selected" });
+    fireEvent.change(assignment, { target: { value: "enable" } });
+    await waitFor(() => expect(setCorePromptAssignment).toHaveBeenCalledWith(client, "prompt-1", {
+      scope_type: "conversation", scope_id: "conversation-1", state: "enable",
+    }));
+    expect(screen.getByText("Transcript remains")).toBeTruthy();
+    expect(runSignal?.aborted).toBe(false);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a failed Project conversation load to that Project section", async () => {
+    const project = { id: "p-failing", name: "Unavailable Project", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValueOnce({ projects: [project], contract_version: "v1" });
+    vi.mocked(listConversations).mockResolvedValueOnce({
+      conversations: [{ conversation_id: "global-chat", title: "Global chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
+      contract_version: "v1",
+    });
+    vi.mocked(listProjectConversations).mockRejectedValueOnce(new Error("project conversation service unavailable"));
+    render(<AppWorkspace client={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Unavailable Project" }));
+    expect(await screen.findByText("This Project's conversations could not be loaded.")).toBeTruthy();
+    expect(screen.getAllByText("Global chat").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Message")).toBeTruthy();
+  });
+
+  it("retries a failed Project conversation load and replaces the error with the loaded chat", async () => {
+    const project = { id: "p-retry", name: "Retry Project", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    const conversation = { conversation_id: "retry-chat", title: "Recovered Project chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValueOnce({ projects: [project], contract_version: "v1" });
+    vi.mocked(listConversations).mockResolvedValueOnce({ conversations: [conversation], contract_version: "v1" });
+    vi.mocked(listProjectConversations)
+      .mockRejectedValueOnce(new Error("temporary Project query failure"))
+      .mockResolvedValueOnce({ conversations: [conversation], contract_version: "v1" });
+    render(<AppWorkspace client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Retry Project" }));
+    expect(await screen.findByText("This Project's conversations could not be loaded.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("button", { name: "Recovered Project chat" })).toBeTruthy();
+    expect(screen.queryByText("This Project's conversations could not be loaded.")).toBeNull();
+    expect(listProjectConversations).toHaveBeenCalledTimes(2);
+    expect(listProjectConversations).toHaveBeenNthCalledWith(2, client, project.id);
+  });
+
+  it("retries failed sidebar Project chat creation after clearing its pending state", async () => {
+    const project = { id: "p-create-retry", name: "Create Retry Project", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    const created = { conversation_id: "created-on-retry", title: "New Conversation", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValueOnce({ projects: [project], contract_version: "v1" });
+    vi.mocked(listConversations).mockResolvedValue({ conversations: [created], contract_version: "v1" });
+    vi.mocked(listProjectConversations).mockResolvedValue({ conversations: [created], contract_version: "v1" });
+    vi.mocked(createProjectConversation).mockRejectedValueOnce(new Error("temporary create failure")).mockResolvedValueOnce(created);
+    render(<AppWorkspace client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Create Retry Project" }));
+    const createButton = await screen.findByRole("button", { name: "New Chat in Create Retry Project" });
+    fireEvent.click(createButton);
+    expect(await screen.findByText("Unable to create a chat in this Project. Please try again.")).toBeTruthy();
+    expect(createButton.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(createButton);
+    await waitFor(() => expect(createProjectConversation).toHaveBeenCalledTimes(2));
+    expect((await screen.findAllByText("New Conversation")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Unable to create a chat in this Project. Please try again.")).toBeNull();
+    expect(createProjectConversation).toHaveBeenLastCalledWith(client, project.id);
+  });
+
+  it("shows Project-scoped conversations in global search and opens the canonical result", async () => {
+    const project = { id: "p-search", name: "Search Project", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    const conversation = { conversation_id: "search-project-chat", title: "Searchable Project chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValueOnce({ projects: [project], contract_version: "v1" });
+    vi.mocked(listConversations).mockImplementation(async () => ({
+      conversations: [conversation],
+      contract_version: "v1",
+    }));
+    vi.mocked(listProjectConversations).mockResolvedValueOnce({ conversations: [conversation], contract_version: "v1" });
+    vi.mocked(listMessages).mockResolvedValue({ conversation_id: conversation.conversation_id, messages: [], contract_version: "v1" });
+    render(<AppWorkspace client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Search Project" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search conversations" }), { target: { value: "Searchable Project" } });
+    const result = await screen.findByRole("button", { name: "Searchable Project chat" });
+    fireEvent.click(result);
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledTimes(2));
+    expect(listMessages).toHaveBeenLastCalledWith(client, conversation.conversation_id);
+    expect(screen.getByRole("heading", { name: "Searchable Project chat" })).toBeTruthy();
+  });
+
+  it("moves a canonical conversation between Projects and out without changing folder, selection, or transcript", async () => {
+    const projectA = { id: "p-a", name: "Project A", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    const projectB = { id: "p-b", name: "Project B", description: null, instructions: null, is_archived: false, created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", contract_version: "v1" as const };
+    let assignedProject: string | null = null;
+    const projectAssignments: Array<string | null> = [];
+    const canonical = { conversation_id: "move-me", title: "Move me", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: "folder-a", project_id: null, contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValue({ projects: [projectA, projectB], contract_version: "v1" });
+    vi.mocked(listConversations).mockResolvedValue({ conversations: [canonical], contract_version: "v1" });
+    vi.mocked(listConversationFolders).mockResolvedValue({ folders: [{ id: "folder-a", name: "Folder A", created_at: canonical.created_at, updated_at: canonical.updated_at, contract_version: "v1" }], contract_version: "v1" });
+    vi.mocked(listMessages).mockResolvedValue({ contract_version: "v1", conversation_id: canonical.conversation_id, messages: [
+      { message_id: "user-existing", conversation_id: canonical.conversation_id, role: "user", content: "Transcript stays", status: "complete", created_at: canonical.created_at, updated_at: canonical.created_at, contract_version: "v1" },
+    ] });
+    vi.mocked(listProjectConversations).mockImplementation(async (_client, projectId) => ({
+      contract_version: "v1",
+      conversations: assignedProject === projectId ? [{ ...canonical, project_id: projectId }] : [],
+    }));
+    vi.mocked(setConversationProject).mockImplementation(async (_client, _id, request) => {
+      assignedProject = request.project_id;
+      projectAssignments.push(request.project_id);
+      return { ...canonical, project_id: request.project_id };
+    });
+    render(<AppWorkspace client={client} />);
+    expect(await screen.findByText("Transcript stays")).toBeTruthy();
+    vi.mocked(startRun).mockResolvedValueOnce({ run_id: "move-run", status: "running", contract_version: "v1" });
+    let runSignal: AbortSignal | undefined;
+    vi.mocked(streamRun).mockImplementationOnce(async (_client, _runId, options) => {
+      runSignal = options.signal;
+      await new Promise<void>((resolve) => {
+        if (options.signal == null || options.signal.aborted) return resolve();
+        options.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep this run" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamRun).toHaveBeenCalled());
+
+    const openActions = () => fireEvent.click(screen.getAllByLabelText("Conversation actions for Move me")[0]);
+    const moveTo = (projectName: string) => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: projectName }));
+    };
+    openActions();
+    moveTo("Project A");
+    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: "p-a" }));
+    expect(screen.getByText("Transcript stays")).toBeTruthy();
+    expect(runSignal?.aborted).toBe(false);
+    expect(screen.getByRole("button", { name: "Conversation actions for Move me" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand Project A" }));
+    expect((await screen.findAllByLabelText("Conversation actions for Move me")).length).toBe(1);
+    openActions();
+    moveTo("Project B");
+    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: "p-b" }));
+    expect(screen.getByText("Transcript stays")).toBeTruthy();
+
+    openActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Project" }));
+    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: null }));
+    expect(screen.getByText("Transcript stays")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collapse Folder A" })).toBeTruthy();
+    expect(projectAssignments).toEqual(["p-a", "p-b", null]);
+  });
+
+  it("updates Project conversation pin/archive metadata without losing membership", async () => {
+    const project = { id: "p-meta", name: "Metadata Project", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    const canonical = { conversation_id: "metadata-chat", title: "Metadata chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: project.id, contract_version: "v1" as const };
+    vi.mocked(listProjects).mockResolvedValueOnce({ projects: [project], contract_version: "v1" });
+    vi.mocked(listConversations).mockResolvedValueOnce({ conversations: [canonical], contract_version: "v1" });
+    vi.mocked(listProjectConversations).mockResolvedValue({ conversations: [canonical], contract_version: "v1" });
+    vi.mocked(setConversationPinned).mockResolvedValue({ ...canonical, is_pinned: true });
+    vi.mocked(setConversationArchived).mockResolvedValue({ ...canonical, is_pinned: true, is_archived: true });
+    render(<AppWorkspace client={client} />);
+    await screen.findByText("Metadata chat");
+    fireEvent.click(screen.getByRole("button", { name: "Expand Metadata Project" }));
+    await screen.findByRole("button", { name: "Metadata chat" });
+    const openActions = () => fireEvent.click(screen.getByLabelText("Conversation actions for Metadata chat"));
+    openActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(setConversationPinned).toHaveBeenCalledWith(client, "metadata-chat", { is_pinned: true }));
+    openActions();
+    expect(screen.getByRole("menuitem", { name: "Unpin" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(setConversationArchived).toHaveBeenCalledWith(client, "metadata-chat", { is_archived: true }));
+    expect(screen.getByRole("button", { name: "Metadata chat" })).toBeTruthy();
+    expect(listProjectConversations).toHaveBeenCalledWith(client, project.id);
+  });
+
+  it("loads a direct Project route on refresh and keeps background run observation across navigation", async () => {
+    window.history.replaceState(null, "", "/projects/p-1");
+    vi.mocked(listProjects).mockResolvedValue({
+      projects: [{ id: "p-1", name: "AVA Engineering", description: null, instructions: "Inert", is_archived: true, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }],
+      contract_version: "v1",
+    });
+    vi.mocked(getProject).mockResolvedValue({
+      id: "p-1", name: "AVA Engineering", description: null, instructions: "Inert", is_archived: true,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1",
+    });
+    render(<AppWorkspace client={client} />);
+    expect(await screen.findByRole("heading", { name: "AVA Engineering" })).toBeTruthy();
+    expect(getProject).toHaveBeenCalledWith(client, "p-1");
+    fireEvent.click(screen.getByRole("button", { name: "Back to Projects" }));
+    await screen.findByRole("heading", { name: "Projects" });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    await screen.findByLabelText("Message");
+    vi.mocked(startRun).mockResolvedValueOnce({
+      run_id: "run-project-nav",
+      status: "running",
+      assistant_message_id: "assistant-project-nav",
+      contract_version: "v1",
+    });
+    let runSignal: AbortSignal | undefined;
+    vi.mocked(streamRun).mockImplementationOnce(async (_apiClient, _runId, options) => {
+      runSignal = options.signal;
+      await new Promise<void>((resolve) => {
+        if (options.signal == null || options.signal.aborted) return resolve();
+        options.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep streaming" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamRun).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("tab", { name: "Projects" }));
+    await screen.findByRole("heading", { name: "Projects" });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("heading", { name: "AVA Engineering" })).toBeTruthy();
+    expect(screen.getByLabelText("Archived Project")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+    expect(await screen.findByText("No files in this Project yet.")).toBeTruthy();
+    expect(runSignal?.aborted).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    expect((await screen.findAllByText("Keep streaming")).length).toBeGreaterThan(0);
+    expect(runSignal?.aborted).toBe(false);
+  });
+
+  it("shows a safe not-found state for a directly refreshed unknown Project route", async () => {
+    window.history.replaceState(null, "", "/projects/missing-project");
+    vi.mocked(getProject).mockRejectedValueOnce(new ApiError(
+      "Request failed: 404", 404, { error_code: "project_not_found" },
+    ));
+    render(<AppWorkspace client={client} />);
+    expect(await screen.findByRole("heading", { name: "Project not found" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Projects" }).getAttribute("aria-selected")).toBe("true");
+    expect(getProject).toHaveBeenCalledWith(client, "missing-project");
   });
 
   it("starts in the chat workspace with the document workspace closed", () => {
