@@ -1,3 +1,4 @@
+# Keep native validation manually dispatchable after initial repository setup.
 name: AVA Phase 6.11 filesystem security
 
 on:
