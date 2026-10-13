@@ -84,7 +84,8 @@ async def test_native_filesystem_shared_read_list_info_bounded_and_deterministic
     service = _service(tmp_path)
 
     listing = await _invoke(service, "workspace.list_files", ".", limit=1)
-    assert listing.result is not None and listing.result.output is not None
+    assert listing.result is not None, "native list_files returned no result"
+    assert listing.result.output is not None, f"native list_files failed: {listing.result.error}"
     assert listing.result.output["entries"][0]["name"] == "A.txt"
     assert listing.result.output["next_cursor"] == "1"
     read = await _invoke(service, "workspace.read_file", "A.txt")

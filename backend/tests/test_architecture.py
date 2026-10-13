@@ -2245,7 +2245,7 @@ def test_frontend_does_not_read_execution_environment() -> None:
         for path in (frontend / package / "src").rglob("*"):
             if path.suffix not in {".ts", ".tsx"} or ".test." in path.name:
                 continue
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             assert not any(name in source for name in (
                 "AVA_AGENT_RUNTIME", "AVA_MODEL_PROVIDER", "AVA_MODEL_NAME", "AVA_MODEL_ID",
                 "AVA_MODEL_HOSTING_MODE", "AVA_LOCAL_MODEL_BASE_URL",
