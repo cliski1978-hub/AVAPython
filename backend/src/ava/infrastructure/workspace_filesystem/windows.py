@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import os
 import re
 from ctypes import wintypes
@@ -52,6 +53,7 @@ _DRIVE_FIXED = 3
 _ERROR_NO_MORE_FILES = 18
 _STATUS_NO_MORE_FILES = 0x80000006
 _STATUS_NO_SUCH_FILE = 0xC000000F
+_LOGGER = logging.getLogger(__name__)
 
 
 class _UnicodeString(ctypes.Structure):
@@ -327,6 +329,8 @@ class WindowsWorkspaceFilesystemAdapter:
                 return _error(invocation, "secure_filesystem_unavailable", "Secure Workspace access is unavailable.")
             return _error(invocation, "workspace_access_failed", "The Workspace entry could not be accessed.")
         except Exception:
+            if os.environ.get("AVA_PHASE_6_11_WINDOWS_DIAGNOSTICS") == "1":
+                _LOGGER.exception("[DEBUG-AVA611-WINDOWS] Native Workspace operation failed")
             return _error(invocation, "tool_execution_failed", "The Workspace tool could not complete.")
 
 
