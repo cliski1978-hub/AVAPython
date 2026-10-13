@@ -294,16 +294,20 @@ architecture guards. Ruff passed across `backend/src` and `backend/tests`;
 strict mypy passed across all 286 AVA source files. The Linux adapter continues
 to use the original `openat2` implementation and passed its adversarial tests.
 
-Windows validation: **not run**. The authenticated GitHub connection lists a
-candidate `cliski1978-hub/AVA` repository, but the local checkout has no Git
-remote and its current `master` HEAD
-(`ceeff83798d80d885d7b243977d247bc3181f894`) does not exist in the connected
-repositories. The checkout also contains extensive unrelated pre-existing
-working-tree changes, so a Phase 6.11-only commit cannot be safely prepared
-from the current state. No branch was pushed and no workflow was triggered.
-To run native validation, place these Phase 6.11 changes on the verified AVA
-repository branch and dispatch the `AVA Phase 6.11 filesystem security`
-workflow or open a pull request containing the relevant paths.
+Windows validation: **not run**. The user-created target repository,
+`cliski1978-hub/AVAPython`, was verified to be public and empty, and the user
+explicitly authorized using it. The reviewed implementation snapshot was
+committed locally as `3ecc2d9` (`Import AVA implementation and Phase 6.11
+Windows validation`) on `phase-6.11-windows-validation`; local `master` history
+was retained, and local `main` points to the same snapshot. The `origin` remote
+is configured for the requested repository. The push was blocked because this
+environment has no Git or SSH credential configured and Git could not prompt
+for a GitHub username. No remote branch was created and no Actions run was
+triggered. The authenticated GitHub connector can inspect the repository but
+does not provide Git transport for uploading this local commit and its history.
+After GitHub Git credentials are configured in this environment, push `master`,
+`main`, and `phase-6.11-windows-validation` without force; the Phase 6.11
+workflow will then run on the pushed validation branch.
 
 Production dispatch remains unavailable: no trusted authority issuer,
 production executor mapping, or durable invocation reservation adapter has
