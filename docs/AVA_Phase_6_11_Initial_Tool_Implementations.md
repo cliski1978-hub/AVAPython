@@ -11,12 +11,12 @@ execution-authority issuer, executor mapping, or durable invocation
 reservation adapter, so production dispatch remains unavailable.
 
 Linux adapter behavior passed the focused functional and adversarial tests on
-the current Linux host. Windows handle-based implementation and native
-security tests are now present, but the Windows tests could not run because no
-Windows host or verified remote workflow target was available in this
-environment. **Phase 6.11 acceptance is PARTIAL** until mandatory Windows
-Actions validation passes. Do not claim certified local Windows, Windows EC2,
-or Windows Azure VM Workspace access before that validation.
+the current Linux host. The Windows handle-based implementation passed its
+native NTFS security tests on GitHub Actions `windows-2025`, alongside the
+shared filesystem contracts. **Phase 6.11 acceptance is PASS** for the
+implemented tools and required cross-platform validation. This CI result does
+not certify every Windows workstation or cloud deployment configuration, and
+production dispatch remains unavailable as described below.
 
 The owner-supplied Phase 6.11 briefs govern this work. The checked-in
 `AVA_PHASE_6_IMPLEMENTATION_OUTLINE.md` retains historical numbering that calls
@@ -152,19 +152,19 @@ and unsupported filesystems, and fails closed when native APIs are unavailable.
 It pins objects and prevents rename/replacement while handles remain open; it
 does not provide a transactional snapshot against a local writer with write
 sharing, nor can it prevent privileged host actors from changing filesystem
-contents. Native Windows review and execution remain required. Windows tests
-are **not validated** and must not be counted as passing based on Linux
-compilation or mock behavior.
+contents. The native Windows CI job passed on `windows-2025` with NTFS fixture
+capability verified; broader deployment-specific validation remains outside
+this phase.
 
 ## Deployment architecture and support matrix
 
 | Environment | Local filesystem adapter | Additional requirements |
 |---|---|---|
-| Windows workstation | Adapter implemented; **not yet certified** | Native Windows security validation required; production dispatch remains unavailable |
+| Windows workstation | Adapter implemented; native `windows-2025` CI validation passed | Validate the target workstation's NTFS and host configuration; production dispatch remains unavailable |
 | Linux workstation | Linux `openat2` adapter on supported local filesystems | Kernel/security-capability probe; current-host tests passed |
-| Windows EC2 | Adapter implemented; **not yet certified** | Same native Windows validation; host hardening |
+| Windows EC2 | Adapter implemented; native `windows-2025` CI validation passed | Validate the target VM's NTFS and host configuration; host hardening |
 | Linux EC2 | Linux `openat2` adapter on supported local filesystems | Host hardening, supported kernel/filesystem, durable production state |
-| Windows Azure VM | Adapter implemented; **not yet certified** | Same native Windows validation; host hardening |
+| Windows Azure VM | Adapter implemented; native `windows-2025` CI validation passed | Validate the target VM's NTFS and host configuration; host hardening |
 | Linux Azure VM | Linux `openat2` adapter on supported local filesystems | Host hardening, supported kernel/filesystem, durable production state |
 | Databricks notebook client | Adapter on the AVA backend host | Notebook calls AVA through API/Python SDK; notebook OS does not choose adapter |
 | Databricks App | Linux adapter only if the app runtime supports required syscalls/filesystem | Capability probe; approved Workspace mapping; external durable persistence; no assumed unrestricted paths |
@@ -173,8 +173,10 @@ The notebook pattern is `Databricks notebook → AVA API/Python SDK → trusted 
 backend composition → execution-service policy → backend-host adapter`. The
 notebook does not embed or select AVA's execution system. Linux EC2/Azure VM
 and eligible Linux Databricks App deployments use the Linux adapter based on
-the server's actual host capabilities, not the cloud brand. Windows deployment
-scenarios remain unavailable pending the native adapter.
+the server's actual host capabilities, not the cloud brand. Windows adapter
+selection is implemented and native CI validation passed; production tool
+dispatch remains unavailable until its authority and reservation dependencies
+are implemented.
 
 Databricks Apps may have ephemeral local storage and restricted syscalls. The
 Linux adapter probes `openat2`, filesystem type, and opened directory identity
@@ -229,10 +231,13 @@ Workspace access, Phase 6.8 approvals, and architecture guards:
   symlink-retargeting races, and unsupported adapter behavior.
 - Production catalog tests confirm all three definitions are registered,
   feature gates default off, and production executor mappings remain empty.
-- Full backend Ruff check: **passed**.
-- Strict mypy: **passed** across all 286 `src/ava` files.
+- Full backend Ruff check on Linux: **passed**.
+- Strict mypy on Linux: **passed** across all 286 `src/ava` files. The workflow
+  runs mypy on Linux because Windows' standard-library stubs omit POSIX APIs
+  used by the Linux sandbox and filesystem adapters.
 - Windows native security test module: **3 skipped** on Linux because native
-  Windows APIs are unavailable. This is not Windows validation.
+  Windows APIs are unavailable; the native Windows job separately passed all
+  three tests on NTFS.
 - Frontend validation was not run because this phase changed no frontend
   contracts or UI. Phase 6.9 frontend acceptance remains **PARTIAL — dependency
   installation blocked by missing pnpm cache entries and registry DNS
@@ -265,9 +270,9 @@ replacement races. `NtQueryDirectoryFile` enumerates from directory handles;
 `ReadFile` reads from the pinned regular-file handle. Junctions, symbolic
 links, mount-point reparse paths, multi-link files, ADS syntax,
 network/device/absolute/drive-relative paths, and unsupported volumes are
-rejected. The code has not run on Windows; native API structure layout, NTFS
-behavior, runner permissions, and race behavior remain unverified until the
-native job passes.
+rejected. The adapter ran on the native `windows-2025` NTFS runner and passed
+the shared contracts and native Windows security tests. Other Windows builds
+and deployment configurations still require their own validation.
 
 The shared contract suite is
 `backend/tests/test_workspace_filesystem_contract.py`; the native Windows
@@ -281,11 +286,11 @@ a pass.
 The workflow is
 `.github/workflows/ava-phase-6-11-filesystem-security.yml`. It defines
 `ubuntu-22.04` and `windows-2025` jobs, uses the supported
-`python -m pip install -e ".[dev]"` installation, and runs shared filesystem
-and authorization tests, OS-specific security tests, Ruff, and strict mypy. It
-is limited to relevant source/test changes plus manual dispatch, grants only
-`contents: read`, and pins checkout and setup-python to verified full commit
-SHAs. No workflow run link exists yet.
+`python -m pip install -e ".[dev,openhands-tools]"` installation, and runs
+shared filesystem and authorization tests, OS-specific security tests, Ruff,
+and strict mypy on Linux. It is limited to relevant source/test changes plus
+manual dispatch, grants only `contents: read`, and pins checkout and setup-
+python to verified full commit SHAs.
 
 Linux validation on the current host: **259 passed, 3 Windows-only tests
 skipped** across filesystem contracts, the Linux adversarial suite, registry,
@@ -294,31 +299,35 @@ architecture guards. Ruff passed across `backend/src` and `backend/tests`;
 strict mypy passed across all 286 AVA source files. The Linux adapter continues
 to use the original `openat2` implementation and passed its adversarial tests.
 
-Windows validation: **not run**. The user-created target repository,
-`cliski1978-hub/AVAPython`, was verified to be public and empty, and the user
-explicitly authorized using it. The reviewed implementation snapshot was
-committed locally as `3ecc2d9` (`Import AVA implementation and Phase 6.11
-Windows validation`) on `phase-6.11-windows-validation`; local `master` history
-was retained, and local `main` points to the same snapshot. The `origin` remote
-is configured for the requested repository. The push was blocked because this
-environment has no Git or SSH credential configured and Git could not prompt
-for a GitHub username. No remote branch was created and no Actions run was
-triggered. The authenticated GitHub connector can inspect the repository but
-does not provide Git transport for uploading this local commit and its history.
-After GitHub Git credentials are configured in this environment, push `master`,
-`main`, and `phase-6.11-windows-validation` without force; the Phase 6.11
-workflow will then run on the pushed validation branch.
+Windows validation passed on GitHub Actions run
+[#38471535309](https://github.com/cliski1978-hub/AVAPython/actions/runs/38471535309)
+for implementation commit `dd35efc73ff8637384ace3c1b6e11c560c320578` on
+`phase-6.11-windows-validation`. The `windows-2025` job verified NTFS and
+reparse-point fixture capability, passed **246 shared filesystem and
+authorization tests**, **3 native Windows filesystem tests**, and Ruff. The
+`ubuntu-22.04` job passed the shared suite plus Linux adversarial tests (**259
+passed, 3 Windows-only skipped**), Ruff, and strict mypy across 286 source
+files. The first Windows run exposed a ctypes buffer pointer mismatch, which
+was fixed before this passing run. A subsequent Windows run exposed the
+platform-specific mypy stub limitation; the final workflow scopes strict mypy
+to Linux while retaining native tests and Ruff on Windows.
+
+The verified GitHub repository is `cliski1978-hub/AVAPython` (public, as
+explicitly accepted by the owner). The upload preserves the existing local
+history: `master` remains at its original base, while `main` and
+`phase-6.11-windows-validation` carry the implementation and validation
+history. No force-push or history rewrite was used.
 
 Production dispatch remains unavailable: no trusted authority issuer,
 production executor mapping, or durable invocation reservation adapter has
-been added. **Final Phase 6.11 acceptance: PARTIAL** — the native Windows
-implementation and validation workflow are present, but required Windows
-security validation remains incomplete. No Phase 6.12 implementation was
-started.
+been added. This limitation is by design for this phase; it does not change
+the acceptance result for Phase 6.11's initial tool implementations and native
+validation. **Final Phase 6.11 acceptance: PASS.** No Phase 6.12
+implementation was started.
 
 ## Phase 6.12 readiness
 
 The Linux tool catalog, normalized adapter seam, fail-closed production
-boundary, and Windows adapter implementation are ready for review. Overall
-cross-platform Phase 6.11 acceptance remains **PARTIAL pending native Windows
-validation**. No Phase 6.12 implementation was started here.
+boundary, and Windows adapter implementation passed the required Linux and
+native Windows validation. Overall Phase 6.11 acceptance is **PASS**. No Phase
+6.12 implementation was started here.
