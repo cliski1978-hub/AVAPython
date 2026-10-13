@@ -50,8 +50,16 @@ export async function setProjectArchived(
   })).json();
 }
 
-export async function deleteProject(client: ApiClient, projectId: string): Promise<void> {
-  await client.request(path(projectId), { method: "DELETE" });
+export async function deleteProject(
+  client: ApiClient,
+  projectId: string,
+  options: { deleteConversations?: boolean } = {},
+): Promise<string[] | undefined> {
+  const query = options.deleteConversations === true ? "?delete_conversations=true" : "";
+  const response = await client.request(`${path(projectId)}${query}`, { method: "DELETE" });
+  if (options.deleteConversations !== true) return undefined;
+  const result = await response.json() as { deleted_conversation_ids: string[] };
+  return result.deleted_conversation_ids;
 }
 
 export async function getProjectExecutionDefaults(

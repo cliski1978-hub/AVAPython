@@ -23,7 +23,10 @@ from ava.repositories.core_prompt_assignment import CorePromptScopeType
 from ava.repositories.message_repository import MessageRecord
 from ava.repositories.project import ProjectRecord
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
-from ava.runtimes.adapters.openhands.openhands_runtime import _conversation_prompt
+from ava.runtimes.adapters.openhands.openhands_runtime import (
+    _ava_system_prompt_suffix,
+    _conversation_prompt,
+)
 from ava.services.context_construction_service import ContextConstructionService
 from ava.services.conversation_folder_store import ConversationFolderStore
 from ava.services.conversation_store import ConversationStore
@@ -140,6 +143,7 @@ def test_native_provider_receives_root_core_project_then_unchanged_history_for_s
         world = PromptWorld()
         exact_text = "Line one\n\n  Indented line\n日本語 →"
         global_prompt = world.create_prompt("Global Base", prompt_text=exact_text)
+        inherited_prompt = world.create_prompt("Inherited Global", prompt_text="Included without assignment.")
         runtime_prompt = world.create_prompt("Runtime Native")
         capability_prompt = world.create_prompt("Run Capability")
         project_prompt = world.create_prompt("Project Rules")
@@ -196,9 +200,11 @@ def test_native_provider_receives_root_core_project_then_unchanged_history_for_s
         included_ids = [item.id for item in agent_context.prompt_layers.resolved_core_prompts]
         assert included_ids == [item.core_prompt_id for item in preview.enabled_prompts]
         assert folder_suppressed.id not in included_ids and disabled_definition.id not in included_ids
+        assert inherited_prompt.id in included_ids
         assert len([item for item in first.messages if item.role == "user"]) == 2
         assert first.messages[-1].content == "current task"
         assert exact_text in [item.content for item in first.messages]
+        assert "Included without assignment." in [item.content for item in first.messages]
         assert provider.requests
 
     asyncio.run(scenario())
@@ -244,11 +250,103 @@ def test_openhands_translates_layers_with_explicit_boundaries_and_preserves_hist
         capabilities=set(),
     )
     rendered = _conversation_prompt(context, "ignored prompt fallback")
-    assert rendered.index("[AVA ROOT SYSTEM]") < rendered.index("[AVA CORE PROMPT: Architecture Guardian]")
-    assert rendered.index("[AVA CORE PROMPT: Architecture Guardian]") < rendered.index("[PROJECT INSTRUCTIONS]")
-    assert rendered.index("[PROJECT INSTRUCTIONS]") < rendered.index("User: before")
+    system_suffix = _ava_system_prompt_suffix(context)
+    assert system_suffix is not None
+    root_index = system_suffix.index("[AVA ROOT SYSTEM]")
+    core_index = system_suffix.index("[AVA CORE PROMPT: Architecture Guardian]")
+    project_index = system_suffix.index("[PROJECT INSTRUCTIONS]")
+    assert root_index < core_index < project_index
+    assert "[AVA ROOT SYSTEM]" not in rendered
+    assert prompt.prompt_text not in rendered
+    assert "Project marker β" not in rendered
+    assert "[PROJECT INSTRUCTIONS]" not in rendered
+    assert rendered.index("User: before") >= 0
     assert rendered.index("User: before") < rendered.index("Assistant: answer") < rendered.index("User: current")
-    assert prompt.prompt_text in rendered
+    assert prompt.prompt_text in system_suffix
+
+
+def test_openhands_model_messages_keep_resolved_instructions_in_system_role(tmp_path) -> None:
+    pytest.importorskip("openhands.sdk")
+    from openhands.sdk import LLM
+    from openhands.sdk.context import AgentContext
+    from openhands.sdk.event.base import LLMConvertibleEvent
+    from openhands.sdk.workspace import LocalWorkspace
+
+    from ava.runtimes.adapters.openhands.conversation import ControlledAgent, ControlledConversation
+
+    world = PromptWorld()
+    world.conversations.create("normal-assigned", title="Normal assigned")
+    world.conversations.create("normal-unassigned", title="Normal unassigned")
+    normal_prompt = world.create_prompt("Normal only", prompt_text="Always begin with NORMAL-MARKER.")
+    project_prompt_b = world.create_prompt("Project Beta", prompt_text="Project prompt B.")
+    project_prompt_a = world.create_prompt("Project Alpha", prompt_text="Project prompt A.")
+    for prompt in (normal_prompt, project_prompt_a, project_prompt_b):
+        world.assign(prompt.id, CorePromptScopeType.GLOBAL, None, "disable")
+    world.assign(normal_prompt.id, CorePromptScopeType.CONVERSATION, "normal-assigned", "enable")
+    world.assign(project_prompt_b.id, CorePromptScopeType.PROJECT, "project-a", "enable")
+    world.assign(project_prompt_a.id, CorePromptScopeType.PROJECT, "project-a", "enable")
+
+    def model_messages(conversation_id: str, messages: list[ContextMessage]):
+        context = world.context_service.build(
+            RunContext(conversation_id=conversation_id, messages=messages),
+            runtime_key="openhands",
+            capabilities=set(),
+        )
+        agent = ControlledAgent(
+            llm=LLM(model="openai/prompt-test", api_key="unused"),
+            include_default_tools=[],
+            agent_context=AgentContext(
+                system_message_suffix=_ava_system_prompt_suffix(context),
+                current_datetime=None,
+            ),
+        )
+        conversation = ControlledConversation(
+            agent=agent,
+            workspace=LocalWorkspace(working_dir=tmp_path),
+            persistence_dir=None,
+            visualizer=None,
+        )
+        conversation.send_message(_conversation_prompt(context, "current request"))
+        events = [event for event in conversation.state.events if isinstance(event, LLMConvertibleEvent)]
+        return context, LLMConvertibleEvent.events_to_messages(events)
+
+    history = [
+        ContextMessage(role=MessageRole.USER, content="older user"),
+        ContextMessage(role=MessageRole.ASSISTANT, content="older answer"),
+        ContextMessage(role=MessageRole.USER, content="current request"),
+    ]
+    normal_context, normal_messages = model_messages("normal-assigned", history)
+    assert [message.role for message in normal_messages] == ["system", "user"]
+    normal_system = "\n".join(part.text for part in normal_messages[0].content if hasattr(part, "text"))
+    assert normal_system.index(AVA_ROOT_SYSTEM_PROMPT) < normal_system.index("Always begin with NORMAL-MARKER.")
+    assert "Project prompt" not in normal_system
+    assert "Project text" not in normal_system
+    assert "NORMAL-MARKER" not in "\n".join(part.text for part in normal_messages[1].content if hasattr(part, "text"))
+    assert normal_messages[1].content[-1].text.endswith("User: current request")
+    assert [item.name for item in normal_context.prompt_layers.resolved_core_prompts] == ["Normal only"]
+
+    unassigned_context, unassigned_messages = model_messages("normal-unassigned", [history[-1]])
+    assert [message.role for message in unassigned_messages] == ["system", "user"]
+    unassigned_system = "\n".join(part.text for part in unassigned_messages[0].content if hasattr(part, "text"))
+    assert AVA_ROOT_SYSTEM_PROMPT in unassigned_system
+    assert "NORMAL-MARKER" not in unassigned_system
+    assert unassigned_context.prompt_layers.resolved_core_prompts == []
+
+    project_context, project_messages = model_messages("conversation-a", history)
+    assert [message.role for message in project_messages] == ["system", "user"]
+    project_system = "\n".join(part.text for part in project_messages[0].content if hasattr(part, "text"))
+    root_index = project_system.index(AVA_ROOT_SYSTEM_PROMPT)
+    alpha_index = project_system.index("Project prompt A.")
+    beta_index = project_system.index("Project prompt B.")
+    instructions_index = project_system.index("Project text\n  preserve spaces")
+    assert root_index < alpha_index < beta_index < instructions_index
+    project_user = "\n".join(part.text for part in project_messages[1].content if hasattr(part, "text"))
+    assert project_user.index("User: older user") < project_user.index("Assistant: older answer")
+    assert project_user.index("Assistant: older answer") < project_user.index("User: current request")
+    assert [item.name for item in project_context.prompt_layers.resolved_core_prompts] == [
+        "Project Alpha",
+        "Project Beta",
+    ]
 
 
 def test_runtime_capability_and_conversation_updates_apply_on_next_execution() -> None:
@@ -259,6 +357,8 @@ def test_runtime_capability_and_conversation_updates_apply_on_next_execution() -
     world.assign(runtime_prompt.id, CorePromptScopeType.RUNTIME, "native", "enable")
     world.assign(capability_prompt.id, CorePromptScopeType.CAPABILITY, "runs", "enable")
     world.assign(conversation_prompt.id, CorePromptScopeType.CONVERSATION, "conversation-a", "enable")
+    for prompt in (runtime_prompt, capability_prompt, conversation_prompt):
+        world.assign(prompt.id, CorePromptScopeType.GLOBAL, None, "disable")
 
     applicable = world.context_service.build(
         RunContext(conversation_id="conversation-a"),
@@ -314,6 +414,8 @@ def test_project_and_folder_moves_change_the_next_execution_context() -> None:
     prompt_b = world.create_prompt("Project B Prompt")
     folder_a = world.create_prompt("Folder A Prompt")
     folder_b = world.create_prompt("Folder B Prompt")
+    for prompt in (prompt_a, prompt_b, folder_a, folder_b):
+        world.assign(prompt.id, CorePromptScopeType.GLOBAL, None, "disable")
     world.assign(prompt_a.id, CorePromptScopeType.PROJECT, "project-a", "enable")
     world.assign(prompt_b.id, CorePromptScopeType.PROJECT, "project-b", "enable")
     world.assign(folder_a.id, CorePromptScopeType.FOLDER, "folder-a", "enable")

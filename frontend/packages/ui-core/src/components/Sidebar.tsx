@@ -1,90 +1,47 @@
 import { type ReactNode } from "react";
-import { defaultTheme } from "../theme";
-import { IconButton } from "./IconButton";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { IconButton } from "./ui/icon-button";
 
 export interface SidebarProps {
   collapsed?: boolean;
+  width?: number;
   onToggle?: () => void;
   children?: ReactNode;
 }
 
-const t = defaultTheme;
-
-const EXPANDED_WIDTH = 260;
-const COLLAPSED_WIDTH = 40;
-
-export function Sidebar({ collapsed = false, onToggle, children }: SidebarProps) {
+export function Sidebar({ collapsed = false, width, onToggle, children }: SidebarProps) {
   const expanded = !collapsed;
 
   return (
     <aside
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        borderRight: `${t.border.width}px solid ${t.colors.border}`,
-        background: t.colors.surface,
-        overflow: "hidden",
-        flexShrink: 0,
-        transition: "width 200ms ease",
-        width: expanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH,
-        boxSizing: "border-box",
-      }}
+      aria-label="Conversation sidebar"
+      className="flex shrink-0 flex-col overflow-hidden border-r border-border bg-card text-card-foreground transition-[width] duration-200"
+      style={{ width: expanded ? width ?? "var(--ava-sidebar-width)" : "var(--ava-sidebar-collapsed-width)" }}
     >
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: expanded ? "space-between" : "center",
-          padding: expanded ? `0 ${t.spacing.md}px` : 0,
-          height: 40,
-          borderBottom: `${t.border.width}px solid ${t.colors.border}`,
-          boxSizing: "border-box",
-          flexShrink: 0,
-        }}
+        className={`flex h-11 shrink-0 items-center border-b border-border ${expanded ? "justify-between px-3" : "justify-center"}`}
       >
         {expanded && (
-          <span
-            style={{
-              fontSize: t.font.sizeXs,
-              fontWeight: t.font.weightSemibold,
-              color: t.colors.mutedText,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              whiteSpace: "nowrap",
-            }}
-          >
+          <span className="truncate text-xs font-semibold tracking-[0.06em] text-muted-foreground">
             Conversations
           </span>
         )}
         <IconButton
-          size="sm"
-          ariaLabel={expanded ? "Collapse sidebar" : "Expand sidebar"}
-          title={expanded ? "Collapse sidebar" : "Expand sidebar"}
+          size="compact"
+          icon={expanded ? PanelLeftClose : PanelLeftOpen}
+          label={expanded ? "Collapse conversation sidebar" : "Expand conversation sidebar"}
+          appearance="row-action"
+          className="shrink-0 bg-transparent hover:bg-transparent hover:text-foreground dark:hover:bg-black dark:hover:text-white"
           onClick={onToggle}
           disabled={onToggle == null}
-        >
-          {expanded ? "«" : "»"}
-        </IconButton>
+        />
       </div>
       {expanded && (
         <div
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: t.spacing.sm,
-          }}
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-2"
         >
           {children ?? (
-            <p
-              style={{
-                margin: 0,
-                padding: t.spacing.md,
-                color: t.colors.mutedText,
-                fontSize: t.font.sizeSm,
-                textAlign: "center",
-                fontStyle: "italic",
-              }}
-            >
+            <p className="m-0 p-3 text-center text-sm italic text-muted-foreground">
               No conversations yet
             </p>
           )}

@@ -13,7 +13,9 @@
 
 import { describe, expect, it } from "vitest";
 
-import { presentRunFailure, settingsSectionForFailure } from "./errorPresentation";
+import { ApiError } from "@ava/api-client";
+
+import { presentAvaError, presentRunFailure, settingsSectionForFailure } from "./errorPresentation";
 
 describe("restart interruption is explained but not sent to Settings", () => {
   it("names the restart as the reason in AVA-owned wording", () => {
@@ -39,5 +41,17 @@ describe("restart interruption is explained but not sent to Settings", () => {
     expect(settingsSectionForFailure("conversation_run_active")).toBeUndefined();
     expect(settingsSectionForFailure("run_not_found")).toBeUndefined();
     expect(settingsSectionForFailure(undefined)).toBeUndefined();
+  });
+});
+
+describe("presentAvaError", () => {
+  it("shows the backend's clear message for duplicate conversation attachment names", () => {
+    const message = 'A file named "SKILL.md" is already attached to this conversation. Remove or rename the existing file before uploading another.';
+    const error = new ApiError("Request failed: 409", 409, {
+      error_code: "conversation_attachment_name_conflict",
+      message,
+    });
+
+    expect(presentAvaError(error, "Unable to upload this file. Please try again.")).toBe(message);
   });
 });

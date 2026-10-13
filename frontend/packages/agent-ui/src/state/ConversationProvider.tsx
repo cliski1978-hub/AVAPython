@@ -9,14 +9,14 @@ import {
   type ReactNode,
 } from "react";
 import type { ApiClient } from "@ava/api-client";
-import { ApiError, createConversation, createProjectConversation, createConversationFolder, createMessage, deleteConversation, deleteConversationFolder as deleteFolderRequest, listConversationFolders, listConversations, listMessages, setConversationArchived as setConversationArchivedRequest, setConversationFolder as setConversationFolderRequest, setConversationPinned as setConversationPinnedRequest, setConversationProject as setConversationProjectRequest, updateConversationFolder } from "@ava/api-client";
+import { ApiError, createConversation, createProjectConversation, createConversationFolder, createMessage, deleteConversation, deleteConversationFolder as deleteFolderRequest, listConversationFolders, listConversations, listMessages, relocateConversation as relocateConversationRequest, setConversationArchived as setConversationArchivedRequest, setConversationPinned as setConversationPinnedRequest, setConversationProject as setConversationProjectRequest, updateConversationFolder } from "@ava/api-client";
 import { useEffect } from "react";
 
 import type {
   Conversation,
   ConversationRunState,
 } from "../types";
-import type { ConversationFolder } from "@ava/contracts";
+import type { ConversationFolder, RelocateConversationRequest } from "@ava/contracts";
 import {
   conversationReducer,
   getActiveConversation,
@@ -54,12 +54,13 @@ export interface ConversationManager {
   renameFolder: (id: string, name: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   moveConversation: (conversationId: string, folderId: string | null) => Promise<void>;
+  relocateConversation: (conversationId: string, destination: RelocateConversationRequest) => Promise<void>;
   createConversationInFolder: (folderId: string) => Promise<string>;
   createConversationInProject: (projectId: string) => Promise<string>;
   setConversationProject: (conversationId: string, projectId: string | null) => Promise<void>;
   setConversationPinned: (conversationId: string, isPinned: boolean) => Promise<void>;
   setConversationArchived: (conversationId: string, isArchived: boolean) => Promise<void>;
-  reconcileDeletedProject: (projectId: string) => void;
+  reconcileDeletedProject: (projectId: string, deletedConversationIds?: string[]) => void;
   setSearchQuery: (query: string) => void;
   activeConversation: Conversation | null;
   createConversation: () => Promise<void>;
@@ -104,13 +105,39 @@ export interface ConversationManager {
 
 const ConversationStateContext = createContext<ConversationManager | null>(null);
 
+const ACTIVE_CONVERSATION_KEY = "ava.activeConversationId";
+
+function readActiveConversationId(): string | null {
+  try {
+    return window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
+  } catch {
+    // Storage may be unavailable in embedded or privacy-restricted browsers.
+    return null;
+  }
+}
+
 export function ConversationProvider({ children, client }: { children: ReactNode; client: ApiClient }) {
-  const [state, dispatch] = useReducer(conversationReducer, {
+  const [state, dispatch] = useReducer(conversationReducer, undefined, () => ({
     conversations: [],
-    activeConversationId: null,
+    activeConversationId: readActiveConversationId(),
     loading: true,
     error: null,
-  });
+  }));
+
+  useEffect(() => {
+    // Only persist a selection after canonical collection validation. Failed
+    // startup/retry requests must not erase the remembered identity.
+    if (state.loading || state.loadError) return;
+    try {
+      if (state.activeConversationId == null) {
+        window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+      } else {
+        window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, state.activeConversationId);
+      }
+    } catch {
+      // Selection remains usable when browser storage is disabled.
+    }
+  }, [state.activeConversationId, state.loading, state.loadError]);
   const [searchQuery, setSearchQueryState] = useState("");
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -138,7 +165,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
   const folderCollectionGenerationRef = useRef(0);
   const searchGenerationRef = useRef(0);
   const orderGenerationRef = useRef(0);
-  const folderMovesRef = useRef(new Map<string, { targetFolderId: string | null; promise: Promise<void> }>());
+  const folderMovesRef = useRef(new Map<string, { target: RelocateConversationRequest; promise: Promise<void> }>());
   const archiveMovesRef = useRef(new Map<string, { targetArchived: boolean; promise: Promise<void> }>());
 
   const fetchCanonicalConversationOrder = async (): Promise<{
@@ -198,7 +225,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
         const messages = await listMessages(client, conversation.conversation_id);
         return { id: conversation.conversation_id, title: conversation.title, createdAt: conversation.created_at,
           isPinned: conversation.is_pinned, isArchived: conversation.is_archived, folderId: conversation.folder_id,
-          projectId: conversation.project_id,
+          projectId: conversation.project_id, isTitleCustom: conversation.is_title_custom === true,
           messages: associateAssistantMessages(messages.messages.map((message) => ({ id: message.message_id, role: message.role, status: message.status, content: message.content, sourceUserMessageId: message.source_user_message_id ?? undefined, sourceRunId: message.source_run_id, errorCode: message.error_code ?? undefined, createdAt: message.created_at }))), run: undefined };
       }));
       if (conversationCollectionGenerationRef.current === generation) dispatch({
@@ -287,6 +314,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
             isArchived: item.is_archived,
             folderId: item.folder_id,
             projectId: item.project_id,
+            isTitleCustom: item.is_title_custom === true,
           };
         }));
       }).catch(() => {
@@ -302,6 +330,71 @@ export function ConversationProvider({ children, client }: { children: ReactNode
       clearTimeout(timeout);
     };
   }, [client, searchQuery, searchRevision]);
+
+  const performRelocation = async (
+    conversationId: string,
+    destination: RelocateConversationRequest,
+  ): Promise<void> => {
+    setFolderError(null);
+    const pending = folderMovesRef.current.get(conversationId);
+    if (pending != null) {
+      if (pending.target.destination_type === destination.destination_type &&
+          pending.target.destination_id === destination.destination_id) return pending.promise;
+      pending.target = destination;
+      return pending.promise;
+    }
+    const move = { target: destination, promise: Promise.resolve() };
+    const operation = (async () => {
+      let requested = destination;
+      while (true) {
+        const destinationWasKnown = requested.destination_type !== "folder" ||
+          foldersRef.current.some((folder) => folder.id === requested.destination_id);
+        let updated: Awaited<ReturnType<typeof relocateConversationRequest>>;
+        try {
+          updated = await relocateConversationRequest(client, conversationId, requested);
+        } catch (error) {
+          if (move.target !== requested) {
+            requested = move.target;
+            continue;
+          }
+          if (error instanceof ApiError && error.body != null && typeof error.body === "object" &&
+              "error_code" in error.body && error.body.error_code === "conversation_folder_not_found") {
+            await Promise.allSettled([refreshFolders(), refreshFolderAssignments()]);
+            setFolderError("That folder no longer exists. Conversation assignments were refreshed.");
+            return;
+          }
+          throw error;
+        }
+        if (move.target !== requested) {
+          requested = move.target;
+          continue;
+        }
+        if (updated.folder_id != null && destinationWasKnown &&
+            !foldersRef.current.some((folder) => folder.id === updated.folder_id)) {
+          await refreshFolderAssignments();
+          return;
+        }
+        dispatch({ type: "conversation:relocate", conversationId, folderId: updated.folder_id, projectId: updated.project_id });
+        setSearchResults((current) => current?.map((item) => item.id === conversationId
+          ? { ...item, folderId: updated.folder_id, projectId: updated.project_id }
+          : item) ?? null);
+        if (searchQuery.trim()) {
+          searchGenerationRef.current += 1;
+          setSearchRevision((value) => value + 1);
+        }
+        return;
+      }
+    })();
+    move.promise = operation;
+    folderMovesRef.current.set(conversationId, move);
+    try {
+      await operation;
+    } finally {
+      if (folderMovesRef.current.get(conversationId) === move) {
+        folderMovesRef.current.delete(conversationId);
+      }
+    }
+  };
 
   const manager = useMemo<ConversationManager>(
     () => ({
@@ -365,73 +458,10 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           ? { ...conversation, folderId: null }
           : conversation) ?? null);
       },
-      moveConversation: async (conversationId, folderId) => {
-        setFolderError(null);
-        const currentConversation = stateRef.current.conversations.find((item) => item.id === conversationId);
-        const pending = folderMovesRef.current.get(conversationId);
-        if (pending != null) {
-          if (pending.targetFolderId === folderId) return pending.promise;
-          pending.targetFolderId = folderId;
-          return pending.promise;
-        }
-        if (currentConversation?.folderId === folderId) return;
-
-        const move = { targetFolderId: folderId, promise: Promise.resolve() };
-        const operation = (async () => {
-          let requestedFolderId = folderId;
-          while (true) {
-            const destinationWasKnown = requestedFolderId == null ||
-              foldersRef.current.some((folder) => folder.id === requestedFolderId);
-            let updated: Awaited<ReturnType<typeof setConversationFolderRequest>>;
-            try {
-              updated = await setConversationFolderRequest(client, conversationId, { folder_id: requestedFolderId });
-            } catch (error) {
-              if (move.targetFolderId !== requestedFolderId) {
-                requestedFolderId = move.targetFolderId;
-                continue;
-              }
-              if (error instanceof ApiError && error.body != null && typeof error.body === "object" &&
-                  "error_code" in error.body && error.body.error_code === "conversation_folder_not_found") {
-                await Promise.allSettled([refreshFolders(), refreshFolderAssignments()]);
-                setFolderError("That folder no longer exists. Conversation assignments were refreshed.");
-                return;
-              }
-              throw error;
-            }
-            if (move.targetFolderId !== requestedFolderId) {
-              requestedFolderId = move.targetFolderId;
-              continue;
-            }
-            if (updated.folder_id != null && destinationWasKnown &&
-                !foldersRef.current.some((folder) => folder.id === updated.folder_id)) {
-              // A Folder deleted locally while this request was pending must
-              // be reconciled from canonical assignments, not reintroduced.
-              await refreshFolderAssignments();
-              return;
-            }
-            // The response is canonical. Updating only the folder field keeps
-            // Project membership, selection, transcript, and active run intact.
-            dispatch({ type: "conversation:setFolder", conversationId, folderId: updated.folder_id });
-            setSearchResults((current) => current?.map((item) => item.id === conversationId
-              ? { ...item, folderId: updated.folder_id }
-              : item) ?? null);
-            if (searchQuery.trim()) {
-              searchGenerationRef.current += 1;
-              setSearchRevision((value) => value + 1);
-            }
-            return;
-          }
-        })();
-        move.promise = operation;
-        folderMovesRef.current.set(conversationId, move);
-        try {
-          await operation;
-        } finally {
-          if (folderMovesRef.current.get(conversationId) === move) {
-            folderMovesRef.current.delete(conversationId);
-          }
-        }
-      },
+      moveConversation: async (conversationId, folderId) => performRelocation(conversationId, folderId == null
+        ? { destination_type: "ungrouped" }
+        : { destination_type: "folder", destination_id: folderId }),
+      relocateConversation: performRelocation,
       createConversationInFolder: async (folderId) => {
         const created = await createConversation(client, { folder_id: folderId });
         deletedConversationIdsRef.current.delete(created.conversation_id);
@@ -444,6 +474,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           isArchived: created.is_archived,
           folderId: created.folder_id,
           projectId: created.project_id,
+          isTitleCustom: created.is_title_custom === true,
           messages: [],
           run: undefined,
         } });
@@ -468,6 +499,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
           isArchived: created.is_archived,
           folderId: created.folder_id,
           projectId: created.project_id,
+          isTitleCustom: created.is_title_custom === true,
           messages: [],
           run: undefined,
         } });
@@ -480,13 +512,29 @@ export function ConversationProvider({ children, client }: { children: ReactNode
         }
         return created.conversation_id;
       },
-      reconcileDeletedProject: (projectId) => {
+      reconcileDeletedProject: (projectId, deletedConversationIds = []) => {
+        let remaining = stateRef.current.conversations;
+        let activeId = stateRef.current.activeConversationId;
+        for (const id of deletedConversationIds) {
+          const index = remaining.findIndex((conversation) => conversation.id === id);
+          const next = remaining.filter((conversation) => conversation.id !== id);
+          const nextActiveId = activeId === id
+            ? next[Math.min(Math.max(index, 0), next.length - 1)]?.id ?? null
+            : activeId;
+          dispatch({ type: "conversation:delete", conversationId: id, activeConversationId: nextActiveId });
+          remaining = next;
+          activeId = nextActiveId;
+        }
+        if (deletedConversationIds.includes(selectedRef.current ?? "")) {
+          selectedRef.current = activeId;
+          loadGenerationRef.current += 1;
+        }
         for (const conversation of stateRef.current.conversations) {
-          if (conversation.projectId === projectId) {
+          if (conversation.projectId === projectId && !deletedConversationIds.includes(conversation.id)) {
             dispatch({ type: "conversation:setProject", conversationId: conversation.id, projectId: null });
           }
         }
-        setSearchResults((current) => current?.map((item) => item.projectId === projectId
+        setSearchResults((current) => current?.filter((item) => !deletedConversationIds.includes(item.id)).map((item) => item.projectId === projectId
           ? { ...item, projectId: null }
           : item) ?? null);
       },
@@ -531,6 +579,15 @@ export function ConversationProvider({ children, client }: { children: ReactNode
               continue;
             }
             dispatch({ type: "conversation:setArchived", conversationId, isArchived: updated.is_archived });
+            if (updated.is_archived && stateRef.current.activeConversationId === conversationId) {
+              const active = stateRef.current.conversations.filter((item) => !item.isArchived);
+              const previousIndex = active.findIndex((item) => item.id === conversationId);
+              const remaining = active.filter((item) => item.id !== conversationId);
+              const fallback = remaining[Math.min(Math.max(previousIndex, 0), remaining.length - 1)]?.id ?? null;
+              selectedRef.current = fallback;
+              loadGenerationRef.current += 1;
+              dispatch({ type: "conversation:select", id: fallback });
+            }
             if (searchQuery.trim()) {
               searchGenerationRef.current += 1;
               setSearchRevision((value) => value + 1);
@@ -566,7 +623,7 @@ export function ConversationProvider({ children, client }: { children: ReactNode
         dispatch({ type: "conversation:upsert", conversation: {
           id: created.conversation_id, title: created.title, createdAt: created.created_at,
           isPinned: created.is_pinned, isArchived: created.is_archived, folderId: created.folder_id,
-          projectId: created.project_id,
+          projectId: created.project_id, isTitleCustom: created.is_title_custom === true,
           messages: [], run: undefined,
         } });
         if (order.conversationIds != null && order.generation === orderGenerationRef.current) {
@@ -634,11 +691,11 @@ export function ConversationProvider({ children, client }: { children: ReactNode
       addUserMessage: async (conversationId, content) => {
         let resolvedConversationId = conversationId;
         if (resolvedConversationId == null) {
-          const created = await createConversation(client, { title: content.trim().slice(0, 40) });
+          const created = await createConversation(client);
           resolvedConversationId = created.conversation_id;
           deletedConversationIdsRef.current.delete(created.conversation_id);
           const order = await fetchCanonicalConversationOrder();
-          dispatch({ type: "conversation:upsert", conversation: { id: created.conversation_id, title: created.title, createdAt: created.created_at, messages: [], run: undefined } });
+          dispatch({ type: "conversation:upsert", conversation: { id: created.conversation_id, title: created.title, createdAt: created.created_at, isTitleCustom: created.is_title_custom === true, messages: [], run: undefined } });
           if (order.conversationIds != null && order.generation === orderGenerationRef.current) {
             dispatch({ type: "conversation:reorder", conversationIds: order.conversationIds });
           }

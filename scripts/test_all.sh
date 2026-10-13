@@ -38,7 +38,7 @@ echo "==> Backend typecheck"
 (cd "$ROOT/backend" && "$PYTHON_BIN" -m mypy src)
 
 echo "==> Frontend tests"
-(cd "$ROOT/frontend" && pnpm -r --if-present test)
+(cd "$ROOT/frontend" && pnpm -r --filter '!@ava/e2e-desktop' --if-present test)
 
 echo "==> Lint (frontend)"
 (cd "$ROOT/frontend" && pnpm -r --if-present lint)

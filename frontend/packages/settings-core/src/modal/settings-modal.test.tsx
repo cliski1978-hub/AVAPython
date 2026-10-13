@@ -112,6 +112,9 @@ describe("SettingsModal", () => {
     const alert = screen.getByTestId("settings-modal-error");
     expect(alert.getAttribute("role")).toBe("alert");
     expect(alert.textContent).toBe("Provider connection already exists.");
+    expect(alert.className).toContain("bg-destructive");
+    expect(alert.className).toContain("text-destructive-foreground");
+    expect(alert.getAttribute("style")).not.toMatch(/background|color:/);
   });
 
   it("shows no error area until there is an error", () => {

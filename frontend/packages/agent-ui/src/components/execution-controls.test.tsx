@@ -26,6 +26,17 @@ const workspaces: WorkspaceInfo[] = [
 ];
 
 describe("ExecutionControls workspace selector", () => {
+  it("uses the shared semantic Select trigger and readable labels", () => {
+    const html = render(workspaces, { selectedWorkspaceId: "workspace-a" });
+    expect(html).toContain("text-muted-foreground");
+    expect(html).toContain("border-input");
+    expect(html).toContain("bg-background");
+    expect(html).toContain("text-foreground");
+    expect(html).toContain("focus-visible:ring-ring");
+    expect(html).toContain('aria-label="Select workspace"');
+    expect(html).not.toContain("#a1a1aa");
+  });
+
   it("shows a None option by default when no workspace is selected", () => {
     const html = render([]);
     expect(html).toContain('aria-label="Select workspace"');

@@ -5,6 +5,7 @@ import logging
 from typing import Any, cast
 
 from ava.contracts.conversations import MessageRole, RunContext, execution_context_messages
+from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
@@ -81,30 +82,34 @@ def _legacy_model_binding(provider: ModelProviderPort) -> ConfiguredModelBinding
 
 
 def _conversation_prompt(context: RunContext | None, prompt: str) -> str:
-    """Render the AVA-constructed context as the SDK's single user message.
+    """Render conversation history as the SDK's single user message.
 
     A single user message is forwarded unchanged, which keeps unlinked and
     single-turn runs byte-identical to the pre-5.21 behavior. Anything longer
     keeps its order and text but loses per-message role structure, because the
-    SDK accepts only a user message here.
+    SDK accepts only user messages here. AVA's system layers are delivered
+    separately through the SDK's system-prompt context.
     """
+    history_context = context
     if context is not None and context.prompt_layers is not None:
-        layers = context.prompt_layers
-        blocks = [f"[AVA ROOT SYSTEM]\n{layers.root_system_prompt}"]
-        blocks.extend(f"[AVA CORE PROMPT: {item.name}]\n{item.prompt_text}" for item in layers.resolved_core_prompts)
-        if layers.project_instructions:
-            blocks.append(f"[PROJECT INSTRUCTIONS]\n{layers.project_instructions}")
-        history = context.messages or []
-        if not history:
-            history = execution_context_messages(None, prompt)
-        transcript = "\n\n".join(f"{message.role.value.capitalize()}: {message.content}" for message in history)
-        return "\n\n".join([*blocks, f"{_TRANSCRIPT_HEADER}\n\n{transcript}"])
-
-    messages = execution_context_messages(context, prompt)
+        history_context = context.model_copy(update={"prompt_layers": None})
+    messages = execution_context_messages(history_context, prompt)
     if len(messages) == 1 and messages[0].role == MessageRole.USER:
         return messages[0].content
     turns = "\n\n".join(f"{message.role.value.capitalize()}: {message.content}" for message in messages)
     return f"{_TRANSCRIPT_HEADER}\n\n{turns}"
+
+
+def _ava_system_prompt_suffix(context: RunContext | None) -> str | None:
+    """Preserve AVA's ordered instruction layers in OpenHands' system role."""
+    if context is None or context.prompt_layers is None:
+        return None
+    layers = context.prompt_layers
+    blocks = [f"[AVA ROOT SYSTEM]\n{layers.root_system_prompt}"]
+    blocks.extend(f"[AVA CORE PROMPT: {item.name}]\n{item.prompt_text}" for item in layers.resolved_core_prompts)
+    if layers.project_instructions:
+        blocks.append(f"[PROJECT INSTRUCTIONS]\n{layers.project_instructions}")
+    return "\n\n".join(blocks)
 
 
 class OpenHandsRuntime(AgentRuntimePort):
@@ -157,6 +162,7 @@ class OpenHandsRuntime(AgentRuntimePort):
                 return RuntimeRunResult(status=RunStatus.FAILED, content="Selected model provider cannot be bound")
             try:
                 from openhands.sdk import LLM
+                from openhands.sdk.context import AgentContext
 
                 from ava.runtimes.adapters.openhands.conversation import ControlledAgent, ControlledConversation
                 from ava.runtimes.adapters.openhands.file_policy import build_openhands_tools
@@ -182,7 +188,23 @@ class OpenHandsRuntime(AgentRuntimePort):
                 base_url=binding.endpoint,
                 api_key=_openhands_api_key(binding.api_key),
             )
-            agent = ControlledAgent(llm=llm, tools=tools, include_default_tools=[])
+            system_suffix = _ava_system_prompt_suffix(context)
+            conversation_prompt = _conversation_prompt(context, request.prompt)
+            runtime_request: dict[str, JsonValue] = {
+                "runtime_id": "openhands",
+                "capture_scope": "AVA-provided SDK context; excludes SDK defaults and provider wire payload",
+                "agent_context": {"system_message_suffix": system_suffix, "current_datetime": None},
+                "initial_user_message": {"role": "user", "content": conversation_prompt},
+            }
+            agent = ControlledAgent(
+                llm=llm,
+                tools=tools,
+                include_default_tools=[],
+                agent_context=AgentContext(
+                    system_message_suffix=system_suffix,
+                    current_datetime=None,
+                ),
+            )
             conversation = cast(
                 Any,
                 await asyncio.to_thread(
@@ -194,17 +216,21 @@ class OpenHandsRuntime(AgentRuntimePort):
                 ),
             )
             if tool_context.revoked.is_set():
-                return RuntimeRunResult(status=RunStatus.CANCELLED)
-            await asyncio.to_thread(conversation.send_message, _conversation_prompt(context, request.prompt))
+                return RuntimeRunResult(status=RunStatus.CANCELLED, runtime_request=runtime_request)
+            await asyncio.to_thread(conversation.send_message, conversation_prompt)
             if tool_context.revoked.is_set():
-                return RuntimeRunResult(status=RunStatus.CANCELLED)
+                return RuntimeRunResult(status=RunStatus.CANCELLED, runtime_request=runtime_request)
             await asyncio.to_thread(conversation.run)
             if tool_context.revoked.is_set():
-                return RuntimeRunResult(status=RunStatus.CANCELLED)
+                return RuntimeRunResult(status=RunStatus.CANCELLED, runtime_request=runtime_request)
             content = _final_agent_text(conversation)
             if not content:
-                return RuntimeRunResult(status=RunStatus.FAILED, content="OpenHands returned no final response")
-            return RuntimeRunResult(status=RunStatus.COMPLETED, content=content)
+                return RuntimeRunResult(
+                    status=RunStatus.FAILED,
+                    content="OpenHands returned no final response",
+                    runtime_request=runtime_request,
+                )
+            return RuntimeRunResult(status=RunStatus.COMPLETED, content=content, runtime_request=runtime_request)
         except asyncio.CancelledError:
             return RuntimeRunResult(status=RunStatus.CANCELLED)
         except Exception:

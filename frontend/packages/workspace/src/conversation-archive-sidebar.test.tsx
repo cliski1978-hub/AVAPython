@@ -27,6 +27,39 @@ const conversation = (
 const noop = () => undefined;
 
 describe("conversation archive sidebar", () => {
+  it("gives sidebar rows a full-height hit target", () => {
+    const item = conversation("project-chat", "Project Chat", { projectId: project.id });
+    const onSelect = vi.fn();
+    const { container } = render(<ConversationList conversations={[item]} projects={[project]}
+      projectConversationIds={{ [project.id]: [item.id] }} activeConversationId={null}
+      onNewChat={noop} onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand Project P" }));
+    const button = container.querySelector<HTMLButtonElement>(`[data-conversation-item="${item.id}"]`)!;
+    expect(button.style.alignSelf).toBe("stretch");
+    expect(button.parentElement?.style.minHeight).toBe("44px");
+    fireEvent.click(button);
+    expect(onSelect).toHaveBeenCalledWith(item.id);
+  });
+
+  it("distinguishes Folder and Project rows with icons and swaps the folder icon on collapse", () => {
+    const longFolder = { ...folder, name: "A long folder name that should truncate" };
+    const longProject = { ...project, name: "A long project name that should truncate" };
+    const { container } = render(<ConversationList conversations={[]} folders={[longFolder]} projects={[longProject]}
+      activeConversationId={null} onNewChat={noop} onSelect={noop} />);
+
+    expect(container.querySelector('[data-folder-toggle="folder-x"] .lucide-folder-open')).not.toBeNull();
+    expect(container.querySelector('[data-project-toggle="project-p"] .lucide-rocket')).not.toBeNull();
+    const folderTitle = container.querySelector('[data-folder-toggle="folder-x"] span');
+    const projectTitle = container.querySelector('[data-project-toggle="project-p"] span');
+    expect(folderTitle?.getAttribute("style")).toContain("text-overflow: ellipsis");
+    expect(projectTitle?.getAttribute("style")).toContain("text-overflow: ellipsis");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse A long folder name that should truncate" }));
+    expect(container.querySelector('[data-folder-toggle="folder-x"] .lucide-folder')).not.toBeNull();
+    expect(container.querySelector('[data-folder-toggle="folder-x"] .lucide-folder-open')).toBeNull();
+  });
+
   it("keeps archived Folder and Ungrouped conversations out of active lists and avoids Project duplicates", () => {
     const activeFolder = conversation("active-folder", "Active Folder", { folderId: folder.id, projectId: project.id });
     const archivedFolder = conversation("archived-folder", "Archived Folder", { isArchived: true, folderId: folder.id, projectId: project.id });
@@ -58,9 +91,22 @@ describe("conversation archive sidebar", () => {
     render(<ConversationList conversations={[archivedFolder, archivedLoose]} folders={[folder]} projects={[project]}
       activeConversationId={null} onNewChat={noop} onSelect={noop} onMoveConversation={onMove}
       onSetConversationArchived={vi.fn()} onDelete={vi.fn()} />);
+    const activeView = screen.getByRole("button", { name: "Active" });
+    expect(activeView.className).toContain("dark:bg-black");
+    expect(activeView.className).toContain("dark:text-white");
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
 
+    const archivedView = screen.getByRole("button", { name: "Archived" });
+    expect(archivedView.getAttribute("aria-pressed")).toBe("true");
+    expect((archivedView as HTMLButtonElement).style.backgroundColor).toBe("rgb(0, 0, 0)");
+    expect((archivedView as HTMLButtonElement).style.color).toBe("rgb(255, 255, 255)");
+    expect(archivedView.className).toContain("dark:bg-black");
+    expect(archivedView.className).toContain("dark:text-white");
+    expect(archivedView.className).toContain("dark:aria-pressed:bg-black");
+    expect(archivedView.className).toContain("dark:aria-pressed:text-white");
+
     expect(screen.getByText("Archived Folder")).toBeTruthy();
+    expect(activeView.getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByText("Archived Loose")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New Folder" })).toBeNull();
     const rows = screen.getAllByRole("button", { name: /Archived (Folder|Loose)/ });
@@ -88,9 +134,11 @@ describe("conversation archive sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
     fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Selected" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Restore" }));
+    expect(screen.getByRole("region", { name: "Archived conversations" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Active" }).getAttribute("aria-current")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Active" }));
     await waitFor(() => expect(container.querySelector('[data-folder-drop-target="folder-x"] [data-conversation-row="selected"]')).not.toBeNull());
     expect(screen.getByRole("button", { name: "Selected" }).getAttribute("aria-current")).toBe("true");
-    expect(screen.queryByRole("region", { name: "Archived conversations" })).toBeNull();
     await waitFor(() => expect((document.activeElement as HTMLElement).dataset.conversationItem).toBe("selected"));
   });
 
@@ -131,22 +179,26 @@ describe("conversation archive sidebar", () => {
     expect(container.querySelector('[data-conversation-row="deleted-archive"]')).toBeNull();
   });
 
-  it("moves a selected conversation to Archived after archive and shows an empty state", async () => {
-    const item = conversation("selected", "Selected", { isPinned: true, folderId: folder.id, projectId: project.id });
+  it("keeps Active selected after archiving and focuses the active fallback", async () => {
+    const item = conversation("selected", "Selected", { isPinned: true, folderId: folder.id });
+    const fallback = conversation("fallback", "Fallback");
     function Sidebar() {
-      const [current, setCurrent] = useState(item);
+      const [items, setItems] = useState([item, fallback]);
       const [active, setActive] = useState("selected");
-      return <ConversationList conversations={[current]} activeConversations={current.isArchived ? [] : [current]}
-        archivedConversations={current.isArchived ? [current] : []} folders={[folder]} activeConversationId={active}
-        onNewChat={noop} onSelect={setActive} onSetConversationArchived={async (_id, isArchived) => setCurrent((value) => ({ ...value, isArchived }))} />;
+      return <ConversationList conversations={items} activeConversations={items.filter((value) => !value.isArchived)}
+        archivedConversations={items.filter((value) => value.isArchived)} folders={[folder]} activeConversationId={active}
+        onNewChat={noop} onSelect={setActive} onSetConversationArchived={async (id, isArchived) => {
+          setItems((values) => values.map((value) => value.id === id ? { ...value, isArchived } : value));
+          if (id === active && isArchived) setActive("fallback");
+        }} />;
     }
     const { container } = render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Selected" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
-    await waitFor(() => expect(container.querySelector('[data-archived-conversations] [data-conversation-row="selected"]')).not.toBeNull());
-    expect(screen.getByRole("button", { name: "Archived" }).getAttribute("aria-current")).toBe("page");
-    expect(container.querySelector('[data-conversation-row="selected"] [aria-current="true"]')).not.toBeNull();
-    await waitFor(() => expect((document.activeElement as HTMLElement).dataset.conversationItem).toBe("selected"));
+    await waitFor(() => expect(container.querySelector('[data-conversation-row="selected"]')).toBeNull());
+    expect(screen.getByRole("button", { name: "Active" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "Archived" }).getAttribute("aria-current")).toBeNull();
+    expect(container.querySelector('[data-conversation-row="fallback"] [aria-current="true"]')).not.toBeNull();
   });
 
   it("does not change the selected conversation when archiving a different row", async () => {

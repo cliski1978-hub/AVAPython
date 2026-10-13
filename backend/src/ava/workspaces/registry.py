@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 from ava.workspaces.contracts import ResolvedWorkspace
 
 
 class WorkspaceRegistry:
+    """Explicitly provisioned in-process legacy runtime Workspaces."""
+
     def __init__(self) -> None:
         self._items: dict[str, ResolvedWorkspace] = {}
 
@@ -12,6 +16,7 @@ class WorkspaceRegistry:
         self._items[key] = workspace
 
     def get(self, workspace_id: str) -> ResolvedWorkspace | None:
+        """Return only server-provisioned legacy runtime entries."""
         return self._items.get(workspace_id)
 
     def list(self) -> list[str]:

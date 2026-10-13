@@ -62,7 +62,10 @@ def test_streaming_publishes_incremental_snapshots_before_completion() -> None:
             model_provider=StreamingProvider(), on_content=snapshots.append,
         )
         assert snapshots == ["Hello", "Hello world"]
-        assert result == RuntimeRunResult(status=RunStatus.COMPLETED, content="Hello world")
+        assert result.status is RunStatus.COMPLETED
+        assert result.content == "Hello world"
+        assert result.runtime_request["model_request"]["messages"][0]["content"] == "Hi"
+        assert result.runtime_response["content"] == "Hello world"
 
     asyncio.run(scenario())
 

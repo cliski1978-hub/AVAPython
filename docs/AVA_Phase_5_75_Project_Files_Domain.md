@@ -68,7 +68,7 @@ The record ID is the stable source identity; no separate knowledge document ID i
 
 ## Validation
 
-Domain tests cover required identity/ownership/content references, Unicode names, zero-byte files, negative and non-integer sizes, aware timestamps, duplicate display names, metadata-only record shape, distinct attachment and Project-file types, and repository/content port shapes. Contract tests cover create/response/list shapes, optional content type, zero and negative sizes, aware timestamps, and exclusion of content references and storage locations. Architecture tests prevent domain/port/contract imports from storage adapters, execution/provider layers, or future knowledge/RAG modules. TypeScript tests pin the matching public metadata shapes.
+Domain tests cover required identity/ownership/content references, Unicode names, zero-byte files, negative and non-integer sizes, aware timestamps, trimmed/case-folded Project filename normalization, metadata-only record shape, distinct attachment and Project-file types, and repository/content port shapes. Contract tests cover create/response/list shapes, optional content type, zero and negative sizes, aware timestamps, and exclusion of content references and storage locations. Architecture tests prevent domain/port/contract imports from storage adapters, execution/provider layers, or future knowledge/RAG modules. TypeScript tests pin the matching public metadata shapes.
 
 Validation passed: the focused backend set (Project file domain, Project file
 contracts, and architecture guards) reported **149 passed**; TypeScript

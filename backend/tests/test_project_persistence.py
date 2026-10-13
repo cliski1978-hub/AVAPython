@@ -300,7 +300,7 @@ def test_v0012_migrates_legacy_v0011_data_and_repeated_startup_is_safe(tmp_path:
             assert persistence.conversation_repository.get("conversation-old") is not None
             assert persistence.conversation_folder_repository.get("folder-old") is not None
             migrated = MigrationRunner(persistence.database, default_registry())  # type: ignore[arg-type]
-            assert migrated.current_version() == 18
+            assert migrated.current_version() == 25
             assert migrated.migrate() == []
             with persistence.database.connect() as connection:  # type: ignore[union-attr]
                 conversation_row = connection.execute(

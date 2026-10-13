@@ -128,6 +128,7 @@ class ModelDiscoveryResponse(BaseModel):
 
     contract_version: str
     models: list[ModelInfo]
+    default_model_id: str | None = None
 
 
 class ModelProviderDiscoveryItem(BaseModel):
@@ -182,6 +183,11 @@ class RunExecutionSelection(BaseModel):
     model_provider_id: str | None = None
     model_id: str | None = None
     hosting_mode: str | None = None
+    runtime_source: str | None = None
+    model_source: str | None = None
+    provider_connection_id: str | None = None
+    runtime_configuration_id: str | None = None
+    project_id: str | None = None
     contract_version: str
 
 
@@ -192,9 +198,14 @@ class RunResponse(BaseModel):
     status: str
     contract_version: str
     execution_selection: RunExecutionSelection | None = None
+    conversation_id: str | None = None
+    source_user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    cancellation_requested_at: datetime | None = None
 
 
 class RunExecutionOverride(BaseModel):
+    mode: str | None = None
     runtime_id: str | None = None
     model_id: str | None = None
     model_provider_id: str | None = None
@@ -203,3 +214,8 @@ class RunExecutionOverride(BaseModel):
 class RunRequest(BaseModel):
     prompt: str
     execution: RunExecutionOverride | None = None
+    conversation_id: str | None = None
+    source_user_message_id: str | None = None
+    workspace_id: str | None = None
+    retry_of_run_id: str | None = None
+    contract_version: str = "v1"

@@ -6,9 +6,11 @@ in-memory store. This package is the only AVA code authorized to touch
 database drivers/ORM tooling.
 """
 
+from ava.infrastructure.persistence.repositories.approval_repository import RelationalApprovalRepository
 from ava.infrastructure.persistence.repositories.attachment_repository import (
     RelationalAttachmentRepository,
 )
+from ava.infrastructure.persistence.repositories.context_summary_repository import RelationalContextSummaryRepository
 from ava.infrastructure.persistence.repositories.conversation_folder_repository import (
     RelationalConversationFolderRepository,
 )
@@ -51,10 +53,13 @@ from ava.infrastructure.persistence.repositories.run_repository import (
 from ava.infrastructure.persistence.repositories.runtime_configuration_repository import (
     RelationalRuntimeConfigurationRepository,
 )
+from ava.infrastructure.persistence.repositories.workspace_access_repository import RelationalWorkspaceAccessRepository
 
 __all__ = [
+    "RelationalApprovalRepository",
     "RelationalAttachmentRepository",
     "RelationalConversationRepository",
+    "RelationalContextSummaryRepository",
     "RelationalConversationFolderRepository",
     "RelationalCorePromptRepository",
     "RelationalCorePromptAssignmentRepository",
@@ -70,4 +75,5 @@ __all__ = [
     "RelationalRunEventRepository",
     "RelationalRunRepository",
     "RelationalRuntimeConfigurationRepository",
+    "RelationalWorkspaceAccessRepository",
 ]

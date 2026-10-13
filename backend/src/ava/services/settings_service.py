@@ -217,6 +217,7 @@ class SettingsService:
                 hosting_mode=body.hosting_mode,
                 capabilities=body.capabilities,
                 enabled=body.enabled,
+                context_window_tokens=body.context_window_tokens,
             )
             return _model_to_response(self._models.create(model))
         except ValueError as exc:
@@ -243,6 +244,11 @@ class SettingsService:
                 hosting_mode=body.hosting_mode,
                 capabilities=body.capabilities,
                 enabled=body.enabled,
+                context_window_tokens=(
+                    body.context_window_tokens
+                    if "context_window_tokens" in body.model_fields_set
+                    else current.context_window_tokens
+                ),
             )
             result = self._models.update(updated)
         except ValueError as exc:
@@ -397,6 +403,7 @@ def _model_to_response(model: ModelConfiguration) -> ModelConfigurationResponse:
         hosting_mode=model.hosting_mode,
         capabilities=model.capabilities,
         enabled=model.enabled,
+        context_window_tokens=model.context_window_tokens,
     )
 
 

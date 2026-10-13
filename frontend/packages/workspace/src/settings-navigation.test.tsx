@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   listProviderConnections: vi.fn(),
   listModelConfigurations: vi.fn(),
   listRuntimeConfigurations: vi.fn(),
+  listCorePrompts: vi.fn(),
   getExecutionDefaults: vi.fn(),
   listConversations: vi.fn(),
   listMessages: vi.fn(),
@@ -32,6 +33,7 @@ const {
   listProviderConnections,
   listModelConfigurations,
   listRuntimeConfigurations,
+  listCorePrompts,
   getExecutionDefaults,
   listConversations,
   listMessages,
@@ -83,6 +85,7 @@ vi.mock("@ava/api-client", async (importOriginal) => {
     listProviderConnections: mocks.listProviderConnections,
     listModelConfigurations: mocks.listModelConfigurations,
     listRuntimeConfigurations: mocks.listRuntimeConfigurations,
+    listCorePrompts: mocks.listCorePrompts,
     getExecutionDefaults: mocks.getExecutionDefaults,
   };
 });
@@ -106,17 +109,18 @@ function isHiddenByAncestor(element: HTMLElement): boolean {
   return false;
 }
 
-function tab(name: string): HTMLElement {
-  return screen.getByRole("tab", { name });
+function primaryLink(name: string): HTMLElement {
+  return screen.getByRole("link", { name });
 }
 
 async function openSettings() {
-  fireEvent.click(tab("Settings"));
+  fireEvent.click(primaryLink("Settings"));
   await waitFor(() => expect(screen.getByTestId("settings-workspace")).toBeTruthy());
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "/");
   listConversations.mockResolvedValue({ contract_version: "v1", conversations: [] });
   listMessages.mockResolvedValue({
     contract_version: "v1",
@@ -139,6 +143,7 @@ beforeEach(() => {
   });
   listModelConfigurations.mockResolvedValue({ contract_version: "v1", models: [] });
   listRuntimeConfigurations.mockResolvedValue({ contract_version: "v1", runtimes: [] });
+  listCorePrompts.mockResolvedValue({ contract_version: "v1", core_prompts: [] });
   getExecutionDefaults.mockResolvedValue({
     configured: false,
     defaults: null,
@@ -160,11 +165,11 @@ describe("Settings navigation", () => {
   it("offers Settings alongside the existing top-level views", () => {
     render(<AppWorkspace client={client} />);
 
-    expect(tab("Chat")).toBeTruthy();
-    expect(tab("Documents")).toBeTruthy();
-    expect(tab("Settings")).toBeTruthy();
-    expect(tab("Settings").getAttribute("aria-selected")).toBe("false");
-    expect(tab("Chat").getAttribute("aria-selected")).toBe("true");
+    expect(primaryLink("Chat")).toBeTruthy();
+    expect(primaryLink("Documents")).toBeTruthy();
+    expect(primaryLink("Settings")).toBeTruthy();
+    expect(primaryLink("Settings").getAttribute("aria-current")).toBeNull();
+    expect(primaryLink("Chat").getAttribute("aria-current")).toBe("page");
   });
 
   it("does not mount or fetch the Settings surface before it is opened", () => {
@@ -178,7 +183,7 @@ describe("Settings navigation", () => {
     render(<AppWorkspace client={client} />);
     await openSettings();
 
-    expect(tab("Settings").getAttribute("aria-selected")).toBe("true");
+    expect(primaryLink("Settings").getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
     await waitFor(() => expect(listProviderConnections).toHaveBeenCalled());
   });
@@ -199,13 +204,42 @@ describe("Settings navigation", () => {
     await waitFor(() => expect(getExecutionDefaults).toHaveBeenCalled());
   });
 
+  it("keeps CORE prompts current when prior Settings sections resolve late", async () => {
+    let resolveModels!: (value: { contract_version: "v1"; models: Array<{ model_id: string; name: string }> }) => void;
+    let resolveRuntimes!: (value: { contract_version: "v1"; runtimes: unknown[] }) => void;
+    let resolveProviders!: (value: { contract_version: "v1"; provider_connections: Array<{ provider_connection_id: string; display_name: string; endpoint: string; enabled: boolean; credential_reference: string; provider_id: string }> }) => void;
+    const models = new Promise<{ contract_version: "v1"; models: Array<{ model_id: string; name: string }> }>((resolve) => { resolveModels = resolve; });
+    const runtimes = new Promise<{ contract_version: "v1"; runtimes: unknown[] }>((resolve) => { resolveRuntimes = resolve; });
+    const providers = new Promise<{ contract_version: "v1"; provider_connections: Array<{ provider_connection_id: string; display_name: string; endpoint: string; enabled: boolean; credential_reference: string; provider_id: string }> }>((resolve) => { resolveProviders = resolve; });
+    listModelConfigurations.mockReturnValueOnce(models);
+    listRuntimeConfigurations.mockReturnValueOnce(runtimes);
+    listProviderConnections.mockReturnValueOnce(providers);
+    render(<AppWorkspace client={client} />);
+    await openSettings();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Runtimes" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Providers" }));
+    fireEvent.click(screen.getByRole("tab", { name: "System Prompts" }));
+    expect(await screen.findByText("Manage reusable CORE prompt definitions and inspect explicit assignments.")).toBeTruthy();
+
+    resolveModels({ contract_version: "v1", models: [{ model_id: "late-model", name: "Late Models Response" }] });
+    resolveRuntimes({ contract_version: "v1", runtimes: [{ runtime_id: "late-runtime", name: "Late Runtimes Response" }] });
+    resolveProviders({ contract_version: "v1", provider_connections: [{ provider_connection_id: "late-provider", provider_id: "late", display_name: "Late Providers Response", endpoint: "https://late.test", enabled: true, credential_reference: "env:LATE" }] });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "System Prompts" }).getAttribute("aria-selected")).toBe("true"));
+    expect(screen.getByText("Manage reusable CORE prompt definitions and inspect explicit assignments.").textContent).not.toContain("Late");
+    expect(screen.queryByText("Late Models Response")).toBeNull();
+    expect(screen.queryByText("Late Runtimes Response")).toBeNull();
+    expect(screen.queryByText("Late Providers Response")).toBeNull();
+  });
+
   it("returns to the chat workspace and keeps it usable", async () => {
     render(<AppWorkspace client={client} />);
     await openSettings();
 
-    fireEvent.click(tab("Chat"));
+    fireEvent.click(primaryLink("Chat"));
 
-    expect(tab("Chat").getAttribute("aria-selected")).toBe("true");
+    expect(primaryLink("Chat").getAttribute("aria-current")).toBe("page");
     await waitFor(() => expect(screen.getByLabelText("Message")).toBeTruthy());
     expect(screen.getByText("No conversation selected.")).toBeTruthy();
   });
@@ -214,9 +248,9 @@ describe("Settings navigation", () => {
     render(<AppWorkspace client={client} />);
     await openSettings();
 
-    fireEvent.click(tab("Documents"));
+    fireEvent.click(primaryLink("Documents"));
 
-    expect(tab("Documents").getAttribute("aria-selected")).toBe("true");
+    expect(primaryLink("Documents").getAttribute("aria-current")).toBe("page");
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Document content" })).toBeTruthy(),
     );
@@ -232,7 +266,7 @@ describe("Settings navigation", () => {
     // show an unrelated conversation list.
     expect(screen.queryByText("Conversations")).toBeNull();
 
-    fireEvent.click(tab("Chat"));
+    fireEvent.click(primaryLink("Chat"));
     expect(screen.getByText("Conversations")).toBeTruthy();
   });
 
@@ -254,7 +288,7 @@ describe("Settings navigation", () => {
     const composer = screen.getByLabelText("Message");
     expect(isHiddenByAncestor(composer)).toBe(true);
 
-    fireEvent.click(tab("Chat"));
+    fireEvent.click(primaryLink("Chat"));
     expect(isHiddenByAncestor(screen.getByLabelText("Message"))).toBe(false);
   });
 
@@ -292,7 +326,7 @@ describe("Settings navigation", () => {
     );
 
     await openSettings();
-    fireEvent.click(tab("Chat"));
+    fireEvent.click(primaryLink("Chat"));
 
     // The conversation is still listed and still active after returning.
     await waitFor(() =>

@@ -62,12 +62,14 @@ from ava.contracts.failures import FailureCode, failure_payload
 from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.contracts.run_inspection import ContextWindowAccounting, RunInspection, RunInspectionSnapshot, RunListItem
 from ava.repositories.conversation_repository import ConversationRepository
 from ava.repositories.message_repository import MessageRecord, MessageRepository
 from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import ActiveConversationRunError, RunRecord, RunRepository
 from ava.services.assistant_response_service import AssistantResponseService
 from ava.services.context_construction_service import ContextConstructionService
+from ava.services.run_context_preparation_service import RunContextPreparationService
 from ava.services.run_lifecycle_service import (
     InvalidRunTransitionError,
     RunLifecycleService,
@@ -75,6 +77,54 @@ from ava.services.run_lifecycle_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SENSITIVE_KEYS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "password",
+    "secret",
+    "credential",
+}
+
+
+def _redact(value: object, key: str = "") -> JsonValue:
+    """Redact credential-shaped values at the backend inspection boundary."""
+    normalized = key.lower().replace("-", "_")
+    token_accounting_fields = {
+        "context_window_tokens",
+        "input_budget_tokens",
+        "estimated_input_tokens",
+        "output_reserve_tokens",
+    }
+    if (
+        normalized in _SENSITIVE_KEYS
+        or (normalized.endswith("_token") and normalized not in token_accounting_fields)
+        or normalized.endswith("_secret")
+    ):
+        return "[REDACTED]"
+    if normalized in {"headers", "environment", "env"}:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(child_key): _redact(child_value, str(child_key)) for child_key, child_value in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def sanitize_inspection(snapshot: RunInspectionSnapshot) -> RunInspectionSnapshot:
+    """Return a snapshot with credential-shaped fields removed recursively."""
+    return RunInspectionSnapshot.model_validate(_redact(snapshot.model_dump(mode="json")))
+
+
+def sanitize_event(event: RunEvent) -> RunEvent:
+    """Return an event whose arbitrary payload cannot expose credential keys."""
+    return event.model_copy(update={"payload": _redact(event.payload)})
+
 
 #: The stable body of a ``run_failed`` event. AVA reports one failure shape to
 #: clients; the run's own log carries the cause, and Phase 5.34 owns richer
@@ -177,7 +227,9 @@ class RunService:
         conversation_repository: ConversationRepository | None = None,
         message_repository: MessageRepository | None = None,
         context_service: ContextConstructionService | None = None,
+        context_preparation_service: RunContextPreparationService | None = None,
         lifecycle: RunLifecycleService | None = None,
+        approval_cancellation: Callable[[str], object] | None = None,
     ) -> None:
         """Construct the run service over an agent adapter and repository ports.
 
@@ -205,9 +257,11 @@ class RunService:
         self._conversation_repository = conversation_repository
         self._message_repository = message_repository
         self._context_service = context_service
+        self._context_preparation_service = context_preparation_service
         self._lifecycle = lifecycle or RunLifecycleService(
             run_repository=run_repository, run_event_repository=run_event_repository
         )
+        self._approval_cancellation = approval_cancellation
         self._assistant_responses = AssistantResponseService(
             run_repository=run_repository,
             run_event_repository=run_event_repository,
@@ -257,6 +311,7 @@ class RunService:
                 run_id,
                 conversation_id=request.conversation_id,
                 source_user_message_id=request.source_user_message_id,
+                execution_mode=request.execution_mode,
             )
         except ActiveConversationRunError as exc:
             raise ConversationRunActiveError("This conversation already has an active run.") from exc
@@ -302,16 +357,42 @@ class RunService:
                 content=content,
             )
 
+        def record_inspection(snapshot: RunInspectionSnapshot) -> None:
+            try:
+                self._run_repository.set_inspection_snapshot(run_id, sanitize_inspection(snapshot))
+            except Exception:
+                # Inspection is observability; persistence failure must never
+                # change the outcome of model execution.
+                logger.exception("Unable to persist inspection snapshot for run %s", run_id)
+
         try:
-            result = await self._agent.start_run_streaming(
-                run_id=run_id,
-                request=request,
-                context=context,
-                on_content=record_content,
-            )
+            resolved_execution = None
+            if self._context_preparation_service is not None:
+                prepared_context = await self._context_preparation_service.prepare(request, context)
+                context = prepared_context.context
+                resolved_execution = prepared_context.execution
+            if resolved_execution is None:
+                result = await self._agent.start_run_streaming(
+                    run_id=run_id,
+                    request=request,
+                    context=context,
+                    on_content=record_content,
+                    on_inspection=record_inspection,
+                )
+            else:
+                result = await self._agent.start_run_streaming(
+                    run_id=run_id,
+                    request=request,
+                    context=context,
+                    on_content=record_content,
+                    on_inspection=record_inspection,
+                    resolved_execution=resolved_execution,
+                )
         except ExecutionConfigurationError as exc:
             self._lifecycle.fail(run_id, payload=self._configuration_failure_payload(exc))
             return self._run_response(self._lifecycle.get(run_id) or self._lifecycle.fail(run_id))
+        if result.inspection_snapshot is not None:
+            record_inspection(result.inspection_snapshot)
         self._run_repository.set_execution_selection(run_id, result.execution_selection)
 
         current = self._lifecycle.get(run_id)
@@ -326,6 +407,7 @@ class RunService:
                 source_user_message_id=request.source_user_message_id,
                 assistant_message_id=current.assistant_message_id,
                 cancellation_requested_at=current.cancellation_requested_at,
+                execution_mode=current.execution_mode,
             )
 
         if result.status == RunStatus.COMPLETED:
@@ -423,6 +505,7 @@ class RunService:
             source_user_message_id=request.source_user_message_id,
             assistant_message_id=assistant_message_id or record.assistant_message_id,
             cancellation_requested_at=record.cancellation_requested_at,
+            execution_mode=record.execution_mode,
         )
 
     async def cancel_run(self, run_id: str) -> RunResponse:
@@ -461,6 +544,14 @@ class RunService:
             raise CancellationRequestError("Unable to persist cancellation request.") from exc
         if not record.status.is_active:
             return self._run_response(record)
+
+        if self._approval_cancellation is not None:
+            try:
+                self._approval_cancellation(run_id)
+            except Exception:
+                # The durable cancellation request makes any later approval
+                # decision fail closed even if history reconciliation fails.
+                logger.exception("Unable to reconcile approvals for cancelled run %s", run_id)
 
         if record.status is RunStatus.RUNNING:
             record = await self._stop_execution(run_id, record)
@@ -511,6 +602,7 @@ class RunService:
             source_user_message_id=record.source_user_message_id,
             assistant_message_id=record.assistant_message_id,
             cancellation_requested_at=record.cancellation_requested_at,
+            execution_mode=record.execution_mode,
         )
 
     def _record_terminal_from_agent(self, run_id: str, status: RunStatus) -> None:
@@ -544,6 +636,17 @@ class RunService:
         if run is None:
             return None
         return self._run_response(run)
+
+    def preview_context_window(self, request: RunRequest) -> ContextWindowAccounting | None:
+        """Return an unsent draft's backend-owned context budget without persistence."""
+        context = None
+        if request.conversation_id is not None:
+            if self._context_service is None:
+                raise RunRelationshipError("linked previews require a context construction service")
+            context = self._context_service.build_for_preview(request.conversation_id)
+        if self._context_preparation_service is not None:
+            context = self._context_preparation_service.preview(request, context)
+        return self._agent.preview_context_window(request, context=context)
 
     def _build_context(self, request: RunRequest) -> RunContext | None:
         """Build the run's durable context before any run state is written.
@@ -623,6 +726,7 @@ class RunService:
             execution=request.execution,
             workspace_id=request.workspace_id,
             retry_of_run_id=request.retry_of_run_id,
+            execution_mode=request.execution_mode,
         )
 
     def _validate_relationship_request(self, request: RunRequest) -> None:
@@ -677,6 +781,48 @@ class RunService:
         if self._run_repository.get(run_id) is None:
             return None
         return list(self._run_event_repository.list_after_sequence(run_id, after_sequence))
+
+    def list_runs_for_conversation(self, conversation_id: str) -> list[RunRecord]:
+        return self._run_repository.list_for_conversation(conversation_id)
+
+    def list_run_summaries_for_conversation(self, conversation_id: str) -> list[RunListItem]:
+        return [
+            RunListItem(
+                run_id=record.run_id,
+                status=record.status,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                execution_mode=record.execution_mode,
+            )
+            for record in self.list_runs_for_conversation(conversation_id)
+        ]
+
+    def get_run_inspection(self, run_id: str) -> RunInspection | None:
+        record = self._run_repository.get(run_id)
+        if record is None:
+            return None
+        message = (
+            self._message_repository.get(record.conversation_id, record.assistant_message_id)
+            if self._message_repository is not None
+            and record.conversation_id is not None
+            and record.assistant_message_id is not None
+            else None
+        )
+        events = self._run_event_repository.list_after_sequence(run_id, 0)
+        return RunInspection(
+            run_id=record.run_id,
+            conversation_id=record.conversation_id,
+            source_user_message_id=record.source_user_message_id,
+            status=record.status,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            execution_selection=record.execution_selection,
+            execution_mode=record.execution_mode,
+            assistant_message_id=record.assistant_message_id,
+            assistant_message=message.content if message is not None else None,
+            snapshot=sanitize_inspection(record.inspection_snapshot) if record.inspection_snapshot else None,
+            events=[sanitize_event(event) for event in events],
+        )
 
     def _append(
         self,

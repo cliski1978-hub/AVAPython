@@ -23,6 +23,7 @@ export interface ProviderConnectionResponse {
   display_name: string;
   endpoint: string | null;
   enabled: boolean;
+  context_window_tokens?: number | null;
   /** Opaque location such as `env:OPENAI_API_KEY`. Never the secret itself. */
   credential_reference: string | null;
   contract_version: ContractVersion;
@@ -41,6 +42,7 @@ export interface CreateProviderConnectionRequest {
   display_name: string;
   endpoint?: string | null;
   enabled?: boolean;
+  context_window_tokens?: number | null;
   credential_reference?: string | null;
 }
 
@@ -69,6 +71,7 @@ export interface ModelConfigurationResponse {
   hosting_mode: ModelHostingMode;
   capabilities: ModelCapabilities;
   enabled: boolean;
+  context_window_tokens: number | null;
   contract_version: ContractVersion;
 }
 
@@ -87,6 +90,7 @@ export interface CreateModelConfigurationRequest {
   hosting_mode: ModelHostingMode;
   capabilities?: ModelCapabilities;
   enabled?: boolean;
+  context_window_tokens?: number | null;
 }
 
 /**
@@ -102,6 +106,7 @@ export interface UpdateModelConfigurationRequest {
   capabilities: ModelCapabilities;
   enabled: boolean;
   provider_connection_id?: string | null;
+  context_window_tokens?: number | null;
 }
 
 /** One configured runtime instance: configuration identity and adapter kind only. */

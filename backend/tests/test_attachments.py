@@ -378,6 +378,87 @@ def test_list_requires_both_owner_parameters() -> None:
     assert wrong_type.status_code == 422
 
 
+def test_conversation_attachments_are_isolated_and_deletable_only_by_owner() -> None:
+    app = make_app()
+    with TestClient(app) as client:
+        conversation_a = client.post("/conversations", json={"title": "A"}).json()["conversation_id"]
+        conversation_b = client.post("/conversations", json={"title": "B"}).json()["conversation_id"]
+        first = client.post(
+            f"/conversations/{conversation_a}/attachments",
+            files={"file": ("../../notes.md", b"one", "text/markdown")},
+        )
+        same_name_other_conversation = client.post(
+            f"/conversations/{conversation_b}/attachments",
+            files={"file": ("notes.md", b"two", "text/markdown")},
+        )
+        list_a = client.get(f"/conversations/{conversation_a}/attachments").json()
+        list_b = client.get(f"/conversations/{conversation_b}/attachments").json()
+        wrong_owner_delete = client.delete(
+            f"/conversations/{conversation_b}/attachments/{first.json()['attachment_id']}"
+        )
+        deleted = client.delete(
+            f"/conversations/{conversation_a}/attachments/{first.json()['attachment_id']}"
+        )
+        list_a_after = client.get(f"/conversations/{conversation_a}/attachments").json()
+
+    assert first.status_code == 201
+    assert first.json()["file_name"] == "notes.md"
+    assert first.json()["owner_type"] == "conversation"
+    assert first.json()["owner_id"] == conversation_a
+    assert same_name_other_conversation.status_code == 201
+    assert [item["attachment_id"] for item in list_a["attachments"]] == [first.json()["attachment_id"]]
+    assert [item["attachment_id"] for item in list_b["attachments"]] == [
+        same_name_other_conversation.json()["attachment_id"]
+    ]
+    assert wrong_owner_delete.status_code == 404
+    assert deleted.status_code == 204
+    assert list_a_after["attachments"] == []
+
+
+def test_conversation_attachment_upload_rejects_missing_conversation() -> None:
+    app = make_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/conversations/no-such-conversation/attachments",
+            files={"file": ("notes.txt", b"x", "text/plain")},
+        )
+    assert response.status_code == 404
+
+
+def test_conversation_attachment_upload_enforces_configured_size_limit() -> None:
+    app = make_app()
+    app.state.attachment_max_size_bytes = 2
+    with TestClient(app) as client:
+        conversation_id = client.post("/conversations", json={"title": "A"}).json()["conversation_id"]
+        response = client.post(
+            f"/conversations/{conversation_id}/attachments",
+            files={"file": ("notes.txt", b"too big", "text/plain")},
+        )
+        listing = client.get(f"/conversations/{conversation_id}/attachments").json()
+    assert response.status_code == 413
+    assert response.json()["error_code"] == "attachment_too_large"
+    assert "2 bytes" in response.json()["message"]
+    assert listing["attachments"] == []
+
+
+def test_failed_conversation_upload_leaves_no_visible_record_or_blob() -> None:
+    app = make_app()
+    with TestClient(app) as client:
+        conversation_id = client.post("/conversations", json={"title": "A"}).json()["conversation_id"]
+        app.state.attachment_content_store.exists = lambda _storage_key: False
+        response = client.post(
+            f"/conversations/{conversation_id}/attachments",
+            files={"file": ("notes.txt", b"stored but unverifiable", "text/plain")},
+        )
+        listing = client.get(f"/conversations/{conversation_id}/attachments").json()
+    assert response.status_code == 500
+    assert listing["attachments"] == []
+    assert app.state.persistence.attachment_repository.list_for_owner(
+        AttachmentOwnerType.CONVERSATION, conversation_id
+    ) == []
+    assert app.state.attachment_content_store._contents == {}
+
+
 # ============================================================
 # END: List Attachments
 # ============================================================
@@ -475,9 +556,9 @@ def test_path_like_filename_is_display_only() -> None:
         body = upload(client, file_name="../../report.pdf", content=b"x")
         download = client.get(f"/attachments/{body['attachment_id']}/content")
 
-    assert body["file_name"] == "../../report.pdf"
+    assert body["file_name"] == "report.pdf"
     assert download.status_code == 200
-    assert download.headers["content-disposition"] == 'attachment; filename="../../report.pdf"'
+    assert download.headers["content-disposition"] == 'attachment; filename="report.pdf"'
 
 
 def test_quoted_filename_is_neutralized_in_the_header() -> None:

@@ -435,6 +435,25 @@ def test_verification_inconsistency_marks_the_record_failed_and_raises() -> None
     assert repository.get(record.attachment_id).status is AttachmentStatus.FAILED
 
 
+def test_conversation_upload_failure_removes_partial_metadata_and_content() -> None:
+    repository = _InMemoryRepository()
+    content = _BrokenExistsContentStore()
+    service = AttachmentService(attachment_repository=repository, attachment_content_store=content)
+
+    with pytest.raises(AttachmentStorageError, match="content is not present after put"):
+        service.create_attachment(
+            file_name="notes.txt",
+            media_type="text/plain",
+            source=BytesIO(b"partial upload"),
+            owner_type=AttachmentOwnerType.CONVERSATION,
+            owner_id="conversation-1",
+            retain_failed_record=False,
+        )
+
+    assert repository.records() == []
+    assert content._contents == {}
+
+
 def test_final_transition_failure_attempts_failed_mark_and_reports_truthfully() -> None:
     repository = _FailingFinalizeRepository()
     service = AttachmentService(

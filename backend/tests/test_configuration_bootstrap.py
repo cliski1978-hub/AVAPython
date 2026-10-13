@@ -253,7 +253,39 @@ def test_api_edit_restart_and_default_vs_explicit_request_authority(tmp_path, ge
             explicit = client.get(f"/runs/{explicit['run_id']}").json()
             assert explicit["status"] == "completed"
             assert explicit["execution_selection"]["model_id"] == "ava-model-b"
+            assert explicit["execution_selection"]["runtime_id"] == "native"
+            assert explicit["execution_selection"]["model_provider_id"] == "local"
             assert generation[-1] == ("local", "vendor-b", "https://second.test/v1")
+
+
+def test_unresolvable_explicit_execution_fails_as_configuration_before_runtime(tmp_path, generation):
+    app = app_module.create_app(settings=settings_for(tmp_path))
+    with TestClient(app) as client:
+        profiles = client.get("/execution-profiles").json()["profiles"]
+        local_coding = next(profile for profile in profiles if profile["id"] == "local-default")
+        response = client.post(
+            "/runs",
+            json={
+                "prompt": "must not execute",
+                "execution": {
+                    "runtime_id": "missing-runtime",
+                    "model_provider_id": local_coding["model_provider_id"],
+                },
+            },
+        )
+        assert response.status_code == 202, response.text
+        run_id = response.json()["run_id"]
+        run = client.get(f"/runs/{run_id}").json()
+        events = client.get(f"/runs/{run_id}/events").json()
+
+    assert run["status"] == "failed"
+    assert run["execution_selection"] is None
+    failed = next(event for event in events if event["event_type"] == "run_failed")
+    assert failed["payload"]["error_code"] == "configuration_invalid"
+    assert failed["payload"]["message"] == (
+        "The selected provider, model, and runtime combination cannot be used. Review the execution settings."
+    )
+    assert generation == []
 
 
 @pytest.mark.parametrize("changes", [{"model_provider": "uninstalled"}, {"model_name": " "}])

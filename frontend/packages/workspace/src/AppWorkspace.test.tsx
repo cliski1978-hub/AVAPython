@@ -3,8 +3,10 @@ import { ApiClient, ApiError } from "@ava/api-client";
 import {
   createDocument,
   getHealth,
+  getModels,
   getDocument,
   getWorkspaces,
+  previewContextWindow,
   listDocuments,
   listConversations,
   listMessages,
@@ -14,23 +16,28 @@ import {
   listProjectConversations,
   listConversationFolders,
   createProjectConversation,
+  relocateConversation,
   setConversationProject,
   setConversationPinned,
   setConversationArchived,
   setCorePromptAssignment,
+  listConversationAttachments,
+  uploadConversationAttachment,
+  deleteConversationAttachment,
   getProject,
   startRun,
   streamRun,
   updateDocument,
 } from "@ava/api-client";
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { StrictMode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppWorkspace } from "./AppWorkspace";
 
@@ -44,6 +51,19 @@ vi.mock("@ava/api-client", async (importOriginal) => {
       status: "healthy",
       application: "AVA",
       contract_version: "v1",
+    }),
+    getModels: vi.fn().mockResolvedValue({ contract_version: "v1", models: [], default_model_id: null }),
+    previewContextWindow: vi.fn().mockResolvedValue({
+      context_window_tokens: null,
+      input_budget_tokens: null,
+      estimated_input_tokens: 0,
+      output_reserve_tokens: 0,
+      dropped_message_count: 0,
+      dropped_turn_count: 0,
+      count_accuracy: "estimated",
+      can_fit: true,
+      required_input_tokens: null,
+      model_id: null,
     }),
     getRuntimes: vi.fn().mockResolvedValue({
       contract_version: "v1",
@@ -73,6 +93,7 @@ vi.mock("@ava/api-client", async (importOriginal) => {
     listConversationFolders: vi.fn().mockResolvedValue({ folders: [], contract_version: "v1" }),
     createProjectConversation: vi.fn(),
     setConversationProject: vi.fn(),
+    relocateConversation: vi.fn(),
     setConversationPinned: vi.fn(),
     setConversationArchived: vi.fn(),
     listCorePrompts: vi.fn().mockResolvedValue({ core_prompts: [{ id: "prompt-1", name: "Prompt One", description: null, prompt_text: "Inert", category: "general", is_enabled: true, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }], contract_version: "v1" }),
@@ -138,6 +159,9 @@ vi.mock("@ava/api-client", async (importOriginal) => {
       }),
     ),
     listConversations: vi.fn().mockResolvedValue({ contract_version: "v1", conversations: [] }),
+    listConversationAttachments: vi.fn().mockResolvedValue({ contract_version: "v1", owner_type: "conversation", owner_id: "conversation-1", attachments: [] }),
+    uploadConversationAttachment: vi.fn(),
+    deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
     listMessages: vi.fn().mockResolvedValue({ contract_version: "v1", conversation_id: "conversation-1", messages: [] }),
     createConversation: vi.fn().mockImplementation(async () => {
       const conversation_id = `conversation-${nextConversationId++}`;
@@ -175,18 +199,38 @@ vi.mock("@ava/api-client", async (importOriginal) => {
   };
 });
 
+beforeAll(() => {
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number;
+    isPrimary: boolean;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+      this.isPrimary = init.isPrimary ?? true;
+    }
+  }
+  Object.defineProperty(window, "PointerEvent", { configurable: true, value: TestPointerEvent });
+});
+
 const client = new ApiClient({ baseUrl: "http://localhost:99999" });
 
 function chatTab() {
-  return screen.getByRole("tab", { name: "Chat" });
+  return screen.getByRole("link", { name: "Chat" });
 }
 
 function documentsTab() {
-  return screen.getByRole("tab", { name: "Documents" });
+  return screen.getByRole("link", { name: "Documents" });
 }
 
 function workspaceSelect(): HTMLSelectElement {
-  return screen.getByLabelText("Select workspace") as HTMLSelectElement;
+  return executionControl("Select workspace");
+}
+
+function executionControl(label: string): HTMLSelectElement {
+  if (screen.queryByRole("dialog", { name: "Execution settings" }) == null) {
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
+  }
+  return screen.getByLabelText(label) as HTMLSelectElement;
 }
 
 /** Open the Documents tab and wait for the shared document editor to mount. */
@@ -209,6 +253,150 @@ async function submitPrompt(text: string) {
 }
 
 describe("AppWorkspace", () => {
+  it("opens and closes the collapsible Run Inspector", async () => {
+    window.localStorage.clear();
+    render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Run Inspector" }));
+    expect(await screen.findByRole("complementary", { name: "Run Inspector" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Request" }));
+    expect(screen.getByRole("tab", { name: "Request" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Run Inspector" }));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Run Inspector" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Run Inspector" }));
+    const reopenedRequestTab = await screen.findByRole("tab", { name: "Request" });
+    expect(reopenedRequestTab.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("loads, uploads, and removes files for the active conversation", async () => {
+    vi.mocked(listConversations).mockResolvedValue({
+      contract_version: "v1",
+      conversations: [{ conversation_id: "attachment-chat", title: "Attachment chat", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" }],
+    });
+    vi.mocked(listMessages).mockResolvedValue({ contract_version: "v1", conversation_id: "attachment-chat", messages: [] });
+    vi.mocked(listConversationAttachments).mockResolvedValue({
+      contract_version: "v1",
+      owner_type: "conversation",
+      owner_id: "attachment-chat",
+      attachments: [],
+    });
+    vi.mocked(uploadConversationAttachment).mockResolvedValue({
+      attachment_id: "attachment-notes",
+      file_name: "notes.md",
+      media_type: "text/markdown",
+      size_bytes: 4,
+      owner_type: "conversation",
+      owner_id: "attachment-chat",
+      status: "available",
+      created_at: "2026-01-01T00:00:00Z",
+      contract_version: "v1",
+    });
+    render(<AppWorkspace client={client} />);
+    await screen.findByRole("button", { name: "Attachment chat" });
+    expect(await screen.findByRole("button", { name: "Attach files" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach files" }));
+    const input = screen.getByLabelText("Choose files to attach");
+    fireEvent.change(input, { target: { files: [new File(["data"], "notes.md", { type: "text/markdown" })] } });
+    expect(await screen.findByText("notes.md")).toBeTruthy();
+    expect(uploadConversationAttachment).toHaveBeenCalledWith(client, "attachment-chat", expect.any(File));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+    await waitFor(() => expect(deleteConversationAttachment).toHaveBeenCalledWith(client, "attachment-chat", "attachment-notes"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove notes.md" })).toBeNull());
+  });
+
+  it("keeps a slow upload attached to its original conversation after switching chats", async () => {
+    window.sessionStorage.setItem("ava.activeConversationId", "conversation-a");
+    vi.mocked(listConversations).mockResolvedValue({
+      contract_version: "v1",
+      conversations: [
+        { conversation_id: "conversation-a", title: "Conversation A", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+        { conversation_id: "conversation-b", title: "Conversation B", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+      ],
+    });
+    vi.mocked(listMessages).mockImplementation(async (_client, conversationId) => ({ contract_version: "v1", conversation_id: conversationId, messages: [] }));
+    vi.mocked(listConversationAttachments).mockImplementation(async (_client, conversationId) => ({
+      contract_version: "v1",
+      owner_type: "conversation",
+      owner_id: conversationId,
+      attachments: [],
+    }));
+    let releaseUpload!: () => void;
+    vi.mocked(uploadConversationAttachment).mockImplementation(async () => new Promise((resolve) => {
+      releaseUpload = () => resolve({
+        attachment_id: "late-attachment",
+        file_name: "late.md",
+        media_type: "text/markdown",
+        size_bytes: 4,
+        owner_type: "conversation",
+        owner_id: "conversation-a",
+        status: "available",
+        created_at: "2026-01-01T00:00:00Z",
+        contract_version: "v1",
+      });
+    }));
+
+    render(<AppWorkspace client={client} />);
+    await screen.findByRole("button", { name: "Attach files" });
+    fireEvent.click(screen.getByRole("button", { name: "Attach files" }));
+    fireEvent.change(screen.getByLabelText("Choose files to attach"), {
+      target: { files: [new File(["data"], "late.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(uploadConversationAttachment).toHaveBeenCalledWith(client, "conversation-a", expect.any(File)));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation B" }));
+    await waitFor(() => expect(listConversationAttachments).toHaveBeenCalledWith(client, "conversation-b"));
+    releaseUpload();
+    await waitFor(() => expect(screen.queryByText("late.md")).toBeNull());
+  });
+
+  it("keeps unsent composer drafts scoped to their conversation through rapid switches", async () => {
+    window.sessionStorage.setItem("ava.activeConversationId", "conversation-a");
+    vi.mocked(listConversations).mockResolvedValue({ contract_version: "v1", conversations: [
+      { conversation_id: "conversation-a", title: "Conversation A", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+      { conversation_id: "conversation-b", title: "Conversation B", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+      { conversation_id: "conversation-c", title: "Conversation C", created_at: "2026-01-03T00:00:00Z", updated_at: "2026-01-03T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+    ] });
+    vi.mocked(listMessages).mockImplementation(async (_client, conversationId) => ({ contract_version: "v1", conversation_id: conversationId, messages: [] }));
+    render(<AppWorkspace client={client} />);
+    const composer = await screen.findByLabelText("Message") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "draft-A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation B" }));
+    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Conversation C" }));
+    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Conversation A" }));
+    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("draft-A");
+  });
+
+  it("resizes the Run Inspector within its minimum and maximum widths", async () => {
+    window.localStorage.clear();
+    render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Run Inspector" }));
+    const separator = await screen.findByRole("separator", { name: "Resize Run Inspector" });
+    Object.defineProperty(separator, "setPointerCapture", { value: vi.fn(), configurable: true });
+    fireEvent.pointerDown(separator, { pointerId: 1 });
+    fireEvent.pointerMove(separator, { pointerId: 1, buttons: 1, clientX: window.innerWidth });
+    expect(separator.getAttribute("aria-valuenow")).toBe("280");
+    expect(window.localStorage.getItem("ava.ui.run-inspector-width")).toBe("280");
+    fireEvent.pointerMove(separator, { pointerId: 1, buttons: 1, clientX: window.innerWidth - 500 });
+    expect(separator.getAttribute("aria-valuenow")).toBe("500");
+    expect(window.localStorage.getItem("ava.ui.run-inspector-width")).toBe("500");
+    fireEvent.pointerMove(separator, { pointerId: 1, buttons: 1, clientX: 0 });
+    expect(separator.getAttribute("aria-valuenow")).toBe("700");
+    expect(window.localStorage.getItem("ava.ui.run-inspector-width")).toBe("700");
+  });
+
+  it("gives the shared composer the full responsive Chat canvas with modest gutters", () => {
+    render(<AppWorkspace client={client} />);
+    const composer = screen.getByLabelText("Message").closest("[data-prompt-composer]");
+    expect(composer?.className).toContain("w-full rounded-3xl");
+    expect(composer?.parentElement?.className).toContain("mx-auto");
+    expect(composer?.parentElement?.className).toContain("max-w-[90rem]");
+    expect(composer?.parentElement?.className).toContain("px-3");
+    expect(composer?.parentElement?.className).toContain("sm:px-4");
+    expect(composer?.parentElement?.className).toContain("lg:px-6");
+  });
+
   it("shows and retries a failed Documents bootstrap without treating it as empty", async () => {
     vi.mocked(listDocuments)
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
@@ -276,6 +464,30 @@ describe("AppWorkspace", () => {
   beforeEach(() => {
     nextConversationId = 1;
     vi.clearAllMocks();
+    vi.mocked(getHealth).mockReset().mockResolvedValue({ status: "healthy", application: "AVA", contract_version: "v1" });
+    vi.mocked(getModels).mockReset().mockResolvedValue({ contract_version: "v1", models: [], default_model_id: null });
+    vi.mocked(previewContextWindow).mockReset().mockResolvedValue({
+      context_window_tokens: null,
+      input_budget_tokens: null,
+      estimated_input_tokens: 0,
+      output_reserve_tokens: 0,
+      dropped_message_count: 0,
+      dropped_turn_count: 0,
+      count_accuracy: "estimated",
+      can_fit: true,
+      required_input_tokens: null,
+      model_id: null,
+    });
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(listConversations).mockReset().mockResolvedValue({ contract_version: "v1", conversations: [] });
+    vi.mocked(listMessages).mockReset().mockResolvedValue({ contract_version: "v1", conversation_id: "conversation-1", messages: [] });
+    vi.mocked(listProjects).mockReset().mockResolvedValue({ projects: [], contract_version: "v1" });
+    vi.mocked(listProjectConversations).mockReset().mockResolvedValue({ conversations: [], contract_version: "v1" });
+    vi.mocked(listConversationFolders).mockReset().mockResolvedValue({ folders: [], contract_version: "v1" });
+    vi.mocked(relocateConversation).mockReset();
+    vi.mocked(setConversationProject).mockReset();
+    vi.mocked(setConversationArchived).mockReset();
     window.history.replaceState(null, "", "/");
   });
 
@@ -285,15 +497,15 @@ describe("AppWorkspace", () => {
       projects: [{ id: "p-1", name: "AVA Engineering", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" }],
     });
     render(<AppWorkspace client={client} />);
-    const projectsTab = screen.getByRole("tab", { name: "Projects" });
+    const projectsTab = screen.getByRole("link", { name: "Projects" });
     expect(projectsTab).toBeTruthy();
     fireEvent.click(projectsTab);
     expect(await screen.findByRole("heading", { name: "Projects" })).toBeTruthy();
     expect(window.location.pathname).toBe("/projects");
     expect(listProjects).toHaveBeenCalledWith(client);
-    expect(screen.getByRole("tab", { name: "Projects" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("aria-current")).toBe("page");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("link", { name: "Chat" }));
     expect(await screen.findByLabelText("Message")).toBeTruthy();
     expect(window.location.pathname).toBe("/");
   });
@@ -321,7 +533,11 @@ describe("AppWorkspace", () => {
     expect(await screen.findByRole("button", { name: "Existing Project chat" })).toBeTruthy();
     expect(listProjectConversations).toHaveBeenCalledWith(client, project.id);
 
-    fireEvent.click(screen.getByRole("button", { name: "New Chat in Project Chat" }));
+    const projectNewChat = screen.getByRole("button", { name: "New Chat in Project Chat" });
+    expect(projectNewChat.className).toContain("bg-transparent");
+    expect(projectNewChat.className).toContain("h-8");
+    expect(projectNewChat.querySelector("svg")?.getAttribute("class")).toContain("lucide-plus");
+    fireEvent.click(projectNewChat);
     await waitFor(() => expect(createProjectConversation).toHaveBeenCalledWith(client, project.id));
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Project first prompt" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -461,10 +677,11 @@ describe("AppWorkspace", () => {
     expect(screen.getByRole("heading", { name: "Searchable Project chat" })).toBeTruthy();
   });
 
-  it("moves a canonical conversation between Projects and out without changing folder, selection, or transcript", async () => {
+  it("moves a canonical conversation between Projects and out with exclusive persisted destinations", async () => {
     const projectA = { id: "p-a", name: "Project A", description: null, instructions: null, is_archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
     const projectB = { id: "p-b", name: "Project B", description: null, instructions: null, is_archived: false, created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", contract_version: "v1" as const };
     let assignedProject: string | null = null;
+    let assignedFolder: string | null = "folder-a";
     const projectAssignments: Array<string | null> = [];
     const canonical = { conversation_id: "move-me", title: "Move me", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: "folder-a", project_id: null, contract_version: "v1" as const };
     vi.mocked(listProjects).mockResolvedValue({ projects: [projectA, projectB], contract_version: "v1" });
@@ -475,12 +692,13 @@ describe("AppWorkspace", () => {
     ] });
     vi.mocked(listProjectConversations).mockImplementation(async (_client, projectId) => ({
       contract_version: "v1",
-      conversations: assignedProject === projectId ? [{ ...canonical, project_id: projectId }] : [],
+      conversations: assignedProject === projectId ? [{ ...canonical, folder_id: assignedFolder, project_id: projectId }] : [],
     }));
-    vi.mocked(setConversationProject).mockImplementation(async (_client, _id, request) => {
-      assignedProject = request.project_id;
-      projectAssignments.push(request.project_id);
-      return { ...canonical, project_id: request.project_id };
+    vi.mocked(relocateConversation).mockImplementation(async (_client, _id, request) => {
+      assignedProject = request.destination_type === "project" ? request.destination_id ?? null : null;
+      assignedFolder = request.destination_type === "folder" ? request.destination_id ?? null : null;
+      projectAssignments.push(assignedProject);
+      return { ...canonical, folder_id: assignedFolder, project_id: assignedProject };
     });
     render(<AppWorkspace client={client} />);
     expect(await screen.findByText("Transcript stays")).toBeTruthy();
@@ -499,28 +717,28 @@ describe("AppWorkspace", () => {
 
     const openActions = () => fireEvent.click(screen.getAllByLabelText("Conversation actions for Move me")[0]);
     const moveTo = (projectName: string) => {
-      fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
-      fireEvent.click(screen.getByRole("menuitem", { name: projectName }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move" }));
+      fireEvent.change(screen.getByLabelText("Move destination"), { target: { value: projectName === "No Project" ? "__none__" : projectName === "Project A" ? "p-a" : "p-b" } });
+      fireEvent.click(screen.getByRole("button", { name: "Move" }));
     };
     openActions();
     moveTo("Project A");
-    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: "p-a" }));
+    await waitFor(() => expect(relocateConversation).toHaveBeenLastCalledWith(client, "move-me", { destination_type: "project", destination_id: "p-a" }));
     expect(screen.getByText("Transcript stays")).toBeTruthy();
     expect(runSignal?.aborted).toBe(false);
-    expect(screen.getByRole("button", { name: "Conversation actions for Move me" })).toBeTruthy();
-
     fireEvent.click(screen.getByRole("button", { name: "Expand Project A" }));
     expect((await screen.findAllByLabelText("Conversation actions for Move me")).length).toBe(1);
     openActions();
     moveTo("Project B");
-    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: "p-b" }));
+    await waitFor(() => expect(relocateConversation).toHaveBeenLastCalledWith(client, "move-me", { destination_type: "project", destination_id: "p-b" }));
     expect(screen.getByText("Transcript stays")).toBeTruthy();
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand Project B" }));
     openActions();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Project" }));
-    await waitFor(() => expect(setConversationProject).toHaveBeenLastCalledWith(client, "move-me", { project_id: null }));
+    moveTo("No Project");
+    await waitFor(() => expect(relocateConversation).toHaveBeenLastCalledWith(client, "move-me", { destination_type: "ungrouped" }));
     expect(screen.getByText("Transcript stays")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Collapse Folder A" })).toBeTruthy();
+    expect(document.querySelector('[data-folder-drop-target="folder-a"] [data-conversation-row="move-me"]')).toBeNull();
     expect(projectAssignments).toEqual(["p-a", "p-b", null]);
   });
 
@@ -544,6 +762,8 @@ describe("AppWorkspace", () => {
     expect(screen.getByRole("menuitem", { name: "Unpin" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
     await waitFor(() => expect(setConversationArchived).toHaveBeenCalledWith(client, "metadata-chat", { is_archived: true }));
+    expect(screen.getByText("No conversation selected.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
     expect(screen.getByRole("button", { name: "Metadata chat" })).toBeTruthy();
     expect(listProjectConversations).toHaveBeenCalledWith(client, project.id);
   });
@@ -564,7 +784,7 @@ describe("AppWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to Projects" }));
     await screen.findByRole("heading", { name: "Projects" });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("link", { name: "Chat" }));
     fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
     await screen.findByLabelText("Message");
     vi.mocked(startRun).mockResolvedValueOnce({
@@ -584,7 +804,7 @@ describe("AppWorkspace", () => {
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep streaming" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(streamRun).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("tab", { name: "Projects" }));
+    fireEvent.click(screen.getByRole("link", { name: "Projects" }));
     await screen.findByRole("heading", { name: "Projects" });
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(await screen.findByRole("heading", { name: "AVA Engineering" })).toBeTruthy();
@@ -592,7 +812,7 @@ describe("AppWorkspace", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Files" }));
     expect(await screen.findByText("No files in this Project yet.")).toBeTruthy();
     expect(runSignal?.aborted).toBe(false);
-    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("link", { name: "Chat" }));
     expect((await screen.findAllByText("Keep streaming")).length).toBeGreaterThan(0);
     expect(runSignal?.aborted).toBe(false);
   });
@@ -604,14 +824,14 @@ describe("AppWorkspace", () => {
     ));
     render(<AppWorkspace client={client} />);
     expect(await screen.findByRole("heading", { name: "Project not found" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Projects" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("aria-current")).toBe("page");
     expect(getProject).toHaveBeenCalledWith(client, "missing-project");
   });
 
   it("starts in the chat workspace with the document workspace closed", () => {
     render(<AppWorkspace client={client} />);
-    expect(chatTab().getAttribute("aria-selected")).toBe("true");
-    expect(documentsTab().getAttribute("aria-selected")).toBe("false");
+    expect(chatTab().getAttribute("aria-current")).toBe("page");
+    expect(documentsTab().getAttribute("aria-current")).toBeNull();
     expect(screen.getByText("No conversation selected.")).toBeTruthy();
     expect(screen.getByLabelText("Message")).toBeTruthy();
     expect(
@@ -619,8 +839,36 @@ describe("AppWorkspace", () => {
     ).toBeNull();
   });
 
-  it("shows Unavailable for a transport failure from another ApiClient instance and recovers on success", async () => {
+  it("loads Documents directly and marks its primary route", async () => {
+    window.history.replaceState(null, "", "/documents");
     render(<AppWorkspace client={client} />);
+    expect(screen.getByRole("link", { name: "Documents" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByRole("textbox", { name: "Document content" })).toBeTruthy();
+  });
+
+  it("loads Settings directly and marks its primary route", async () => {
+    window.history.replaceState(null, "", "/settings");
+    render(<AppWorkspace client={client} />);
+    expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByTestId("settings-workspace")).toBeTruthy();
+  });
+
+  it("loads the shared Approvals view directly and stays read-only without an authorized adapter", async () => {
+    window.history.replaceState(null, "", "/approvals");
+    render(<AppWorkspace client={client} />);
+    expect(screen.getByRole("link", { name: "Approvals" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByText("Approval service unavailable")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  it("shows Unavailable for a transport failure from another ApiClient instance and recovers on success", async () => {
+    let resolveInitialHealth!: (value: { status: "healthy"; application: string; contract_version: "v1" }) => void;
+    vi.mocked(getHealth).mockImplementationOnce(() => new Promise((resolve) => { resolveInitialHealth = resolve; }));
+    const bootstrapRequests = vi.fn().mockRejectedValue(new TypeError("unexpected bootstrap request"));
+    const appClient = new ApiClient({ baseUrl: "http://localhost:99999", fetchImpl: bootstrapRequests });
+    render(<AppWorkspace client={appClient} />);
+    await waitFor(() => expect(resolveInitialHealth).toBeTypeOf("function"));
+    await act(async () => resolveInitialHealth({ status: "healthy", application: "AVA", contract_version: "v1" }));
     await waitFor(() => expect(screen.getByText("Connected")).toBeTruthy());
 
     const failingClient = new ApiClient({
@@ -663,12 +911,12 @@ describe("AppWorkspace", () => {
         screen.getByRole("textbox", { name: "Document content" }),
       ).toBeTruthy();
     });
-    expect(documentsTab().getAttribute("aria-selected")).toBe("true");
-    expect(chatTab().getAttribute("aria-selected")).toBe("false");
+    expect(documentsTab().getAttribute("aria-current")).toBe("page");
+    expect(chatTab().getAttribute("aria-current")).toBeNull();
 
     fireEvent.click(chatTab());
     await waitFor(() => {
-      expect(chatTab().getAttribute("aria-selected")).toBe("true");
+      expect(chatTab().getAttribute("aria-current")).toBe("page");
     });
   });
 
@@ -707,11 +955,11 @@ describe("AppWorkspace", () => {
     });
     fireEvent.click(chatTab());
     await waitFor(() => {
-      expect(chatTab().getAttribute("aria-selected")).toBe("true");
+      expect(chatTab().getAttribute("aria-current")).toBe("page");
     });
     fireEvent.click(documentsTab());
     await waitFor(() => {
-      expect(documentsTab().getAttribute("aria-selected")).toBe("true");
+      expect(documentsTab().getAttribute("aria-current")).toBe("page");
     });
     const editorNodeAfter = screen.getByRole("textbox", {
       name: "Document content",
@@ -721,6 +969,7 @@ describe("AppWorkspace", () => {
 
   it("shows None for the workspace by default when the registry is empty", async () => {
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
     await waitFor(() => {
       expect(vi.mocked(getWorkspaces)).toHaveBeenCalled();
     });
@@ -738,6 +987,7 @@ describe("AppWorkspace", () => {
       ],
     });
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getAllByRole("option", { name: "Workspace A" }).length).toBeGreaterThan(0);
@@ -789,6 +1039,7 @@ describe("AppWorkspace", () => {
       ],
     });
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "Workspace A" })).toBeTruthy();
@@ -797,7 +1048,7 @@ describe("AppWorkspace", () => {
     expect(workspaceSelect().value).toBe("workspace-a");
 
     fireEvent.change(
-      screen.getByLabelText("Select execution profile"),
+      executionControl("Select execution profile"),
       { target: { value: "fast" } },
     );
 
@@ -813,18 +1064,19 @@ describe("AppWorkspace", () => {
       ],
     });
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "Workspace A" })).toBeTruthy();
     });
     fireEvent.change(workspaceSelect(), { target: { value: "workspace-a" } });
 
-    fireEvent.change(screen.getByLabelText("Select runtime"), {
+    fireEvent.change(executionControl("Select runtime"), {
       target: { value: "native" },
     });
     expect(workspaceSelect().value).toBe("workspace-a");
 
-    fireEvent.change(screen.getByLabelText("Select model"), {
+    fireEvent.change(executionControl("Select model"), {
       target: { value: "local" },
     });
     expect(workspaceSelect().value).toBe("workspace-a");
@@ -838,6 +1090,7 @@ describe("AppWorkspace", () => {
       ],
     });
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "Workspace A" })).toBeTruthy();
@@ -845,7 +1098,7 @@ describe("AppWorkspace", () => {
     fireEvent.change(workspaceSelect(), { target: { value: "workspace-a" } });
 
     fireEvent.change(
-      screen.getByLabelText("Select execution profile"),
+      executionControl("Select execution profile"),
       { target: { value: "auto" } },
     );
 
@@ -855,6 +1108,7 @@ describe("AppWorkspace", () => {
   it("keeps the composer usable and swallows the workspace selector when discovery fails", async () => {
     vi.mocked(getWorkspaces).mockRejectedValueOnce(new Error("boom"));
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getByText("Workspace options unavailable")).toBeTruthy();
@@ -881,6 +1135,7 @@ describe("AppWorkspace", () => {
       })
       .mockResolvedValueOnce({ contract_version: "v1", workspaces: [] });
     const first = render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "Workspace A" })).toBeTruthy();
@@ -890,6 +1145,7 @@ describe("AppWorkspace", () => {
 
     first.unmount();
     render(<AppWorkspace client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
 
     const newSelect = await screen.findByLabelText("Select workspace");
     await waitFor(() => {
@@ -984,7 +1240,7 @@ describe("AppWorkspace", () => {
     await waitFor(() => expect(vi.mocked(updateDocument)).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText("Unsaved changes")).toBeTruthy());
 
-    expect(screen.getByRole("tab", { name: "Chat" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Durable Notes/ }).textContent).toBe("Durable Notes \u2022");
     expect(screen.queryByRole("button", { name: /Untitled Document 2/ })).toBeNull();
   });

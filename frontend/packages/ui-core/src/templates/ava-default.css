@@ -1,0 +1,8 @@
+:root,
+[data-template="ava-default"] {
+  --ava-sidebar-width: 17rem;
+  --ava-sidebar-collapsed-width: 3.5rem;
+  --ava-header-height: 3.5rem;
+  --ava-shell-content-padding: 1.25rem;
+  --ava-shell-section-gap: 1.25rem;
+}

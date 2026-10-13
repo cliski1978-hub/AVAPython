@@ -34,6 +34,8 @@ from ava.infrastructure.persistence.serialization import (
 from ava.repositories.attachment_repository import (
     AttachmentRecord,
     AttachmentRepository,
+    DuplicateConversationAttachmentNameError,
+    normalize_conversation_attachment_name,
 )
 
 _ATTACHMENT_COLUMNS = (
@@ -86,6 +88,22 @@ class RelationalAttachmentRepository(AttachmentRepository):
                 ).fetchone()
                 if existing_key is not None:
                     raise ValueError(f"Attachment storage key already in use: {record.storage_key}")
+                if record.owner_type is AttachmentOwnerType.CONVERSATION:
+                    normalized_name = normalize_conversation_attachment_name(record.file_name)
+                    existing_names = connection.execute(
+                        "SELECT file_name FROM attachments WHERE owner_type = ? AND owner_id = ? ORDER BY id ASC",
+                        (AttachmentOwnerType.CONVERSATION.value, record.owner_id),
+                    ).fetchall()
+                    conflict = next(
+                        (
+                            row["file_name"]
+                            for row in existing_names
+                            if normalize_conversation_attachment_name(row["file_name"]) == normalized_name
+                        ),
+                        None,
+                    )
+                    if conflict is not None:
+                        raise DuplicateConversationAttachmentNameError(conflict)
                 connection.execute(
                     "INSERT INTO attachments (attachment_id, file_name, media_type, size_bytes, "
                     "storage_key, owner_type, owner_id, status, created_at) "
@@ -169,6 +187,20 @@ class RelationalAttachmentRepository(AttachmentRepository):
         except sqlite3.Error as exc:
             raise translate_database_error(exc, entity="Attachment", key=attachment_id) from exc
         return row_to_attachment_record(row) if row is not None else None
+
+    def delete(self, attachment_id: str) -> AttachmentRecord | None:
+        try:
+            with self._database.transaction() as connection:
+                row = connection.execute(
+                    f"SELECT {_ATTACHMENT_COLUMNS} FROM attachments WHERE attachment_id = ?",
+                    (attachment_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                connection.execute("DELETE FROM attachments WHERE attachment_id = ?", (attachment_id,))
+        except sqlite3.Error as exc:
+            raise translate_database_error(exc, entity="Attachment", key=attachment_id) from exc
+        return row_to_attachment_record(row)
 
 
 # ============================================================

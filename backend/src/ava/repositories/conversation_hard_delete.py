@@ -15,9 +15,10 @@ class ActiveConversationRunDeletionError(Exception):
 
 @dataclass(frozen=True)
 class ConversationDeletion:
-    """Result of one committed conversation deletion and its unshared blobs."""
+    """Result of committed conversation deletions and their unshared blobs."""
 
     attachment_storage_keys: tuple[str, ...]
+    deleted_conversation_ids: tuple[str, ...] = ()
 
 
 class ConversationHardDeleteCoordinator(ABC):
@@ -27,3 +28,14 @@ class ConversationHardDeleteCoordinator(ABC):
     def delete(self, conversation_id: str) -> ConversationDeletion | None:
         """Delete the aggregate, or return ``None`` when the conversation is unknown."""
         raise NotImplementedError
+
+    def delete_many(self, conversation_ids: tuple[str, ...]) -> ConversationDeletion:
+        """Delete several aggregates; adapters with transactions should override atomically."""
+        storage_keys: list[str] = []
+        deleted_ids: list[str] = []
+        for conversation_id in dict.fromkeys(conversation_ids):
+            deletion = self.delete(conversation_id)
+            if deletion is not None:
+                storage_keys.extend(deletion.attachment_storage_keys)
+                deleted_ids.append(conversation_id)
+        return ConversationDeletion(tuple(storage_keys), tuple(deleted_ids))

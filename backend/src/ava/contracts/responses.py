@@ -9,7 +9,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from ava.contracts.capabilities import CapabilityName
-from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.models import ModelInfo, ModelProviderHealth
 from ava.contracts.runtimes import RuntimeInfo
 from ava.contracts.version import CONTRACT_VERSION
@@ -135,6 +135,7 @@ class RunResponse(BaseModel):
     source_user_message_id: str | None = None
     assistant_message_id: str | None = None
     execution_selection: RunExecutionSelection | None = None
+    execution_mode: ExecutionMode = ExecutionMode.CHAT
     cancellation_requested_at: datetime | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 

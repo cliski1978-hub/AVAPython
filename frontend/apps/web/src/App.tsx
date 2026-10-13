@@ -7,5 +7,5 @@ const DEFAULT_BASE_URL =
 const client = new ApiClient({ baseUrl: DEFAULT_BASE_URL });
 
 export function App() {
-  return <AppWorkspace client={client} />;
+  return <AppWorkspace client={client} enableDesignSystemPreview={import.meta.env.DEV} />;
 }

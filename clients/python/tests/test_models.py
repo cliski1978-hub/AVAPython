@@ -7,6 +7,8 @@ from ava_client.models import (
     ModelHostingMode,
     ModelProviderDiscoveryResponse,
     ModelProviderHealthStatus,
+    RunRequest,
+    RunResponse,
     WorkspaceDiscoveryResponse,
     WorkspaceKind,
 )
@@ -154,6 +156,7 @@ def test_client_models_validate_catalog_discovery_contract() -> None:
     response = ModelDiscoveryResponse.model_validate(
         {
             "contract_version": "v1",
+            "default_model_id": "ava/local",
             "models": [{
                 "provider_name": "local", "model_id": "ava/local", "display_name": "Local",
                 "context_limit": None,
@@ -171,3 +174,43 @@ def test_client_models_validate_catalog_discovery_contract() -> None:
     assert model.hosting_mode is ModelHostingMode.LOCAL
     assert model.enabled is False
     assert model.capabilities.tool_calling is True
+    assert response.default_model_id == "ava/local"
+
+
+def test_client_run_models_keep_phase_5_execution_and_inspection_identity_fields() -> None:
+    response = RunResponse.model_validate({
+        "run_id": "run-1",
+        "status": "completed",
+        "conversation_id": "conversation-1",
+        "source_user_message_id": "message-1",
+        "assistant_message_id": "assistant-1",
+        "cancellation_requested_at": None,
+        "execution_selection": {
+            "runtime_id": "native",
+            "model_provider_id": "local",
+            "model_id": "ava/local",
+            "hosting_mode": "local",
+            "runtime_source": "project",
+            "model_source": "application",
+            "provider_connection_id": "provider-connection-1",
+            "runtime_configuration_id": "runtime-configuration-1",
+            "project_id": "project-1",
+            "contract_version": "v1",
+        },
+        "contract_version": "v1",
+    })
+    request = RunRequest.model_validate({
+        "prompt": "hello",
+        "conversation_id": "conversation-1",
+        "source_user_message_id": "message-1",
+        "workspace_id": "workspace-1",
+        "execution": {"mode": "auto", "runtime_id": "native", "model_id": "ava/local"},
+    })
+
+    assert response.execution_selection is not None
+    assert response.execution_selection.runtime_source == "project"
+    assert response.execution_selection.project_id == "project-1"
+    assert response.conversation_id == "conversation-1"
+    assert request.execution is not None
+    assert request.execution.mode == "auto"
+    assert request.workspace_id == "workspace-1"

@@ -35,14 +35,14 @@ const FAILURE_PRESENTATIONS: Record<string, FailurePresentation> = {
   configuration_missing: {
     title: "Execution configuration missing",
     description:
-      "AVA does not have a complete execution configuration. Choose a runtime, model, and provider in Settings.",
+      "Unable to start this run. The selected execution configuration is incomplete. Choose a valid runtime, model, and provider, then try again.",
     settingsSection: "defaults",
     retryable: false,
   },
   configuration_invalid: {
     title: "Invalid execution configuration",
     description:
-      "The selected provider, model, and runtime combination cannot be used. Review the execution settings.",
+      "Unable to start this run. The selected provider, model, and runtime combination is invalid. Review Execution Settings and try again.",
     settingsSection: "defaults",
     retryable: false,
   },
@@ -158,6 +158,8 @@ export function describeRunFailure(errorCode: string | undefined | null): Failur
 /** AVA-owned wording for errors whose machine-readable code is known. */
 function messageForCode(errorCode: string | undefined): string | null {
   switch (errorCode) {
+    case "conversation_attachment_name_conflict":
+      return "A file with this name is already attached to this conversation. Remove or rename the existing file before uploading another.";
     case "conversation_run_active":
       return "This conversation already has a response in progress.";
     case "execution_interrupted":
@@ -175,6 +177,9 @@ function messageForCode(errorCode: string | undefined): string | null {
 export function presentAvaError(error: unknown, fallback = "That action could not be completed."): string {
   if (error instanceof ApiError) {
     const body = error.body as Partial<ErrorResponse> | null | undefined;
+    if (body?.error_code === "conversation_attachment_name_conflict" && body.message) {
+      return body.message;
+    }
     return messageForCode(body?.error_code) ?? fallback;
   }
   return fallback;

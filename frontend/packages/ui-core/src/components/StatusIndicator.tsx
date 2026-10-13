@@ -45,8 +45,8 @@ export function StatusIndicator({
         alignItems: "center",
         gap: t.spacing.sm,
         fontSize: t.font.sizeSm,
-        color: t.colors.mutedText,
       }}
+      className="text-muted-foreground"
     >
       {state === "working" ? (
         <LoadingIndicator size="sm" />

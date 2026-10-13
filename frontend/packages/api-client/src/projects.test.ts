@@ -169,6 +169,19 @@ describe("Project API client", () => {
     expect(fetchMock.mock.calls[5][1]?.body).toBeUndefined();
   });
 
+  it("opts into deleting Project conversations only when explicitly requested", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ deleted_conversation_ids: ["c-1"] }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://localhost:8000", fetchImpl: fetchMock });
+    await deleteProject(client, "p/1");
+    await expect(deleteProject(client, "p/1", { deleteConversations: true })).resolves.toEqual(["c-1"]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:8000/projects/p%2F1",
+      "http://localhost:8000/projects/p%2F1?delete_conversations=true",
+    ]);
+  });
+
   it("propagates typed API errors for not-found and validation responses", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error_code: "project_not_found" }), { status: 404 }))

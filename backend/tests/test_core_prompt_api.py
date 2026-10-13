@@ -35,6 +35,48 @@ def test_core_prompt_routes_are_registered_with_expected_methods() -> None:
 
 @pytest.mark.parametrize("provider", ["memory", "relational"])
 @pytest.mark.asyncio
+async def test_prompt_preview_includes_unassigned_core_prompts_at_every_conversation_scope(
+    provider: str, tmp_path: Path
+) -> None:
+    app = create_app(
+        settings=Settings(
+            persistence_provider=provider,
+            persistence_database_url=str(tmp_path / f"prompt-preview-global-{provider}.sqlite3"),
+        )
+    )
+    try:
+        persistence = app.state.persistence
+        now = datetime.now(UTC)
+        persistence.project_repository.create(ProjectRecord("project-1", "Project", now, now))
+        persistence.conversation_folder_repository.create(ConversationFolderRecord("folder-1", "Folder", now, now))
+        persistence.conversation_repository.create("plain", title="Plain")
+        persistence.conversation_repository.create("project-chat", title="Project", project_id="project-1")
+        persistence.conversation_repository.create("folder-chat", title="Folder", folder_id="folder-1")
+        prompt = app.state.core_prompt_service.create_core_prompt(
+            CreateCorePromptRequest(
+                name="AVA PRIME DIRECTIVES",
+                prompt_text="Protect agency and preserve truth.",
+                category="core",
+            )
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            responses = [
+                await client.get("/prompt-preview"),
+                await client.get("/conversations/plain/prompt-preview"),
+                await client.get("/conversations/project-chat/prompt-preview"),
+                await client.get("/conversations/folder-chat/prompt-preview"),
+            ]
+        for response in responses:
+            assert response.status_code == 200
+            assert [item["id"] for item in response.json()["resolved_core_prompts"]] == [prompt.id]
+            assert response.json()["resolved_core_prompts"][0]["prompt_text"] == prompt.prompt_text
+    finally:
+        app.state.persistence.dispose()
+
+
+@pytest.mark.parametrize("provider", ["memory", "relational"])
+@pytest.mark.asyncio
 async def test_prompt_resolution_preview_derives_membership_and_is_read_only(provider: str, tmp_path: Path) -> None:
     app = create_app(
         settings=Settings(

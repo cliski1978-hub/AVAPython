@@ -1,0 +1,21 @@
+/** Canonical Lucide icons used by shared application shell consumers. */
+export {
+  ArrowUp as ArrowUpIcon,
+  ChevronDown as ChevronDownIcon,
+  ChevronRight as ChevronRightIcon,
+  Ellipsis as EllipsisIcon,
+  Folder as FolderIcon,
+  FolderOpen as FolderOpenIcon,
+  FolderPlus as FolderPlusIcon,
+  LoaderCircle as LoaderCircleIcon,
+  MoreHorizontal as MoreHorizontalIcon,
+  Paperclip as PaperclipIcon,
+  Plus as PlusIcon,
+  Rocket as RocketIcon,
+  Search as SearchIcon,
+  Square as SquareIcon,
+  SquarePen as SquarePenIcon,
+  Undo2 as Undo2Icon,
+  Redo2 as Redo2Icon,
+  X as XIcon,
+} from "lucide-react";

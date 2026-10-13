@@ -22,7 +22,7 @@ from ava.agents.contracts import AgentPort, AgentRunResult
 from ava.api.app import create_app
 from ava.configuration.settings import Settings
 from ava.contracts.capabilities import CapabilityName
-from ava.contracts.conversations import ContextMessage, MessageRole, RunContext
+from ava.contracts.conversations import ContextMessage, ExecutionPromptLayers, MessageRole, RunContext
 from ava.contracts.models import (
     ModelCapabilities,
     ModelInfo,
@@ -545,6 +545,7 @@ def test_openhands_receives_the_same_context_translated_to_one_message(
             ContextMessage(role=MessageRole.ASSISTANT, content="A1"),
             ContextMessage(role=MessageRole.USER, content="U2"),
         ],
+        prompt_layers=ExecutionPromptLayers(root_system_prompt="Root prompt used"),
     )
 
     async def scenario() -> RuntimeRunResult:
@@ -564,6 +565,8 @@ def test_openhands_receives_the_same_context_translated_to_one_message(
     assert rendered.index("U1") < rendered.index("A1") < rendered.index("U2")
     assert rendered.count("U2") == 1
     assert rendered.startswith("Earlier messages in this conversation")
+    assert result.runtime_request["initial_user_message"]["content"] == rendered
+    assert "Root prompt used" in result.runtime_request["agent_context"]["system_message_suffix"]
 
 
 def test_openhands_single_turn_stays_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:

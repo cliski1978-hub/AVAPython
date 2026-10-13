@@ -1,5 +1,6 @@
 """Application behavior for Project lifecycle and metadata."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -30,10 +31,15 @@ class ProjectService:
     """Own Project identity, name, timestamp, archive, and delete semantics."""
 
     def __init__(
-        self, *, project_repository: ProjectRepository, project_file_service: ProjectFileService | None = None
+        self,
+        *,
+        project_repository: ProjectRepository,
+        project_file_service: ProjectFileService | None = None,
+        delete_project_conversations: Callable[[str], tuple[str, ...]] | None = None,
     ) -> None:
         self._projects = project_repository
         self._project_files = project_file_service
+        self._delete_project_conversations = delete_project_conversations
 
     def create_project(
         self,
@@ -97,11 +103,19 @@ class ProjectService:
             raise ProjectNotFoundError(project_id)
         return persisted
 
-    def delete_project(self, project_id: str) -> None:
+    def delete_project(self, project_id: str, *, delete_conversations: bool = False) -> tuple[str, ...] | None:
+        if self._projects.get(project_id) is None:
+            raise ProjectNotFoundError(project_id)
+        deleted_conversation_ids: tuple[str, ...] = ()
+        if delete_conversations:
+            if self._delete_project_conversations is None:
+                raise RuntimeError("Project conversation deletion is not configured")
+            deleted_conversation_ids = self._delete_project_conversations(project_id)
         if self._project_files is not None:
             self._project_files.delete_project(project_id)
         elif not self._projects.delete(project_id):
             raise ProjectNotFoundError(project_id)
+        return deleted_conversation_ids if delete_conversations else None
 
     @staticmethod
     def _normalize_name(name: str) -> str:

@@ -13,10 +13,12 @@ from ava.agents.contracts import (
     ExecutionConfigurationError,
     ExecutionPromptContextBuilderPort,
 )
+from ava.contracts.attachment_context import AttachmentContextStatus
 from ava.contracts.capabilities import CapabilityName
 from ava.contracts.conversations import (
     ExecutionPromptContextBuildError,
     RunContext,
+    draft_preview_context_messages,
     execution_context_messages,
 )
 from ava.contracts.execution import RunExecutionSelection
@@ -24,8 +26,13 @@ from ava.contracts.failures import FailureCode
 from ava.contracts.models import ModelHostingMode
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.contracts.run_inspection import ContextCompactionAccounting, ContextWindowAccounting, RunInspectionSnapshot
 from ava.execution.compatibility import ExecutionCompatibilityValidator
-from ava.execution.context_window import ContextWindowExceededError, ContextWindowManager
+from ava.execution.context_window import (
+    ContextWindowExceededError,
+    ContextWindowManager,
+    ContextWindowResult,
+)
 from ava.execution.hosting import ModelHostingRequirement
 from ava.execution.model_resources import ModelLease, ModelResourceManager
 from ava.execution.selector import ExecutionSelector
@@ -101,8 +108,11 @@ class NativeAgentAdapter(AgentPort):
         request: RunRequest,
         *,
         context: RunContext | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
-        return await self._start_run(run_id, request, context=context, on_content=None)
+        return await self._start_run(
+            run_id, request, context=context, on_content=None, resolved_execution=resolved_execution
+        )
 
     async def start_run_streaming(
         self,
@@ -111,9 +121,18 @@ class NativeAgentAdapter(AgentPort):
         *,
         context: RunContext | None = None,
         on_content: Callable[[str], None],
+        on_inspection: Callable[[RunInspectionSnapshot], None] | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
         """Forward normalized content snapshots from the selected runtime."""
-        return await self._start_run(run_id, request, context=context, on_content=on_content)
+        return await self._start_run(
+            run_id,
+            request,
+            context=context,
+            on_content=on_content,
+            on_inspection=on_inspection,
+            resolved_execution=resolved_execution,
+        )
 
     async def _start_run(
         self,
@@ -122,12 +141,13 @@ class NativeAgentAdapter(AgentPort):
         *,
         context: RunContext | None,
         on_content: Callable[[str], None] | None,
+        on_inspection: Callable[[RunInspectionSnapshot], None] | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
         self._terminal_statuses.pop(run_id, None)
         try:
-            execution = self._selector.resolve(
-                request.execution,
-                conversation_id=request.conversation_id,
+            execution = resolved_execution or self._selector.resolve(
+                request.execution, conversation_id=request.conversation_id
             )
             selection = self._selection(execution)
             compatible = self._validator.validate(
@@ -144,8 +164,13 @@ class NativeAgentAdapter(AgentPort):
             # here would discard every configuration classification and collapse
             # them into the generic code.
             raise
-        except Exception:
-            return AgentRunResult(status=RunStatus.FAILED, content="Requested execution unavailable")
+        except Exception as exc:
+            # Runtime/model profile ids are resolved before any adapter runs.
+            # Resolver failures such as an unknown runtime or no eligible model
+            # are plain ValueErrors today, not ExecutionConfigurationErrors;
+            # treating them as an agent failure used to lose both the selected
+            # execution identity and the actionable configuration classification.
+            raise ExecutionConfigurationError("Selected execution configuration could not be resolved") from exc
         if not compatible:
             return AgentRunResult(
                 status=RunStatus.FAILED,
@@ -172,31 +197,133 @@ class NativeAgentAdapter(AgentPort):
                     execution_selection=selection,
                     failure_code=FailureCode.CONFIGURATION_INVALID,
                 )
+        lease: ModelLease | None = None
+        if self._resource_manager is not None:
+            try:
+                lease = await self._resource_manager.acquire(
+                    execution.model_profile.model_id, profile=execution.model_profile
+                )
+            except Exception:
+                logger.exception("Unable to acquire the selected model for run %s", run_id)
+                return AgentRunResult(
+                    status=RunStatus.FAILED,
+                    content="Selected model is unavailable",
+                    execution_selection=selection,
+                    failure_code=FailureCode.CONFIGURATION_INVALID,
+                )
+        compaction = ContextCompactionAccounting.model_validate(
+            context.compaction_accounting if context and context.compaction_accounting else {}
+        )
         try:
-            bounded = self._bound_context(context, request, execution)
-        except ContextWindowExceededError:
+            bounded, budget = self._bound_context(context, request, execution)
+        except ContextWindowExceededError as exc:
             logger.info("Run %s does not fit the selected model's context window", run_id)
+            if lease is not None:
+                await lease.release()
+            limit = self._context_limit(execution)
+            inspection = RunInspectionSnapshot(
+                attachments=[
+                    item.model_copy(
+                        update={
+                            "status": AttachmentContextStatus.EXCLUDED_CONTEXT_LIMIT,
+                            "included": False,
+                            "text": None,
+                        }
+                    )
+                    if item.status is AttachmentContextStatus.EXTRACTED
+                    else item
+                    for item in (context.attachments if context else [])
+                ],
+                execution_resolution={
+                    "model_id": execution.model_profile.model_id,
+                    "project_id": execution.project_id,
+                },
+                context_window=ContextWindowAccounting(
+                    context_window_tokens=limit,
+                    input_budget_tokens=exc.available_budget,
+                    estimated_input_tokens=exc.estimated_size,
+                    output_reserve_tokens=(limit - exc.available_budget) if limit is not None else 0,
+                    count_accuracy="estimated",
+                    can_fit=False,
+                    required_input_tokens=exc.estimated_size,
+                    model_id=execution.model_profile.model_id,
+                ),
+                context_compaction=compaction,
+            )
             return AgentRunResult(
                 status=RunStatus.FAILED,
                 content=_CONTEXT_WINDOW_CONTENT,
+                execution_selection=selection,
                 failure_code=FailureCode.CONTEXT_WINDOW_EXCEEDED,
+                inspection_snapshot=inspection,
             )
+        inspection = RunInspectionSnapshot(
+            execution_resolution={
+                "runtime_id": selection.runtime_id if selection else None,
+                "model_provider_id": selection.model_provider_id if selection else None,
+                "model_id": selection.model_id if selection else None,
+                "hosting_mode": selection.hosting_mode.value if selection and selection.hosting_mode else None,
+                "workspace_id": request.workspace_id,
+                "runtime_source": (
+                    execution.source.value
+                    if execution.source.value == "persisted"
+                    else execution.runtime_selection_source.value
+                ),
+                "model_source": (
+                    execution.source.value
+                    if execution.source.value == "persisted"
+                    else execution.model_selection_source.value
+                ),
+                "provider_connection_id": execution.provider_connection_id,
+                "runtime_configuration_id": execution.runtime_configuration_id,
+                "project_id": execution.project_id,
+            },
+            prompt_layers=bounded.prompt_layers if bounded is not None else None,
+            normalized_request=execution_context_messages(bounded, request.prompt),
+            attachments=bounded.attachments if bounded is not None else [],
+            context_window=ContextWindowAccounting(
+                context_window_tokens=budget.context_limit,
+                input_budget_tokens=budget.input_budget,
+                estimated_input_tokens=budget.estimated_input_tokens,
+                output_reserve_tokens=(
+                    budget.context_limit - budget.input_budget
+                    if budget.context_limit is not None and budget.input_budget is not None
+                    else 0
+                ),
+                dropped_message_count=budget.dropped_message_count,
+                dropped_turn_count=budget.dropped_turn_count,
+                count_accuracy="estimated",
+                model_id=execution.model_profile.model_id,
+                attachment_context_tokens=sum(item.token_count for item in bounded.attachments if item.included)
+                if bounded is not None
+                else 0,
+            ),
+            context_compaction=compaction.model_copy(
+                update={
+                    "estimated_after_tokens": budget.estimated_input_tokens,
+                    "recent_message_ids": [
+                        message.message_id
+                        for message in (bounded.messages if bounded is not None else [])
+                        if message.message_id
+                    ],
+                }
+            ),
+        )
+        if on_inspection is not None:
+            on_inspection(inspection)
         try:
             workspace: RuntimeWorkspaceBinding | None = self._resolve_workspace(request.workspace_id)
         except UnknownWorkspaceError:
+            if lease is not None:
+                await lease.release()
             return AgentRunResult(
                 status=RunStatus.FAILED,
                 content="Requested workspace is unavailable",
                 failure_code=FailureCode.CONFIGURATION_INVALID,
             )
-        lease: ModelLease | None = None
         terminal_status = RunStatus.FAILED
         self._executions[run_id] = execution
         try:
-            if self._resource_manager is not None:
-                lease = await self._resource_manager.acquire(
-                    execution.model_profile.model_id, profile=execution.model_profile
-                )
             if on_content is None or not execution.model_profile.capabilities.streaming:
                 result = await execution.runtime.execute(
                     run_id=run_id,
@@ -217,11 +344,25 @@ class NativeAgentAdapter(AgentPort):
                     context=bounded,
                 )
             terminal_status = result.status
+            inspection = inspection.model_copy(
+                update={
+                    "runtime_request": result.runtime_request,
+                    "runtime_response": result.runtime_response,
+                    "normalized_response": {
+                        "status": result.status.value,
+                        "content": result.content,
+                        "failure_code": result.failure_code,
+                    },
+                }
+            )
+            if on_inspection is not None:
+                on_inspection(inspection)
             return AgentRunResult(
                 status=result.status,
                 content=result.content,
                 execution_selection=selection,
                 failure_code=result.failure_code,
+                inspection_snapshot=inspection,
             )
         except asyncio.CancelledError:
             terminal_status = RunStatus.CANCELLED
@@ -256,7 +397,7 @@ class NativeAgentAdapter(AgentPort):
         context: RunContext | None,
         request: RunRequest,
         execution: ResolvedExecution,
-    ) -> RunContext | None:
+    ) -> tuple[RunContext | None, ContextWindowResult]:
         """Return the context the selected model can actually accept.
 
         The effective sequence is the one a runtime would execute: durable
@@ -270,19 +411,22 @@ class NativeAgentAdapter(AgentPort):
         prompt-only path: the prompt is still measured against the budget, but
         ``None`` is passed on so the runtime's legacy fallback is untouched.
         """
-        messages = execution_context_messages(context, request.prompt)
-        result = self._context_window.fit(
+        base_context = context.model_copy(update={"attachments": []}) if context is not None else None
+        messages = execution_context_messages(base_context, request.prompt)
+        context_limit = self._context_limit(execution)
+        result, attachments = self._context_window.fit_with_attachments(
             messages,
-            model_context_limit=self._context_limit(execution),
+            context.attachments if context is not None else [],
+            model_context_limit=context_limit,
             model_id=execution.model_profile.model_id,
         )
-        if context is None or (not context.has_messages and context.prompt_layers is None):
-            return context
+        if context is None:
+            return context, result
         if not context.has_messages:
             # The current user prompt is supplied by the runtime fallback and
             # is never copied into the durable-history field. All leading
             # instruction layers are mandatory and remain on the context.
-            return context
+            return context.model_copy(update={"attachments": attachments}), result
         layer_count = 0
         if context.prompt_layers is not None:
             layer_count = (
@@ -290,23 +434,103 @@ class NativeAgentAdapter(AgentPort):
                 + len(context.prompt_layers.resolved_core_prompts)
                 + int(bool(context.prompt_layers.project_instructions))
             )
-        return context.model_copy(update={"messages": result.messages[layer_count:]})
+        layer_count += int(bool(context.conversation_summary))
+        included_count = sum(item.included for item in attachments)
+        history = result.messages[layer_count:]
+        if included_count:
+            history = [*history[: -(included_count + 1)], history[-1]]
+        return context.model_copy(update={"messages": history, "attachments": attachments}), result
 
     def _context_limit(self, execution: ResolvedExecution) -> int | None:
         """Read the selected model's total context window, if it reports one.
 
-        The value is provider-reported discovery metadata for the model this run
-        actually resolved to — never a persisted configuration field, never a
-        frontend value, and never a global default. A provider that cannot report
-        its metadata is treated as reporting no limit, which keeps execution
-        working exactly as it did before context-window management existed
-        instead of failing a run over a metadata read.
+        The configured per-model value is constrained by provider-reported
+        metadata for the model this run actually resolved to. Neither value can
+        be supplied by a run request. A provider metadata read failure falls
+        back to the configured value, or to no limit when neither source has one.
         """
         try:
-            return execution.model_provider.get_model_info().context_limit
+            provider_limit = execution.model_provider.get_model_info().context_limit
         except Exception:
             logger.exception("Unable to read context window for model %s", execution.model_profile.model_id)
-            return None
+            provider_limit = None
+        configured_limit = execution.model_profile.context_window_tokens
+        if configured_limit is None:
+            return provider_limit
+        if provider_limit is None or provider_limit <= 0:
+            return configured_limit
+        return min(configured_limit, provider_limit)
+
+    def preview_context_window(
+        self, request: RunRequest, *, context: RunContext | None = None
+    ) -> ContextWindowAccounting:
+        """Resolve and budget a draft exactly as execution would, without dispatch."""
+        execution = self._selector.resolve(request.execution, conversation_id=request.conversation_id)
+        prepared = context
+        if self._prompt_context_builder is not None:
+            prepared = self._prompt_context_builder.build(
+                prepared,
+                runtime_key=execution.runtime_key,
+                capabilities=self.get_capabilities(),
+            )
+        limit = self._context_limit(execution)
+        compaction_preview = (prepared.compaction_accounting or {}) if prepared is not None else {}
+        estimated_before_compaction = compaction_preview.get("estimated_before_tokens")
+        compaction_recommended = compaction_preview.get("compaction_recommended", False)
+        active_summary_version = compaction_preview.get("summary_version")
+        active_summary_token_count = compaction_preview.get("summary_token_count", 0)
+        base_prepared = prepared.model_copy(update={"attachments": []}) if prepared is not None else None
+        messages = draft_preview_context_messages(base_prepared, request.prompt)
+        try:
+            result, attachments = self._context_window.fit_with_attachments(
+                messages,
+                prepared.attachments if prepared is not None else [],
+                model_context_limit=limit,
+                model_id=execution.model_profile.model_id,
+            )
+            return ContextWindowAccounting(
+                context_window_tokens=result.context_limit,
+                input_budget_tokens=result.input_budget,
+                estimated_input_tokens=result.estimated_input_tokens,
+                output_reserve_tokens=(result.context_limit - result.input_budget)
+                if result.context_limit is not None and result.input_budget is not None
+                else 0,
+                dropped_message_count=result.dropped_message_count,
+                dropped_turn_count=result.dropped_turn_count,
+                count_accuracy="estimated",
+                can_fit=True,
+                required_input_tokens=result.estimated_input_tokens,
+                model_id=execution.model_profile.model_id,
+                estimated_before_compaction_tokens=(
+                    estimated_before_compaction if isinstance(estimated_before_compaction, int) else None
+                ),
+                compaction_recommended=bool(compaction_recommended),
+                active_summary_version=(active_summary_version if isinstance(active_summary_version, int) else None),
+                active_summary_token_count=(
+                    active_summary_token_count if isinstance(active_summary_token_count, int) else 0
+                ),
+                attachment_context_tokens=sum(item.token_count for item in attachments if item.included),
+                attachments=attachments,
+            )
+        except ContextWindowExceededError as exc:
+            return ContextWindowAccounting(
+                context_window_tokens=limit,
+                input_budget_tokens=exc.available_budget,
+                estimated_input_tokens=exc.estimated_size,
+                output_reserve_tokens=(limit - exc.available_budget) if limit is not None else 0,
+                count_accuracy="estimated",
+                can_fit=False,
+                required_input_tokens=exc.estimated_size,
+                model_id=execution.model_profile.model_id,
+                estimated_before_compaction_tokens=(
+                    estimated_before_compaction if isinstance(estimated_before_compaction, int) else None
+                ),
+                compaction_recommended=bool(compaction_recommended),
+                active_summary_version=(active_summary_version if isinstance(active_summary_version, int) else None),
+                active_summary_token_count=(
+                    active_summary_token_count if isinstance(active_summary_token_count, int) else 0
+                ),
+            )
 
     def _selection(self, execution: ResolvedExecution) -> RunExecutionSelection | None:
         """Read identity metadata defensively; lifecycle must remain safe.
@@ -322,6 +546,16 @@ class NativeAgentAdapter(AgentPort):
                 model_provider_id=binding.provider_id,
                 model_id=binding.model_id,
                 hosting_mode=binding.hosting_mode,
+                # Configuration persistence describes how a selection was
+                # materialized, while these fields describe which precedence
+                # tier supplied each axis. Preserve the selector's provenance
+                # so Project defaults remain distinguishable from application
+                # defaults in stored run history and the inspector.
+                runtime_source=execution.runtime_selection_source.value,
+                model_source=execution.model_selection_source.value,
+                provider_connection_id=execution.provider_connection_id,
+                runtime_configuration_id=execution.runtime_configuration_id,
+                project_id=execution.project_id,
             )
         except Exception:
             logger.exception("Unable to collect execution selection metadata")

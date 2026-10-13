@@ -15,6 +15,7 @@ from ava.infrastructure.composition import (
 )
 from ava.infrastructure.persistence.database import SqliteDatabase
 from ava.infrastructure.persistence.repositories.attachment_repository import RelationalAttachmentRepository
+from ava.infrastructure.persistence.repositories.context_summary_repository import RelationalContextSummaryRepository
 from ava.infrastructure.persistence.repositories.conversation_hard_delete_coordinator import (
     RelationalConversationHardDeleteCoordinator,
 )
@@ -23,9 +24,11 @@ from ava.infrastructure.persistence.repositories.message_repository import Relat
 from ava.infrastructure.persistence.repositories.run_event_repository import RelationalRunEventRepository
 from ava.infrastructure.persistence.repositories.run_repository import RelationalRunRepository
 from ava.repositories.attachment_repository import AttachmentRecord
+from ava.repositories.context_summary_repository import ConversationContextSummary
 from ava.repositories.message_repository import MessageRecord
 from ava.services.attachment_content_store import InMemoryAttachmentContentStore
 from ava.services.attachment_store import InMemoryAttachmentRepository
+from ava.services.context_summary_store import ContextSummaryStore
 from ava.services.conversation_hard_delete_coordinator import InMemoryConversationHardDeleteCoordinator
 from ava.services.conversation_service import ConversationHasActiveRunError, ConversationService
 from ava.services.conversation_store import ConversationStore
@@ -45,12 +48,14 @@ class Harness:
             self.runs = RunStore()
             self.events = RunEventStore()
             self.attachments = InMemoryAttachmentRepository()
+            self.summaries = ContextSummaryStore()
             coordinator = InMemoryConversationHardDeleteCoordinator(
                 conversations=self.conversations,
                 messages=self.messages,
                 runs=self.runs,
                 run_events=self.events,
                 attachments=self.attachments,
+                context_summaries=self.summaries,
             )
         else:
             self.database = SqliteDatabase(database_path or ":memory:")
@@ -59,6 +64,7 @@ class Harness:
             self.runs = RelationalRunRepository(database=self.database)
             self.events = RelationalRunEventRepository(database=self.database)
             self.attachments = RelationalAttachmentRepository(database=self.database)
+            self.summaries = RelationalContextSummaryRepository(database=self.database)
             coordinator = RelationalConversationHardDeleteCoordinator(database=self.database)
         self.service = ConversationService(
             conversation_repository=self.conversations,
@@ -71,29 +77,33 @@ class Harness:
 
     def add_message(self, conversation_id: str, message_id: str, *, source_run_id: str | None = None) -> None:
         now = datetime.now(UTC)
-        self.messages.append(MessageRecord(
-            message_id=message_id,
-            conversation_id=conversation_id,
-            role=MessageRole.USER,
-            content=f"{conversation_id}:{message_id}",
-            status=MessageStatus.COMPLETE,
-            created_at=now,
-            updated_at=now,
-            source_run_id=source_run_id,
-        ))
+        self.messages.append(
+            MessageRecord(
+                message_id=message_id,
+                conversation_id=conversation_id,
+                role=MessageRole.USER,
+                content=f"{conversation_id}:{message_id}",
+                status=MessageStatus.COMPLETE,
+                created_at=now,
+                updated_at=now,
+                source_run_id=source_run_id,
+            )
+        )
 
     def add_attachment(self, attachment_id: str, key: str, owner_type: AttachmentOwnerType, owner_id: str) -> None:
-        self.attachments.create(AttachmentRecord(
-            attachment_id=attachment_id,
-            file_name=f"{attachment_id}.txt",
-            media_type="text/plain",
-            size_bytes=4,
-            storage_key=key,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            status=AttachmentStatus.AVAILABLE,
-            created_at=datetime.now(UTC),
-        ))
+        self.attachments.create(
+            AttachmentRecord(
+                attachment_id=attachment_id,
+                file_name=f"{attachment_id}.txt",
+                media_type="text/plain",
+                size_bytes=4,
+                storage_key=key,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                status=AttachmentStatus.AVAILABLE,
+                created_at=datetime.now(UTC),
+            )
+        )
         self.content.put(key, BytesIO(b"blob"))
 
 
@@ -121,7 +131,11 @@ def test_composition_selects_hard_delete_adapter_behind_port(
 def test_delete_removes_owned_graph_and_preserves_other_conversation(backend: str, tmp_path) -> None:
     harness = Harness(backend, str(tmp_path / "delete.sqlite") if backend == "relational" else None)
     conversations, messages, runs, events, attachments = (
-        harness.conversations, harness.messages, harness.runs, harness.events, harness.attachments
+        harness.conversations,
+        harness.messages,
+        harness.runs,
+        harness.events,
+        harness.attachments,
     )
     conversations.create("delete-me", title="Target")
     conversations.create("keep-me", title="Other")
@@ -130,11 +144,41 @@ def test_delete_removes_owned_graph_and_preserves_other_conversation(backend: st
     if backend == "relational":
         with harness.database.connect() as connection:  # type: ignore[union-attr]
             connection.execute(
-                "UPDATE conversations SET folder_id = 'future-folder' "
-                "WHERE conversation_id = 'delete-me'"
+                "UPDATE conversations SET folder_id = 'future-folder' WHERE conversation_id = 'delete-me'"
             )
     harness.add_message("delete-me", "target-message")
     harness.add_message("keep-me", "other-message")
+    now = datetime.now(UTC)
+    harness.summaries.save_version(
+        ConversationContextSummary(
+            summary_id="target-summary",
+            conversation_id="delete-me",
+            content="target summary",
+            covers_through_message_id="target-message",
+            covers_through_sequence=0,
+            source_token_count=20,
+            summary_token_count=5,
+            model_id="model",
+            provider_id="provider",
+            version=1,
+            created_at=now,
+        )
+    )
+    harness.summaries.save_version(
+        ConversationContextSummary(
+            summary_id="other-summary",
+            conversation_id="keep-me",
+            content="keep summary",
+            covers_through_message_id="other-message",
+            covers_through_sequence=0,
+            source_token_count=20,
+            summary_token_count=5,
+            model_id="model",
+            provider_id="provider",
+            version=1,
+            created_at=now,
+        )
+    )
     deleted_run = runs.create("target-run", conversation_id="delete-me", source_user_message_id="target-message")
     runs.update_status(deleted_run.run_id, RunStatus.COMPLETED)
     events.append(RunEvent(event_id="target-event", run_id="target-run", event_type=EventType.RUN_STARTED))
@@ -149,12 +193,8 @@ def test_delete_removes_owned_graph_and_preserves_other_conversation(backend: st
     harness.add_attachment(
         "target-conversation-attachment", "target/conversation", AttachmentOwnerType.CONVERSATION, "delete-me"
     )
-    harness.add_attachment(
-        "target-message-attachment", "target/message", AttachmentOwnerType.MESSAGE, "target-message"
-    )
-    harness.add_attachment(
-        "other-attachment", "other/conversation", AttachmentOwnerType.CONVERSATION, "keep-me"
-    )
+    harness.add_attachment("target-message-attachment", "target/message", AttachmentOwnerType.MESSAGE, "target-message")
+    harness.add_attachment("other-attachment", "other/conversation", AttachmentOwnerType.CONVERSATION, "keep-me")
     other_snapshot = (
         conversations.get("keep-me"),
         messages.list_for_conversation("keep-me"),
@@ -167,6 +207,8 @@ def test_delete_removes_owned_graph_and_preserves_other_conversation(backend: st
     assert harness.service.delete_conversation("delete-me") is False
     assert harness.service.delete_conversation("missing") is False
     assert conversations.get("delete-me") is None
+    assert harness.summaries.get_active("delete-me") is None
+    assert harness.summaries.get_active("keep-me").summary_id == "other-summary"
     assert messages.list_for_conversation("delete-me") == []
     assert runs.get("target-run") is None
     assert runs.get("legacy-target-run") is None
@@ -187,44 +229,59 @@ def test_delete_removes_owned_graph_and_preserves_other_conversation(backend: st
 
     if harness.database is not None:
         with harness.database.connect() as connection:
-            assert connection.execute(
-                "SELECT count(*) FROM conversations WHERE conversation_id='delete-me'"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM messages WHERE conversation_id='delete-me'"
-            ).fetchone()[0] == 0
+            assert (
+                connection.execute("SELECT count(*) FROM conversations WHERE conversation_id='delete-me'").fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute("SELECT count(*) FROM messages WHERE conversation_id='delete-me'").fetchone()[0] == 0
+            )
             assert connection.execute("SELECT count(*) FROM runs WHERE run_id='target-run'").fetchone()[0] == 0
             assert connection.execute("SELECT count(*) FROM run_events WHERE run_id='target-run'").fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM attachments WHERE attachment_id LIKE 'target-%'"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM run_events e LEFT JOIN runs r ON r.run_id=e.run_id "
-                "WHERE r.run_id IS NULL"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM messages m LEFT JOIN runs r ON r.run_id=m.source_run_id "
-                "WHERE m.source_run_id IS NOT NULL AND r.run_id IS NULL"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM attachments a WHERE a.owner_type = 'conversation' "
-                "AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.conversation_id = a.owner_id)"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM attachments a WHERE a.owner_type = 'message' "
-                "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.message_id = a.owner_id)"
-            ).fetchone()[0] == 0
+            assert (
+                connection.execute("SELECT count(*) FROM attachments WHERE attachment_id LIKE 'target-%'").fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM run_events e LEFT JOIN runs r ON r.run_id=e.run_id WHERE r.run_id IS NULL"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM messages m LEFT JOIN runs r ON r.run_id=m.source_run_id "
+                    "WHERE m.source_run_id IS NOT NULL AND r.run_id IS NULL"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM attachments a WHERE a.owner_type = 'conversation' "
+                    "AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.conversation_id = a.owner_id)"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM attachments a WHERE a.owner_type = 'message' "
+                    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.message_id = a.owner_id)"
+                ).fetchone()[0]
+                == 0
+            )
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         harness.database.dispose()
         reopened = SqliteDatabase(harness.database.url)
         with reopened.connect() as connection:
-            assert connection.execute(
-                "SELECT count(*) FROM conversations WHERE conversation_id='delete-me'"
-            ).fetchone()[0] == 0
-            assert connection.execute(
-                "SELECT count(*) FROM conversations WHERE conversation_id='keep-me'"
-            ).fetchone()[0] == 1
+            assert (
+                connection.execute("SELECT count(*) FROM conversations WHERE conversation_id='delete-me'").fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute("SELECT count(*) FROM conversations WHERE conversation_id='keep-me'").fetchone()[0]
+                == 1
+            )
         reopened.dispose()
 
 
@@ -298,9 +355,7 @@ def test_delete_preserves_legacy_run_referenced_by_another_conversation(backend:
     harness.add_message("one", "owner-message")
     shared_run = harness.runs.create("shared-run", source_user_message_id="owner-message")
     harness.runs.update_status(shared_run.run_id, RunStatus.COMPLETED)
-    harness.events.append(
-        RunEvent(event_id="shared-event", run_id="shared-run", event_type=EventType.RUN_STARTED)
-    )
+    harness.events.append(RunEvent(event_id="shared-event", run_id="shared-run", event_type=EventType.RUN_STARTED))
     harness.add_message("two", "reference-message", source_run_id="shared-run")
 
     assert harness.service.delete_conversation("one") is True

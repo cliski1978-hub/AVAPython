@@ -1,5 +1,5 @@
 /** Neutral Settings destination shared by UI producers and application hosts. */
-export type SettingsSectionId = "providers" | "models" | "runtimes" | "defaults" | "system-prompts";
+export type SettingsSectionId = "providers" | "models" | "runtimes" | "defaults" | "system-prompts" | "appearance" | "features-tools" | "workspace-access";
 
 /**
  * Human label for a Settings section.
@@ -14,4 +14,7 @@ export const settingsSectionLabel: Record<SettingsSectionId, string> = {
   runtimes: "Runtime",
   defaults: "Default",
   "system-prompts": "System Prompts",
+  appearance: "Appearance",
+  "features-tools": "Features & Tools",
+  "workspace-access": "Workspace Access",
 };

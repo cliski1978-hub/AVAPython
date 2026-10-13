@@ -39,8 +39,8 @@ const bubbleStyle: CSSProperties = {
   maxWidth: "85%",
   minWidth: 0,
   boxSizing: "border-box",
-  background: t.colors.surface,
-  border: `${t.border.width}px solid ${t.colors.borderStrong}`,
+  background: "hsl(var(--card))",
+  border: "1px solid hsl(var(--border))",
   borderRadius: t.radius.lg + 12,
   padding: "12px 14px",
   overflowWrap: "break-word",
@@ -51,7 +51,7 @@ function bodyStyle(): CSSProperties {
     whiteSpace: "pre-wrap",
     lineHeight: 1.6,
     fontSize: t.font.sizeMd,
-    color: t.colors.foreground,
+    color: "hsl(var(--foreground))",
     overflowWrap: "break-word",
   };
 }
@@ -105,7 +105,7 @@ export function AssistantMessage({
               whiteSpace: "pre-wrap",
               lineHeight: 1.5,
               fontSize: t.font.sizeSm,
-              color: t.colors.mutedText,
+              color: "hsl(var(--muted-foreground))",
               overflowWrap: "break-word",
             }}
           >

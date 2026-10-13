@@ -16,3 +16,6 @@ export * from "./runs";
 export * from "./version";
 export * from "./workspaces";
 export * from "./settings";
+export * from "./tools";
+export * from "./tool-features";
+export * from "./workspace-access";

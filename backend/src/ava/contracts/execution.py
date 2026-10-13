@@ -20,11 +20,24 @@ class RunExecutionSelection(BaseModel):
     model_provider_id: str | None = None
     model_id: str | None = None
     hosting_mode: ModelHostingMode | None = None
+    runtime_source: str | None = None
+    model_source: str | None = None
+    provider_connection_id: str | None = None
+    runtime_configuration_id: str | None = None
+    project_id: str | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 
 class ExecutionSelectionMode(StrEnum):
     AUTO = "auto"
+
+
+class ExecutionMode(StrEnum):
+    """Run-scoped authority ceiling for normalized tool execution."""
+
+    CHAT = "chat"
+    PLAN = "plan"
+    AGENT = "agent"
 
 
 class RunExecutionOverride(BaseModel):

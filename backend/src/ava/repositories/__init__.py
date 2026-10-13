@@ -12,6 +12,7 @@ Only AVA-owned domain/contract types cross these interfaces. No SQL, ORM,
 database drivers, vendor frameworks, or frontend types appear here.
 """
 
+from ava.repositories.approval_repository import ApprovalConflictError, ApprovalRepository
 from ava.repositories.attachment_content_store import (
     AttachmentContentStore,
     StoredContentInfo,
@@ -20,6 +21,7 @@ from ava.repositories.attachment_repository import (
     AttachmentRecord,
     AttachmentRepository,
 )
+from ava.repositories.context_summary_repository import ContextSummaryRepository, ConversationContextSummary
 from ava.repositories.conversation_folder import ConversationFolderRecord
 from ava.repositories.conversation_folder_repository import ConversationFolderRepository
 from ava.repositories.conversation_repository import (
@@ -65,11 +67,15 @@ from ava.repositories.run_repository import RunRecord, RunRepository
 from ava.repositories.runtime_configuration_repository import RuntimeConfigurationRepository
 
 __all__ = [
+    "ApprovalConflictError",
+    "ApprovalRepository",
     "AttachmentContentStore",
     "AttachmentRecord",
     "AttachmentRepository",
     "ConversationRecord",
     "ConversationRepository",
+    "ContextSummaryRepository",
+    "ConversationContextSummary",
     "ConversationFolderRecord",
     "ConversationFolderRepository",
     "CorePromptCategory",

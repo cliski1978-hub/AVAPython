@@ -128,6 +128,7 @@ class AttachmentService:
         source: BinaryIO,
         owner_type: AttachmentOwnerType | None = None,
         owner_id: str | None = None,
+        retain_failed_record: bool = True,
     ) -> AttachmentRecord:
         """Create an attachment from a binary source stream.
 
@@ -143,8 +144,9 @@ class AttachmentService:
         Raises:
             ValueError: If the owner pair is not both-set/both-``None``.
             AttachmentStorageError: If metadata creation, content storage,
-                content verification, or final metadata transition fails (the
-                record is marked ``failed`` where a record exists).
+                content verification, or final metadata transition fails. By
+                default a failed record is retained; set
+                ``retain_failed_record=False`` to clean up rejected uploads.
         """
         if (owner_type is None) != (owner_id is None):
             raise ValueError(
@@ -174,16 +176,16 @@ class AttachmentService:
         try:
             info = self._content_store.put(storage_key, source)
         except Exception as exc:
-            self._mark_failed(attachment_id)
+            self._handle_upload_failure(attachment_id, storage_key, retain_failed_record)
             raise AttachmentStorageError(f"Failed to store attachment content: {exc}") from exc
 
         try:
             present = self._content_store.exists(storage_key)
         except Exception as exc:
-            self._mark_failed(attachment_id)
+            self._handle_upload_failure(attachment_id, storage_key, retain_failed_record)
             raise AttachmentStorageError(f"Failed to verify attachment content: {exc}") from exc
         if not present:
-            self._mark_failed(attachment_id)
+            self._handle_upload_failure(attachment_id, storage_key, retain_failed_record)
             raise AttachmentStorageError("Attachment content verification failed: content is not present after put")
 
         try:
@@ -193,6 +195,11 @@ class AttachmentService:
                 status=AttachmentStatus.AVAILABLE,
             )
         except Exception as exc:
+            if not retain_failed_record:
+                self._discard_failed_upload(attachment_id, storage_key)
+                raise AttachmentStorageError(
+                    "Attachment content was stored but final metadata transition failed; the upload was removed."
+                ) from exc
             try:
                 self._repository.update_state(
                     attachment_id,
@@ -209,6 +216,8 @@ class AttachmentService:
                 "Attachment content stored but the final metadata transition failed; the record was marked failed."
             ) from exc
         if finalized is None:
+            if not retain_failed_record:
+                self._discard_failed_upload(attachment_id, storage_key)
             raise AttachmentStorageError("Attachment content stored but its metadata is missing during finalization.")
         return finalized
 
@@ -255,6 +264,37 @@ class AttachmentService:
                 f"Attachment content is missing for {attachment_id} despite being available"
             ) from exc
         return AttachmentContentRef(record=record, stream=stream)
+
+    def delete_attachment(self, attachment_id: str) -> AttachmentRecord | None:
+        """Delete one attachment and its stored bytes, if it exists."""
+        record = self._repository.get(attachment_id)
+        if record is None:
+            return None
+        try:
+            self._content_store.delete(record.storage_key)
+            return self._repository.delete(attachment_id)
+        except Exception as exc:
+            raise AttachmentStorageError(f"Failed to delete attachment {attachment_id}") from exc
+
+    def _handle_upload_failure(self, attachment_id: str, storage_key: str, retain_failed_record: bool) -> None:
+        if retain_failed_record:
+            self._mark_failed(attachment_id)
+        else:
+            self._discard_failed_upload(attachment_id, storage_key)
+
+    def _discard_failed_upload(self, attachment_id: str, storage_key: str) -> None:
+        """Remove rejected upload metadata and best-effort remove its bytes."""
+        content_error: Exception | None = None
+        try:
+            self._content_store.delete(storage_key)
+        except Exception as exc:
+            content_error = exc
+        try:
+            self._repository.delete(attachment_id)
+        except Exception as exc:
+            raise AttachmentStorageError("Failed to remove attachment metadata after upload failure") from exc
+        if content_error is not None:
+            raise AttachmentStorageError("Failed to remove stored content after upload failure") from content_error
 
     def _mark_failed(self, attachment_id: str) -> None:
         """Best-effort ``failed`` side effect on a handled storage failure.

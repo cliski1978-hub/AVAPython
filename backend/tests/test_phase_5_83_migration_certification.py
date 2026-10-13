@@ -56,6 +56,15 @@ EXPECTED_MIGRATIONS = [
     "Scoped CORE prompt assignments",
     "Project execution defaults",
     "Project files",
+    "Conversation title ownership",
+    "Run inspection snapshots",
+    "Configured model context windows",
+    "Conversation context summaries",
+    "Project file name uniqueness",
+    "tool feature configuration",
+    "workspace access configuration",
+    "durable tool approvals",
+    "run execution mode",
 ]
 
 
@@ -77,9 +86,9 @@ def _run_through(database: SqliteDatabase, version: int) -> None:
     assert MigrationRunner(database, _registry_through(version)).migrate() == list(range(1, version + 1))
 
 
-def test_migration_registry_is_a_contiguous_documented_history_through_18() -> None:
+def test_migration_registry_is_a_contiguous_documented_history_through_27() -> None:
     migrations = list(default_registry())
-    assert [migration.version for migration in migrations] == list(range(1, 19))
+    assert [migration.version for migration in migrations] == list(range(1, 28))
     assert [migration.name for migration in migrations] == EXPECTED_MIGRATIONS
 
 
@@ -87,8 +96,8 @@ def test_fresh_install_and_current_phase_five_constraints_are_valid() -> None:
     database, path = _new_db()
     try:
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == list(range(1, 19))
-        assert runner.current_version() == 18
+        assert runner.migrate() == list(range(1, 28))
+        assert runner.current_version() == 27
         with database.connect() as connection:
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -171,9 +180,16 @@ def test_fresh_install_and_current_phase_five_constraints_are_valid() -> None:
             connection.execute("DELETE FROM model_configurations WHERE model_id='model-fk'")
             assert connection.execute("SELECT default_model_id FROM projects WHERE id='p'").fetchone()[0] is None
             connection.execute(
-                "INSERT INTO project_files(id,project_id,file_name,size_bytes,content_ref,created_at,updated_at) "
-                "VALUES ('file-1','p','same.txt',0,'opaque-ref','created','updated')"
+                "INSERT INTO project_files("
+                "id,project_id,file_name,size_bytes,content_ref,created_at,updated_at,normalized_file_name) "
+                "VALUES ('file-1','p','same.txt',0,'opaque-ref','created','updated','same.txt')"
             )
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO project_files("
+                    "id,project_id,file_name,size_bytes,content_ref,created_at,updated_at,normalized_file_name) "
+                    "VALUES ('file-2','p','SAME.txt',0,'other-ref','created','updated','same.txt')"
+                )
             connection.execute("DELETE FROM projects WHERE id='p'")
             assert connection.execute("SELECT COUNT(*) FROM project_files WHERE id='file-1'").fetchone()[0] == 0
             connection.execute("DELETE FROM core_prompts WHERE id='p1'")
@@ -205,7 +221,7 @@ def test_pre_project_file_database_upgrade_preserves_existing_project() -> None:
         database.dispose()
         current = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(current, default_registry()).migrate() == [18]
+            assert MigrationRunner(current, default_registry()).migrate() == [18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
             with current.connect() as connection:
                 row = connection.execute(
                     "SELECT id,name,created_at,updated_at,default_runtime_key,default_model_id FROM projects"
@@ -280,7 +296,7 @@ def test_pre_folder_project_database_upgrade_preserves_legacy_conversation_graph
 
         upgraded = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(10, 19))
+            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(10, 28))
             with upgraded.connect() as connection:
                 conversation = connection.execute(
                     "SELECT conversation_id,title,created_at,updated_at,is_pinned,is_archived,folder_id,project_id "
@@ -362,13 +378,13 @@ def test_pre_core_assignment_and_project_file_boundaries_upgrade_without_fabrica
             )
             connection.execute(
                 "INSERT INTO core_prompts(id,name,prompt_text,category,is_enabled,created_at,updated_at) "
-                "VALUES ('prompt-inherit','Inherited prompt','never auto-enable','general',1,"
+                "VALUES ('prompt-inherit','Inherited prompt','inherited global baseline','general',1,"
                 "'2024-01-03T00:00:00Z','2024-01-04T00:00:00Z')"
             )
         database.dispose()
         current = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(current, default_registry()).migrate() == [16, 17, 18]
+            assert MigrationRunner(current, default_registry()).migrate() == list(range(16, 28))
             with current.connect() as connection:
                 row = connection.execute("SELECT * FROM core_prompts WHERE id='prompt-old'").fetchone()
                 assert (
@@ -403,7 +419,9 @@ def test_pre_core_assignment_and_project_file_boundaries_upgrade_without_fabrica
                     conversations=repos.conversation_repository,
                     runtime_ids=("native",),
                 ).resolve(PromptResolutionContext())
-                assert resolved.enabled_prompts == ()
+                assert [item.core_prompt_id for item in resolved.enabled_prompts] == ["prompt-inherit"]
+                assert resolved.enabled_prompts[0].reason == "inherited_global"
+                assert resolved.enabled_prompts[0].winning_assignment_id is None
             finally:
                 repos.dispose()
         finally:
@@ -425,7 +443,19 @@ def test_pre_core_assignment_and_project_file_boundaries_upgrade_without_fabrica
         database.dispose()
         current = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(current, default_registry()).migrate() == [17, 18]
+            assert MigrationRunner(current, default_registry()).migrate() == [
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+            ]
             with current.connect() as connection:
                 project = connection.execute("SELECT * FROM projects WHERE id='legacy-p'").fetchone()
                 assert (
@@ -542,7 +572,7 @@ def test_real_app_persistence_composition_reads_upgraded_database_and_is_idempot
         second_startup = create_relational_repositories(str(path))
         try:
             second_runner = MigrationRunner(second_startup.database, default_registry())
-            assert second_runner.current_version() == 18
+            assert second_runner.current_version() == 27
             assert second_runner.migrate() == []
             with second_startup.database.connect() as connection:
                 assert metadata_before == [
@@ -634,7 +664,7 @@ def test_largeish_unicode_duplicate_name_graph_keeps_ids_and_ordering_fields() -
         database.dispose()
         upgraded = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(15, 19))
+            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(15, 28))
             with upgraded.connect() as connection:
                 assert before_ids == [
                     row[0]

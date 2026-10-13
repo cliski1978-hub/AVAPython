@@ -62,6 +62,7 @@ function model(overrides: Record<string, unknown> = {}) {
     hosting_mode: "external" as const,
     capabilities: capabilities({ chat: true, streaming: true }),
     enabled: true,
+    context_window_tokens: null,
     contract_version: contractVersion,
     ...overrides,
   };
@@ -254,6 +255,7 @@ describe("Add Model", () => {
     }
     // Declared capabilities render as a group of checkboxes, one per flag.
     const group = within(dialog()).getByRole("group", { name: "Declared capabilities" });
+    expect((within(group).getByText("Chat") as HTMLLabelElement).style.color).toBe("hsl(var(--foreground))");
     for (const flag of [
       "Chat",
       "Streaming",
@@ -481,6 +483,7 @@ describe("Add Model", () => {
         hosting_mode: "external",
         capabilities: capabilities({ chat: true, tool_calling: true }),
         enabled: true,
+        context_window_tokens: null,
       }),
     );
 

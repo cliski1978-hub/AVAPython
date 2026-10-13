@@ -552,4 +552,4 @@ def test_public_surface_exposes_only_the_port_operations() -> None:
         for name, member in getmembers(RelationalAttachmentRepository)
         if not name.startswith("_") and callable(member)
     }
-    assert operations == {"create", "get", "list_for_owner", "update_state"}
+    assert operations == {"create", "get", "list_for_owner", "update_state", "delete"}

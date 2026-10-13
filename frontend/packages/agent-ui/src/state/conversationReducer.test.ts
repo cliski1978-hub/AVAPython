@@ -43,6 +43,53 @@ describe("conversationReducer", () => {
     expect(typeof state.conversations[0].createdAt).toBe("string");
   });
 
+  it("keeps a manually renamed title when the first user message is added", () => {
+    let state = conversationReducer(emptyState, { type: "conversation:create" });
+    const id = state.activeConversationId!;
+    state = conversationReducer(state, {
+      type: "conversation:rename",
+      conversationId: id,
+      title: "My Custom Title",
+    });
+
+    state = conversationReducer(state, {
+      type: "conversation:addUserMessage",
+      conversationId: id,
+      content: "Explain dependency injection",
+      createdMessageId: "first-message",
+    });
+
+    expect(state.conversations[0].title).toBe("My Custom Title");
+  });
+
+  it("honors the persisted manual-title marker after conversation hydration", () => {
+    const id = "renamed-before-reload";
+    let state = conversationReducer(emptyState, {
+      type: "conversation:hydrate",
+      conversations: [{
+        id,
+        title: "My Custom Title",
+        isTitleCustom: true,
+        messages: [],
+      }],
+    });
+
+    state = conversationReducer(state, {
+      type: "conversation:addUserMessage",
+      conversationId: id,
+      content: "Explain dependency injection",
+      createdMessageId: "first-message-after-reload",
+    });
+    state = conversationReducer(state, {
+      type: "conversation:addUserMessage",
+      conversationId: id,
+      content: "A later message",
+      createdMessageId: "later-message",
+    });
+
+    expect(state.conversations[0].title).toBe("My Custom Title");
+  });
+
   it("keeps the active conversation independent of server list position", () => {
     let state = conversationReducer(emptyState, { type: "conversation:create" });
     state = conversationReducer(state, { type: "conversation:create" });
@@ -488,12 +535,13 @@ describe("conversation:rename", () => {
     expect(state.conversations.find((c) => c.id === b)).toBe(bBefore);
   });
 
-  it("keeps state identical when the title is unchanged", () => {
+  it("marks the title user-defined even when the chosen text is unchanged", () => {
     let state = conversationReducer(emptyState, { type: "conversation:create" });
     const id = state.activeConversationId!;
     const title = state.conversations[0].title;
     const next = conversationReducer(state, { type: "conversation:rename", conversationId: id, title });
-    expect(next).toBe(state);
+    expect(next.conversations[0].title).toBe(title);
+    expect(next.conversations[0].isTitleCustom).toBe(true);
   });
 });
 

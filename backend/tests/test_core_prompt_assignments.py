@@ -411,9 +411,9 @@ def test_migration_0016_preserves_populated_schema_15_and_is_idempotent(tmp_path
             "VALUES ('cp15', 'Existing prompt', 'Exact', 'engineering', 1, "
             "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
         )
-    assert MigrationRunner(database, default_registry()).migrate() == [16, 17, 18]
+    assert MigrationRunner(database, default_registry()).migrate() == [16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
     assert MigrationRunner(database, default_registry()).migrate() == []
-    assert MigrationRunner(database, default_registry()).current_version() == 18
+    assert MigrationRunner(database, default_registry()).current_version() == 25
     with database.connect() as connection:
         assert connection.execute("SELECT name FROM projects WHERE id='p15'").fetchone()[0] == "Existing project"
         assert (

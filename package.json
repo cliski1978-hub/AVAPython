@@ -4,12 +4,16 @@
   "scripts": {
     "dev:web": "pnpm --filter @ava/web dev",
     "build:web": "pnpm --filter @ava/web build",
-    "test": "pnpm -r test",
+    "test:e2e:desktop": "pnpm --filter @ava/e2e-desktop test",
+    "test": "pnpm -r --filter '!@ava/e2e-desktop' test",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint"
   },
   "engines": {
     "node": ">=18",
     "pnpm": ">=9"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3"
   }
 }

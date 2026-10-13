@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { ApiClient, deleteProjectFile, downloadProjectFile, listProjectFiles, uploadProjectFile } from "@ava/api-client";
+import { ApiClient, ApiError, deleteProjectFile, downloadProjectFile, listProjectFiles, uploadProjectFile } from "@ava/api-client";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatProjectFileSize, ProjectFilesPanel } from "./ProjectFilesPanel";
@@ -66,7 +66,7 @@ describe("ProjectFilesPanel", () => {
     expect(screen.getByRole("status", { name: "Loading Project files…" })).toBeTruthy();
     resolve?.(listResponse([
       file("b", "spec.pdf", 0, null),
-      file("a", "spec.pdf", 1_229, "application/pdf"),
+      file("a", "requirements.pdf", 1_229, "application/pdf"),
       file("unicode", "設計仕様書.pdf"),
     ]));
 
@@ -99,22 +99,42 @@ describe("ProjectFilesPanel", () => {
     expect(screen.queryByText("private server detail")).toBeNull();
   });
 
-  it("uploads the selected File object, preserves duplicate names, and reconciles backend order", async () => {
+  it("uploads the selected File object and reconciles backend order", async () => {
     vi.mocked(listProjectFiles)
-      .mockResolvedValueOnce(listResponse([file("old", "spec.pdf")]))
-      .mockResolvedValueOnce(listResponse([file("new", "spec.pdf"), file("old", "spec.pdf")]));
+      .mockResolvedValueOnce(listResponse([file("old", "requirements.pdf")]))
+      .mockResolvedValueOnce(listResponse([file("new", "spec.pdf"), file("old", "requirements.pdf")]));
     vi.mocked(uploadProjectFile).mockResolvedValueOnce(file("new", "spec.pdf"));
     renderPanel();
-    await screen.findByText("spec.pdf");
+    await screen.findByText("requirements.pdf");
     const selected = new File(["new content"], "spec.pdf", { type: "" });
     fireEvent.change(screen.getByLabelText("Choose a Project file to upload"), { target: { files: [selected] } });
     fireEvent.click(screen.getByRole("button", { name: "Upload File" }));
 
-    await waitFor(() => expect(within(screen.getByRole("table", { name: "Files in Project p-1" })).getAllByText("spec.pdf")).toHaveLength(2));
+    await waitFor(() => expect(within(screen.getByRole("table", { name: "Files in Project p-1" })).getByText("spec.pdf")).toBeTruthy());
     expect(uploadProjectFile).toHaveBeenCalledWith(client, "p-1", selected, { fileName: "spec.pdf", contentType: null });
     const rows = screen.getByRole("table", { name: "Files in Project p-1" }).querySelectorAll("tbody tr");
     expect(Array.from(rows).map((row) => row.getAttribute("data-project-file-id"))).toEqual(["new", "old"]);
     expect((screen.getByLabelText("Choose a Project file to upload") as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows the backend duplicate-name conflict without changing the file list", async () => {
+    vi.mocked(listProjectFiles).mockResolvedValue(listResponse([file("existing", "SKILL.md")]));
+    vi.mocked(uploadProjectFile).mockRejectedValueOnce(new ApiError("Request failed: 409", 409, {
+      error_code: "project_file_name_conflict",
+    }));
+    renderPanel();
+    await screen.findByText("SKILL.md");
+    fireEvent.change(screen.getByLabelText("Choose a Project file to upload"), {
+      target: { files: [new File(["replacement"], "skill.md", { type: "text/markdown" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Upload File" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      'A file named "skill.md" already exists in this Project.',
+    );
+    expect(screen.getAllByText("SKILL.md")).toHaveLength(1);
+    expect(screen.getByText("Selected: skill.md")).toBeTruthy();
+    expect(listProjectFiles).toHaveBeenCalledTimes(1);
   });
 
   it("shows upload pending state and prevents a duplicate submission", async () => {
@@ -184,19 +204,19 @@ describe("ProjectFilesPanel", () => {
     expect(screen.getByText("one.txt")).toBeTruthy();
   });
 
-  it("requires confirmation and deletes one duplicate by ID only", async () => {
-    vi.mocked(listProjectFiles).mockResolvedValue(listResponse([file("a", "spec.pdf"), file("b", "spec.pdf")]));
+  it("requires confirmation and deletes the selected file by ID", async () => {
+    vi.mocked(listProjectFiles).mockResolvedValue(listResponse([file("a", "first.pdf"), file("b", "second.pdf")]));
     renderPanel();
     const table = await screen.findByRole("table", { name: "Files in Project p-1" });
     const rows = table.querySelectorAll("tbody tr");
     const rowA = rows[0] as HTMLElement;
-    fireEvent.click(within(rowA).getByRole("button", { name: "Delete spec.pdf" }));
-    expect(screen.getByRole("heading", { name: "Delete “spec.pdf”?" })).toBeTruthy();
+    fireEvent.click(within(rowA).getByRole("button", { name: "Delete first.pdf" }));
+    expect(screen.getByRole("heading", { name: "Delete “first.pdf”?" })).toBeTruthy();
     expect(deleteProjectFile).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete file" }));
     await waitFor(() => expect(deleteProjectFile).toHaveBeenCalledWith(client, "p-1", "a"));
     await waitFor(() => expect(screen.getByRole("table", { name: "Files in Project p-1" }).querySelectorAll("tbody tr")).toHaveLength(1));
-    expect(screen.getByRole("row", { name: /spec\.pdf/ }).getAttribute("data-project-file-id")).toBe("b");
+    expect(screen.getByRole("row", { name: /second\.pdf/ }).getAttribute("data-project-file-id")).toBe("b");
     expect(rowA.getAttribute("data-project-file-id")).toBe("a");
   });
 
@@ -221,6 +241,7 @@ describe("ProjectFilesPanel", () => {
       .mockResolvedValueOnce(listResponse([file("b-file", "project-b.txt", 1, "text/plain")], "p-b"));
     const page = renderPanel("p-a");
     page.rerender(<ProjectFilesPanel client={client} projectId="p-b" projectName="Project p-b" />);
+    expect(screen.queryByText("project-a.txt")).toBeNull();
     expect(await screen.findByText("project-b.txt")).toBeTruthy();
     resolveA?.(listResponse([file("a-file", "project-a.txt")], "p-a"));
     await waitFor(() => expect(screen.queryByText("project-a.txt")).toBeNull());

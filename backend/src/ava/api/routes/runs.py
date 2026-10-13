@@ -21,6 +21,7 @@ from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.events import EventType, RunEvent
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse
+from ava.contracts.run_inspection import ContextWindowAccounting, RunInspection, RunListItem
 from ava.services.context_construction_service import ContextConstructionError
 from ava.services.run_service import (
     CancellationRequestError,
@@ -31,6 +32,28 @@ from ava.services.run_service import (
 )
 
 router = APIRouter(tags=["runs"])
+
+
+@router.post("/runs/context-preview", response_model=ContextWindowAccounting)
+async def preview_context_window(request: Request, body: RunRequest) -> ContextWindowAccounting | JSONResponse:
+    """Estimate the current draft using the same resolved execution and budget policy as a run."""
+    service: RunService = request.app.state.run_service
+    try:
+        result = service.preview_context_window(body)
+        if result is None:
+            return JSONResponse(status_code=422, content={"detail": "Context preview is unavailable."})
+        return result
+    except ContextConstructionError:
+        return JSONResponse(status_code=422, content={"detail": "Conversation context is unavailable."})
+    except Exception:
+        return JSONResponse(status_code=422, content={"detail": "Execution selection could not be resolved."})
+
+
+@router.get("/runs", response_model=list[RunListItem])
+async def list_conversation_runs(request: Request, conversation_id: str = Query(min_length=1)) -> list[RunListItem]:
+    """List the captured runs that belong to one conversation."""
+    service: RunService = request.app.state.run_service
+    return service.list_run_summaries_for_conversation(conversation_id)
 
 
 # ============================================================
@@ -281,6 +304,16 @@ async def get_run_events(
     if events is None:
         return _unknown_run(run_id)
     return events
+
+
+@router.get("/runs/{run_id}/inspection", response_model=RunInspection, responses={404: {"model": ErrorResponse}})
+async def get_run_inspection(request: Request, run_id: str) -> RunInspection | JSONResponse:
+    """Return backend-captured execution facts and the ordered normalized event stream."""
+    service: RunService = request.app.state.run_service
+    inspection = service.get_run_inspection(run_id)
+    if inspection is None:
+        return _unknown_run(run_id)
+    return inspection
 
 
 # ============================================================

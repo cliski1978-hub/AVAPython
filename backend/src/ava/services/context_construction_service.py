@@ -28,12 +28,14 @@ The context policy, in one list:
 6. User and system messages are never hidden, reordered, or merged.
 
 Nothing here budgets tokens, opens a context window, summarizes, or retrieves
-documents; those remain out of scope. No attachment or tool semantics are
-introduced: a message's stored text is passed through as-is.
+documents; those remain downstream. Conversation attachment candidates are
+loaded through a neutral application port; their model-specific inclusion is
+resolved later. A message's stored text is passed through as-is.
 """
 
 from collections.abc import Sequence
 
+from ava.contracts.attachment_context import ConversationAttachmentContextPort
 from ava.contracts.conversations import (
     ContextMessage,
     MessageRole,
@@ -94,6 +96,7 @@ class ContextConstructionService:
         run_repository: RunRepository,
         message_repository: MessageRepository,
         conversation_repository: ConversationRepository,
+        attachment_context: ConversationAttachmentContextPort | None = None,
     ) -> None:
         """Construct the service over the durable read ports it needs.
 
@@ -110,6 +113,7 @@ class ContextConstructionService:
         self._run_repository = run_repository
         self._message_repository = message_repository
         self._conversation_repository = conversation_repository
+        self._attachment_context = attachment_context
 
     def build_for_run(self, run_id: str) -> RunContext:
         """Return the durable context for ``run_id``.
@@ -144,6 +148,22 @@ class ContextConstructionService:
         """
         return self._build(conversation_id, source_user_message_id)
 
+    def build_for_preview(self, conversation_id: str) -> RunContext:
+        """Build the full visible transcript used by an unsent draft preview.
+
+        A draft has no persisted source user message yet, so unlike a run it
+        must include the latest completed assistant response as well as the
+        preceding user message.
+        """
+        if self._conversation_repository.get(conversation_id) is None:
+            raise ContextConversationNotFoundError(f"conversation {conversation_id} does not exist")
+        records = list(self._message_repository.list_for_conversation(conversation_id))
+        return RunContext(
+            conversation_id=conversation_id,
+            messages=self._visible_transcript(records, through_index=len(records) - 1),
+            attachments=self._attachment_context.load(conversation_id) if self._attachment_context else [],
+        )
+
     def _build(
         self,
         conversation_id: str,
@@ -164,11 +184,13 @@ class ContextConstructionService:
             return RunContext(
                 conversation_id=conversation_id,
                 messages=self._visible_transcript(records, through_index=self._last_user_index(records)),
+                attachments=self._attachment_context.load(conversation_id) if self._attachment_context else [],
             )
         source_index = self._source_index(records, conversation_id, source_user_message_id)
         return RunContext(
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
+            attachments=self._attachment_context.load(conversation_id) if self._attachment_context else [],
             messages=self._visible_transcript(
                 records,
                 through_index=source_index,

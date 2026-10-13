@@ -10,6 +10,11 @@ metadata, 0011 conversation folders, 0012 Project persistence, 0013 the
 conversation Project relationship, and 0014 Project lookup indexing.
 Phase 5.67 adds 0015 CORE prompt definitions; Phase 5.68 adds 0016 scoped assignments.
 Phase 5.76 adds 0018 Project file metadata (0017 is Project execution defaults).
+Migration 0019 records whether a Conversation title was explicitly set by a user.
+Migration 0024 adds normalized-tool feature gates; migration 0025 adds
+administrator-configured execution Workspace access; migration 0026 adds
+durable normalized-tool approval records; migration 0027 adds the Run-scoped
+execution mode with a safe ``chat`` default for existing records.
 The registry is built from explicit versions, never from directory/import order.
 """
 
@@ -34,6 +39,15 @@ from ava.infrastructure.persistence.migrations.versions import (
     v0016_core_prompt_assignments,
     v0017_project_execution_defaults,
     v0018_project_files,
+    v0019_conversation_title_ownership,
+    v0020_run_inspection,
+    v0021_model_context_window,
+    v0022_conversation_context_summaries,
+    v0023_project_file_name_uniqueness,
+    v0024_tool_features,
+    v0025_workspace_access,
+    v0026_approvals,
+    v0027_run_execution_mode,
 )
 
 __all__ = ["default_registry"]
@@ -200,6 +214,79 @@ def default_registry() -> MigrationRegistry:
             name=v0018_project_files.NAME,
             up=v0018_project_files.migrate_up,
             verify=v0018_project_files.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0019_conversation_title_ownership.VERSION,
+            name=v0019_conversation_title_ownership.NAME,
+            up=v0019_conversation_title_ownership.migrate_up,
+            verify=v0019_conversation_title_ownership.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0020_run_inspection.VERSION,
+            name=v0020_run_inspection.NAME,
+            up=v0020_run_inspection.migrate_up,
+            verify=v0020_run_inspection.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0021_model_context_window.VERSION,
+            name=v0021_model_context_window.NAME,
+            up=v0021_model_context_window.migrate_up,
+            verify=v0021_model_context_window.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0022_conversation_context_summaries.VERSION,
+            name=v0022_conversation_context_summaries.NAME,
+            up=v0022_conversation_context_summaries.migrate_up,
+            verify=v0022_conversation_context_summaries.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0023_project_file_name_uniqueness.VERSION,
+            name=v0023_project_file_name_uniqueness.NAME,
+            up=v0023_project_file_name_uniqueness.migrate_up,
+            verify=v0023_project_file_name_uniqueness.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0024_tool_features.VERSION,
+            name=v0024_tool_features.NAME,
+            up=v0024_tool_features.migrate_up,
+            verify=v0024_tool_features.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0025_workspace_access.VERSION,
+            name=v0025_workspace_access.NAME,
+            up=v0025_workspace_access.migrate_up,
+            verify=v0025_workspace_access.verify_structure,
+            expected_tables=("workspace_access_configurations",),
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0026_approvals.VERSION,
+            name=v0026_approvals.NAME,
+            up=v0026_approvals.migrate_up,
+            verify=v0026_approvals.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0027_run_execution_mode.VERSION,
+            name=v0027_run_execution_mode.NAME,
+            up=v0027_run_execution_mode.migrate_up,
+            verify=v0027_run_execution_mode.verify_structure,
         )
     )
     return registry

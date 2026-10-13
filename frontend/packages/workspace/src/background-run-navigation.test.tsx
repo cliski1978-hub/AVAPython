@@ -113,10 +113,10 @@ vi.mock("@ava/api-client", async (importOriginal) => {
       },
     ),
     listConversationFolders: vi.fn().mockResolvedValue({ folders: [{ folder_id: "folder-1", name: "Work", position: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }] }),
-    setConversationFolder: vi.fn().mockImplementation(async (_client: unknown, conversationId: string, request: { folder_id: string | null }) => {
+    relocateConversation: vi.fn().mockImplementation(async (_client: unknown, conversationId: string, request: { destination_type: "folder" | "project" | "ungrouped"; destination_id?: string | null }) => {
       const current = serverConversations.find((item) => item.conversation_id === conversationId);
       if (current == null) throw new Error("not found");
-      return { ...current, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", folder_id: request.folder_id, is_pinned: false, is_archived: false, contract_version: "v1" as const };
+      return { ...current, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", folder_id: request.destination_type === "folder" ? request.destination_id ?? null : null, project_id: request.destination_type === "project" ? request.destination_id ?? null : null, is_pinned: false, is_archived: false, contract_version: "v1" as const };
     }),
     startRun: vi.fn().mockImplementation(
       async (
@@ -346,6 +346,12 @@ function cacheContent(conversationId: string): string {
   );
 }
 
+function runIndicator(conversationId: string): HTMLElement | null {
+  return document.querySelector(
+    `[data-conversation-row="${conversationId}"] [data-conversation-run-indicator]`,
+  );
+}
+
 beforeEach(() => {
   serverConversations = [];
   serverMessages = {};
@@ -366,6 +372,9 @@ describe("background conversation reconciliation after navigation", () => {
       expect(conversationItem("conversation-1").getAttribute("aria-current")).toBe("true");
     });
     const runId = await startRunInA();
+    await waitFor(() => {
+      expect(runIndicator("conversation-1")?.getAttribute("data-conversation-run-indicator")).toBe("active");
+    });
 
     await emit(runId, { event_type: "message_content", payload: { content: "Hello" } });
     await waitFor(() => {
@@ -377,6 +386,7 @@ describe("background conversation reconciliation after navigation", () => {
     await waitFor(() => {
       expect(conversationItem("conversation-2").getAttribute("aria-current")).toBe("true");
     });
+    expect(runIndicator("conversation-1")?.getAttribute("data-conversation-run-indicator")).toBe("active");
     expect(runs.get(runId)?.status).toBe("running");
 
     // The run is still observed in the background, so the hidden
@@ -389,6 +399,7 @@ describe("background conversation reconciliation after navigation", () => {
     await emit(runId, { event_type: "run_completed" });
     await waitFor(() => {
       expect(cacheContent("conversation-1")).toBe("Hello world");
+      expect(runIndicator("conversation-1")?.getAttribute("data-conversation-run-indicator")).toBe("idle");
     });
   });
 
@@ -610,6 +621,7 @@ describe("background conversation reconciliation after navigation", () => {
     await waitFor(() => {
       expect(observers.has(runId)).toBe(true);
     });
+    expect(runIndicator("conversation-1")?.getAttribute("data-conversation-run-indicator")).toBe("active");
     await emit(runId, { event_type: "message_content", payload: { content: "Hello world" } });
     await waitFor(() => {
       expect(transcriptText()).toContain("Hello world");

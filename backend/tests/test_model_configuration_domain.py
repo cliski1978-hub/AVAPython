@@ -46,6 +46,14 @@ def test_enabled_defaults_true_and_capabilities_use_existing_vocabulary() -> Non
     assert configuration.capabilities == ModelCapabilities()
 
 
+def test_optional_context_window_must_be_a_positive_integer() -> None:
+    assert _configuration(context_window_tokens=32768).context_window_tokens == 32768
+    assert _configuration(context_window_tokens=None).context_window_tokens is None
+    for invalid in (0, -1, True, 1.5):
+        with pytest.raises(ValueError, match="context_window_tokens must be a positive integer or None"):
+            _configuration(context_window_tokens=invalid)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

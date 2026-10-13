@@ -196,16 +196,16 @@ export function SystemPromptsSection({ client }: { client: ApiClient }) {
         </div>
         {definitionError != null && <p role="alert">{definitionError}</p>}
         {filtered.length === 0 ? <SettingsEmpty title={prompts.length === 0 ? "No System Prompts yet." : "No matching System Prompts."} description={prompts.length === 0 ? "Create a reusable CORE prompt to make it available for scoped assignment." : "Adjust the search or filters to see other prompts."} /> : filtered.map((prompt) => (
-          <article key={prompt.id} data-core-prompt={prompt.id} style={{ display: "flex", flexDirection: "column", gap: t.spacing.sm, padding: t.spacing.md, border: `${t.border.width}px solid ${t.colors.border}`, borderRadius: t.radius.md, background: t.colors.surface }}>
+          <article key={prompt.id} data-core-prompt={prompt.id} className="border border-border bg-card text-card-foreground" style={{ display: "flex", flexDirection: "column", gap: t.spacing.sm, padding: t.spacing.md, borderRadius: t.radius.md }}>
             <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: t.spacing.md }}>
-            <div><strong>{prompt.name}</strong><div style={{ color: t.colors.mutedText }}>{categories.find((item) => item.value === prompt.category)?.label ?? prompt.category}</div>{prompt.description && <p style={{ margin: `${t.spacing.xs}px 0 0` }}>{prompt.description}</p>}<div style={{ color: prompt.is_enabled ? t.colors.success : t.colors.warning, fontSize: t.font.sizeSm }}>{prompt.is_enabled ? "Prompt enabled" : "Prompt definition disabled"}</div></div>
+            <div><strong>{prompt.name}</strong><div className="text-muted-foreground">{categories.find((item) => item.value === prompt.category)?.label ?? prompt.category}</div>{prompt.description && <p style={{ margin: `${t.spacing.xs}px 0 0` }}>{prompt.description}</p>}<div className="text-muted-foreground" style={{ fontSize: t.font.sizeSm }}>{prompt.is_enabled ? "Prompt enabled" : "Prompt definition disabled"}</div></div>
               <div style={{ display: "flex", gap: t.spacing.xs, flexWrap: "wrap" }}>
                 <Button variant="secondary" size="sm" onClick={() => openEditor(prompt)}>Edit</Button>
                 <Button variant="secondary" size="sm" disabled={pendingPromptId === prompt.id} onClick={() => void toggleDefinition(prompt)}>{pendingPromptId === prompt.id ? "Saving…" : prompt.is_enabled ? "Disable definition" : "Enable definition"}</Button>
                 <Button variant="danger" size="sm" onClick={() => { setDeleteTarget(prompt); setDeleteError(null); }}>Delete</Button>
               </div>
             </header>
-            <div aria-label={`Explicit assignments for ${prompt.name}`} style={{ color: t.colors.mutedText, fontSize: t.font.sizeSm }}>
+            <div aria-label={`Explicit assignments for ${prompt.name}`} className="text-muted-foreground" style={{ fontSize: t.font.sizeSm }}>
               Assignments: {(assignmentSummary[prompt.id] ?? []).length === 0 ? "None" : (assignmentSummary[prompt.id] ?? []).map((assignment) => `${assignment.scope_type}${assignment.scope_id == null ? "" : ` ${assignment.scope_id}`} — ${assignment.state.toUpperCase()}`).join(" · ")}
             </div>
           </article>

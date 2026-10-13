@@ -58,6 +58,7 @@ from types import MappingProxyType
 from uuid import uuid4
 
 from ava.contracts.events import EventType, RunEvent
+from ava.contracts.execution import ExecutionMode
 from ava.contracts.json_types import JsonValue
 from ava.contracts.responses import RunStatus
 from ava.repositories.run_event_repository import RunEventRepository
@@ -223,6 +224,7 @@ class RunLifecycleService:
         *,
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.CHAT,
     ) -> RunRecord:
         """Open a run in ``pending``.
 
@@ -236,6 +238,7 @@ class RunLifecycleService:
             run_id,
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
+            execution_mode=execution_mode,
         )
 
     # ============================================================
@@ -254,7 +257,14 @@ class RunLifecycleService:
         without executing. Queuing, resource waiting, and approval gating are
         separate concerns; ``pending`` and ``waiting_for_approval`` cover them.
         """
-        return self.transition(run_id, RunStatus.RUNNING)
+        record = self._runs.get(run_id)
+        if record is None:
+            raise UnknownRunError(run_id)
+        return self.transition(
+            run_id,
+            RunStatus.RUNNING,
+            payload={"execution_mode": record.execution_mode.value},
+        )
 
     def complete(self, run_id: str) -> RunRecord:
         """Move a run to ``completed`` and record the completion fact.

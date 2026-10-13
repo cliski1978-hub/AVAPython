@@ -150,6 +150,10 @@ class Settings:
     attachment_storage: str = field(default_factory=lambda: _env_attachment_storage("AVA_ATTACHMENT_STORAGE", "memory"))
     # Filesystem root used when ``attachment_storage`` is ``local``.
     attachment_storage_root: str = field(default_factory=lambda: _env_str("AVA_ATTACHMENT_STORAGE_ROOT", ""))
+    # Maximum accepted size for one uploaded attachment (default 25 MiB).
+    attachment_max_size_bytes: int = field(
+        default_factory=lambda: _env_int("AVA_ATTACHMENT_MAX_SIZE_BYTES", 25 * 1024 * 1024)
+    )
 
     # Project files use a distinct content lifecycle and storage root.
     project_file_storage: str = field(
@@ -160,6 +164,8 @@ class Settings:
     def __post_init__(self) -> None:
         if self.attachment_storage == "local" and not self.attachment_storage_root.strip():
             raise ValueError("AVA_ATTACHMENT_STORAGE=local requires AVA_ATTACHMENT_STORAGE_ROOT to be set")
+        if self.attachment_max_size_bytes <= 0:
+            raise ValueError("AVA_ATTACHMENT_MAX_SIZE_BYTES must be positive")
         if self.project_file_storage == "local" and not self.project_file_storage_root.strip():
             raise ValueError("AVA_PROJECT_FILE_STORAGE=local requires AVA_PROJECT_FILE_STORAGE_ROOT to be set")
 

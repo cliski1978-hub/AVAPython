@@ -28,6 +28,12 @@ function isProjectNotFound(error: unknown): boolean {
     "error_code" in error.body && error.body.error_code === "project_not_found";
 }
 
+function isDuplicateProjectFile(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 &&
+    typeof error.body === "object" && error.body !== null &&
+    "error_code" in error.body && error.body.error_code === "project_file_name_conflict";
+}
+
 export function formatProjectFileSize(sizeBytes: number): string {
   if (sizeBytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -138,7 +144,7 @@ export function ProjectFilesPanel({
       setSelectedFile(null);
       if (fileInputRef.current != null) fileInputRef.current.value = "";
       try {
-        // The list endpoint owns canonical ordering, including duplicate names.
+        // The list endpoint owns canonical ordering for project files.
         const response = await listProjectFiles(client, projectId);
         if (currentProjectIdRef.current !== projectId) return;
         setFiles(response.files);
@@ -156,7 +162,12 @@ export function ProjectFilesPanel({
     } catch (error) {
       if (currentProjectIdRef.current !== projectId) return;
       if (isProjectNotFound(error)) onProjectMissing?.();
-      else setUploadError("Unable to upload this file.");
+      else if (isDuplicateProjectFile(error)) {
+        setUploadError(
+          `A file named "${file.name.trim()}" already exists in this Project. ` +
+            "Delete or rename the existing file before uploading another.",
+        );
+      } else setUploadError("Unable to upload this file.");
     } finally {
       uploadPendingRef.current = false;
       setUploadPending(false);

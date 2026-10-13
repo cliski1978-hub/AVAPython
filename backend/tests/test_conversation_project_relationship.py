@@ -326,7 +326,7 @@ def test_v0013_migrates_existing_v0012_conversations_without_changing_metadata(t
                 "2026-01-01T00:00:00+00:00",
             ),
         )
-    assert MigrationRunner(database, default_registry()).migrate() == [13, 14, 15, 16, 17, 18]
+    assert MigrationRunner(database, default_registry()).migrate() == [13, 14, 15, 16, 17, 18, 19]
     assert MigrationRunner(database, default_registry()).migrate() == []
     with database.connect() as connection:
         row = connection.execute(

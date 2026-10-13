@@ -29,6 +29,10 @@ export interface ExecutionControlsProps {
   configuredModels?: ModelInfo[];
   /** Model the application default resolves to, used to label that option. */
   defaultModelDisplayName?: string;
+  /** Scope supplying the inherited model displayed in the empty option. */
+  defaultModelScopeLabel?: string;
+  /** Layout used when controls are shown in the composer settings popover. */
+  layout?: "inline" | "popover";
 }
 
 export function ExecutionControls({
@@ -50,9 +54,15 @@ export function ExecutionControls({
   workspacesUnavailable = false,
   configuredModels = [],
   defaultModelDisplayName,
+  defaultModelScopeLabel = "Application default",
+  layout = "inline",
 }: ExecutionControlsProps) {
-  const selectStyle = { background: "transparent", color: "inherit", border: 0, fontSize: 12, maxWidth: 180 };
-  const labelStyle = { fontSize: 12, color: "#a1a1aa" } as const;
+  const labelClassName = layout === "popover"
+    ? "flex min-w-0 flex-col gap-1.5 text-xs font-medium text-foreground"
+    : "inline-flex items-center gap-2 text-xs text-muted-foreground";
+  const selectClassName = layout === "popover"
+    ? "h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:inherit]"
+    : "h-8 max-w-48 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:inherit]";
 
   // Configured models are the catalog a user actually configured, so they win
   // whenever discovery reports any. Disabled records stay listed: selecting one
@@ -60,8 +70,8 @@ export function ExecutionControls({
   const hasConfiguredModels = configuredModels.length > 0;
   const unsetLabel = selectedProfileId === "application-default"
     ? defaultModelDisplayName
-      ? `Application default (${defaultModelDisplayName})`
-      : "Application default"
+      ? `${defaultModelScopeLabel} (${defaultModelDisplayName})`
+      : defaultModelScopeLabel
     : "Legacy default";
 
   // An execution profile pins a provider, not a configured model, so its value
@@ -77,14 +87,14 @@ export function ExecutionControls({
     ? selectedModelProviderId
     : null;
 
-  return <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-    {(profiles.length > 0 || onDefaultChange) && <label style={labelStyle}>Profile <select aria-label="Select execution profile" disabled={disabled} value={selectedProfileId ?? "custom"} onChange={e => { if (e.target.value === "application-default") return onDefaultChange?.(); if (e.target.value === "auto") return onAutoChange?.(); const p = profiles.find(x => x.id === e.target.value); if (p) onProfileChange?.(p); }}>{onDefaultChange && <option value="application-default">Application default</option>}<option value="auto">Auto</option><option value="custom" disabled>Custom</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
-    <label style={labelStyle}>Runtime <select style={selectStyle} aria-label="Select runtime" disabled={disabled} value={selectedRuntimeId ?? ""} onChange={e => onRuntimeChange(e.target.value)}>
+  return <div className={layout === "popover" ? "grid grid-cols-1 gap-3 sm:grid-cols-2" : "flex flex-wrap items-center gap-x-3 gap-y-2"}>
+    {(profiles.length > 0 || onDefaultChange) && <label className={labelClassName}>Profile <select className={selectClassName} aria-label="Select execution profile" disabled={disabled} value={selectedProfileId ?? "custom"} onChange={e => { if (e.target.value === "application-default") return onDefaultChange?.(); if (e.target.value === "auto") return onAutoChange?.(); const p = profiles.find(x => x.id === e.target.value); if (p) onProfileChange?.(p); }}>{onDefaultChange && <option value="application-default">Application default</option>}<option value="auto">Auto</option><option value="custom" disabled>Custom</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
+    <label className={labelClassName}>Runtime <select className={selectClassName} aria-label="Select runtime" disabled={disabled} value={selectedRuntimeId ?? ""} onChange={e => onRuntimeChange(e.target.value)}>
       {onDefaultChange && <option value="">{selectedProfileId === "application-default" ? "Application default" : "Legacy default"}</option>}
       {!onDefaultChange && !runtimes.length && <option value="">No runtimes available</option>}
       {runtimes.map(r => <option key={r.runtime_info.runtime_id} value={r.runtime_info.runtime_id}>{r.runtime_info.display_name ?? r.runtime_info.runtime_id}</option>)}
     </select></label>
-    <label style={labelStyle}>Model <select style={selectStyle} aria-label="Select model" disabled={disabled} value={selectedModelProviderId ?? ""} onChange={e => onModelProviderChange(e.target.value)}>
+    <label className={labelClassName}>Model <select className={selectClassName} aria-label="Select model" disabled={disabled} value={selectedModelProviderId ?? ""} onChange={e => onModelProviderChange(e.target.value)}>
       {onDefaultChange && <option value="">{unsetLabel}</option>}
       {!hasConfiguredModels && !onDefaultChange && !modelProviders.length && <option value="">No models available</option>}
       {unlistedSelection && <option value={unlistedSelection}>Provider {unlistedSelection} (from profile)</option>}
@@ -92,7 +102,7 @@ export function ExecutionControls({
         ? configuredModels.map(m => <option key={m.model_id} value={m.model_id}>{m.display_name ?? m.model_id}{m.enabled ? "" : " (disabled)"}</option>)
         : modelProviders.map(p => <option key={p.provider_id} value={p.provider_id}>{p.model_info.model_id}</option>)}
     </select></label>
-    <label style={labelStyle}>Workspace <select style={selectStyle} aria-label="Select workspace" disabled={disabled || workspacesUnavailable} value={selectedWorkspaceId ?? ""} onChange={e => onWorkspaceChange?.(e.target.value === "" ? null : e.target.value)}>
+    <label className={labelClassName}>Workspace <select className={selectClassName} aria-label="Select workspace" disabled={disabled || workspacesUnavailable} value={selectedWorkspaceId ?? ""} onChange={e => onWorkspaceChange?.(e.target.value === "" ? null : e.target.value)}>
       {workspacesUnavailable
         ? <option value="">Workspace options unavailable</option>
         : <option value="">None</option>}

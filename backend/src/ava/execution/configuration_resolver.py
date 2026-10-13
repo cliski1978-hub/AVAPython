@@ -450,4 +450,5 @@ def _profile_for(model: ModelConfiguration, connection: ProviderConnection) -> M
         hosting_mode=model.hosting_mode,
         capabilities=model.capabilities,
         enabled=model.enabled,
+        context_window_tokens=model.context_window_tokens,
     )

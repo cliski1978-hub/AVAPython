@@ -1,7 +1,9 @@
 """Project-file metadata/content lifecycle and public API coverage."""
 
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,7 +13,11 @@ from ava.configuration.settings import Settings
 from ava.repositories.project_file import ProjectFileRecord
 from ava.services.conversation_store import ConversationStore
 from ava.services.project_file_content_store import InMemoryProjectFileContentStore
-from ava.services.project_file_service import ProjectFileService, ProjectFileStorageError
+from ava.services.project_file_service import (
+    ProjectFileAlreadyExistsError,
+    ProjectFileService,
+    ProjectFileStorageError,
+)
 from ava.services.project_file_store import ProjectFileStore
 from ava.services.project_service import ProjectService
 from ava.services.project_store import ProjectStore
@@ -26,6 +32,16 @@ class _FailingProjectFileRepository(ProjectFileStore):
 class _FailingDeleteContentStore(InMemoryProjectFileContentStore):
     def delete(self, content_ref: str) -> bool:
         raise OSError("storage unavailable")
+
+
+class _BarrierProjectFileContentStore(InMemoryProjectFileContentStore):
+    def __init__(self, barrier: Barrier) -> None:
+        super().__init__()
+        self._barrier = barrier
+
+    def write(self, content_ref: str, source: BytesIO) -> int:
+        self._barrier.wait(timeout=5)
+        return super().write(content_ref, source)
 
 
 def test_upload_metadata_failure_rolls_back_written_content() -> None:
@@ -105,9 +121,41 @@ async def test_project_file_upload_download_ownership_and_delete(provider: str, 
                 f"/projects/{first['id']}/files",
                 files={"file": ("設計仕様書.pdf", b"different bytes", "application/pdf")},
             )
-            duplicate = duplicate_upload.json()
-            assert duplicate_upload.status_code == 201
-            assert duplicate["id"] != item["id"]
+            assert duplicate_upload.status_code == 409
+            assert duplicate_upload.json()["error_code"] == "project_file_name_conflict"
+            assert duplicate_upload.json()["message"] == (
+                'A file named "設計仕様書.pdf" already exists in this Project. '
+                "Delete or rename the existing file before uploading another."
+            )
+            assert (await client.get(f"/projects/{first['id']}/files/{item['id']}/content")).content == raw
+            assert (await client.get(f"/projects/{first['id']}/files/{item['id']}")).json() == item
+            assert len(app.state.persistence.project_file_repository.list_by_project(first["id"])) == 1
+
+            other_project_copy = await client.post(
+                f"/projects/{second['id']}/files",
+                files={"file": ("設計仕様書.pdf", b"other project", "application/pdf")},
+            )
+            assert other_project_copy.status_code == 201
+
+            skill = await client.post(
+                f"/projects/{first['id']}/files", files={"file": ("SKILL.md", b"first", "text/markdown")}
+            )
+            assert skill.status_code == 201
+            case_duplicate = await client.post(
+                f"/projects/{first['id']}/files", files={"file": ("skill.md", b"different", "text/markdown")}
+            )
+            assert case_duplicate.status_code == 409
+            whitespace_duplicate = await client.post(
+                f"/projects/{first['id']}/files",
+                data={"file_name": "SKILL.md "},
+                files={"file": ("other.md", b"different", "text/markdown")},
+            )
+            assert whitespace_duplicate.status_code == 409
+            assert (await client.delete(f"/projects/{first['id']}/files/{skill.json()['id']}")).status_code == 204
+            replacement = await client.post(
+                f"/projects/{first['id']}/files", files={"file": ("SKILL.md", b"replacement", "text/markdown")}
+            )
+            assert replacement.status_code == 201
             empty_upload = await client.post(
                 f"/projects/{first['id']}/files", files={"file": ("empty.txt", b"", "text/plain")}
             )
@@ -117,7 +165,7 @@ async def test_project_file_upload_download_ownership_and_delete(provider: str, 
 
             listed = await client.get(f"/projects/{first['id']}/files")
             listed_files = listed.json()["files"]
-            assert {row["id"] for row in listed_files} == {item["id"], duplicate["id"], empty["id"]}
+            assert {row["id"] for row in listed_files} == {item["id"], empty["id"], replacement.json()["id"]}
             assert [row["file_name"].casefold() for row in listed_files] == sorted(
                 row["file_name"].casefold() for row in listed_files
             )
@@ -151,6 +199,7 @@ async def test_project_file_upload_download_ownership_and_delete(provider: str, 
                         assert {row["file_name"] for row in reopened_files} == {
                             "設計仕様書.pdf",
                             "empty.txt",
+                            "SKILL.md",
                         }
                         deleted = await reopened.delete(f"/projects/{first['id']}/files/{item['id']}")
                         assert deleted.status_code == 204
@@ -163,6 +212,47 @@ async def test_project_file_upload_download_ownership_and_delete(provider: str, 
             deleted = await client.delete(f"/projects/{first['id']}/files/{item['id']}")
             assert deleted.status_code == 204
             assert (await client.get(f"/projects/{first['id']}/files/{item['id']}")).status_code == 404
+    finally:
+        app.state.persistence.dispose()
+
+
+def test_concurrent_duplicate_uploads_allow_exactly_one_database_create(tmp_path: Path) -> None:
+    app = create_app(
+        settings=Settings(
+            persistence_provider="relational",
+            persistence_database_url=str(tmp_path / "project-file-race.sqlite3"),
+            project_file_storage="local",
+            project_file_storage_root=str(tmp_path / "content"),
+        )
+    )
+    try:
+        project = app.state.project_service.create_project(name="Race")
+        barrier = Barrier(2)
+        content = _BarrierProjectFileContentStore(barrier)
+        service = ProjectFileService(
+            projects=app.state.persistence.project_repository,
+            files=app.state.persistence.project_file_repository,
+            content=content,
+        )
+
+        def upload(payload: bytes):
+            try:
+                return service.create(
+                    project.id, file_name="SKILL.md", content_type="text/markdown", source=BytesIO(payload)
+                )
+            except ProjectFileAlreadyExistsError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(upload, (b"first", b"second")))
+
+        assert sum(not isinstance(result, ProjectFileAlreadyExistsError) for result in results) == 1
+        assert sum(isinstance(result, ProjectFileAlreadyExistsError) for result in results) == 1
+        stored = app.state.persistence.project_file_repository.list_by_project(project.id)
+        assert len(stored) == 1
+        assert len(content._content) == 1
+        with content.read(stored[0].content_ref) as source:
+            assert source.read() in {b"first", b"second"}
     finally:
         app.state.persistence.dispose()
 

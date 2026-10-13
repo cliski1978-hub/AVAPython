@@ -12,11 +12,15 @@ id, a provider-native model name, a runtime type, or a ``RuntimeRegistry``
 lookup key, because those describe adapters rather than configured records.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-from ava.models.model_configurations import ModelConfiguration
-from ava.models.provider_connections import ProviderConnection
-from ava.runtimes.configurations import RuntimeConfiguration
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ava.models.model_configurations import ModelConfiguration
+    from ava.models.provider_connections import ProviderConnection
+    from ava.runtimes.configurations import RuntimeConfiguration
 
 
 def _require_text(name: str, value: str | None) -> None:

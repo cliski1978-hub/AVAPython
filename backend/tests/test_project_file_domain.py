@@ -68,13 +68,11 @@ def test_record_accepts_non_utc_aware_timestamps_without_rewriting_them() -> Non
     assert value.created_at.utcoffset() == timedelta(hours=-4)
 
 
-def test_duplicate_filenames_are_distinct_project_file_resources() -> None:
-    first = record(id="file-1")
-    second = record(id="file-2")
+def test_filename_normalization_trims_and_casefolds() -> None:
+    from ava.repositories.project_file import normalize_project_file_name
 
-    assert first.file_name == second.file_name
-    assert first.id != second.id
-    assert first.project_id == second.project_id
+    assert normalize_project_file_name("SKILL.md") == normalize_project_file_name("skill.md ")
+    assert normalize_project_file_name("résumé.md") == normalize_project_file_name("RÉSUMÉ.md")
 
 
 def test_record_contains_only_project_file_metadata_and_opaque_content_identity() -> None:

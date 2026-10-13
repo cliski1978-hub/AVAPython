@@ -78,19 +78,17 @@ function DefaultRow({
     justifyContent: "space-between",
     gap: t.spacing.md,
     padding: `${t.spacing.md}px ${t.spacing.lg}px`,
-    border: `${t.border.width}px solid ${t.colors.border}`,
     borderRadius: t.radius.lg,
-    background: t.colors.background,
     boxSizing: "border-box",
   };
 
   return (
-    <div style={rowStyle} data-testid="settings-default-row">
+    <div className="border border-border bg-card text-card-foreground dark:bg-black dark:text-white" style={rowStyle} data-testid="settings-default-row">
       <span
+        className="text-card-foreground dark:text-white"
         style={{
           fontSize: t.font.sizeSm,
           fontWeight: t.font.weightSemibold,
-          color: t.colors.foreground,
         }}
       >
         {label}
@@ -105,9 +103,9 @@ function DefaultRow({
         }}
       >
         <span
+          className="text-card-foreground dark:text-white"
           style={{
             fontSize: t.font.sizeSm,
-            color: t.colors.foreground,
             textAlign: "right",
           }}
           data-testid="settings-default-value"
@@ -119,10 +117,10 @@ function DefaultRow({
             id, and printing it twice would read as two different things. */}
         {secondary != null && secondary !== value && (
           <span
+            className="text-muted-foreground dark:text-white/80"
             style={{
               fontSize: t.font.sizeXs,
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-              color: t.colors.mutedText,
             }}
             data-testid="settings-default-secondary"
           >
@@ -244,11 +242,11 @@ export function ExecutionDefaultsSection({ client }: { client: ApiClient }) {
         }}
       >
         <h3
+          className="text-foreground"
           style={{
             margin: 0,
             fontSize: t.font.sizeSm,
             fontWeight: t.font.weightSemibold,
-            color: t.colors.foreground,
           }}
         >
           Application execution defaults

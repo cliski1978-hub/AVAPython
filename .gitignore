@@ -11,6 +11,8 @@ build/
 venv/
 env/
 .env
+.env.*
+!.env.example
 *.pyc
 .pytest_cache/
 .mypy_cache/
@@ -39,6 +41,15 @@ build/
 .DS_Store
 Thumbs.db
 
+# Local machine credentials and private-key containers
+.aws/
+.codex/
+**/id_rsa
+**/id_ed25519
+*.key
+*.p12
+*.pfx
+
 # Tauri
 frontend/apps/desktop/src-tauri/target/
 
@@ -58,8 +69,10 @@ training/deployment/*.gguf
 training/deployment/*-merged/
 
 # Live AVA database (user conversations, runs, events) — local state only
-backend/ava.sqlite3
-backend/ava.sqlite3-*
+*.sqlite3
+*.sqlite3-*
+backend/ava.sqlite3.*
+backend/.ava/
 
 # Audit scratch workspace: a full checkout plus vendored .venv, pnpm and
 # uv caches, and Rust target/ artifacts (~2.5 GB, 68k files). The written

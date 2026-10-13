@@ -8,10 +8,9 @@ neither runtime trims on its own.
 
 The policy, in one list:
 
-1. **The limit comes from the selected model.** AVA does not invent a global
-   context window: the caller supplies the selected model's total context
-   window, which is provider-reported discovery metadata
-   (``ModelInfo.context_limit``).
+1. **The limit comes from the selected model.** The configured AVA context
+   window applies to the selected model and is capped by provider-reported
+   maximum metadata (``ModelInfo.context_limit``) when available.
 2. **An unknown limit is not a failure and not a trim.** A model that reports no
    usable limit executes with its full eligible context, exactly as before this
    phase. The operational risk is documented in
@@ -41,7 +40,7 @@ This module is a pure policy: no provider, runtime, persistence, or transport
 import, no I/O, no clock, and no randomness, so identical inputs always produce
 identical output. It does not decide message *eligibility* — that stays with
 ``ContextConstructionService`` — and it does not summarize, retrieve, or
-expand attachments.
+extract attachment content. It budgets already-extracted, whole-file candidates.
 """
 
 from __future__ import annotations
@@ -49,8 +48,9 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from ava.contracts.attachment_context import AttachmentContextItem, AttachmentContextStatus, attachment_context_text
 from ava.contracts.conversations import ContextMessage, MessageRole
 
 # ============================================================
@@ -277,6 +277,58 @@ class ContextWindowManager:
                 policy for this phase.
         """
         self._estimator = estimator or DeterministicTokenEstimator()
+
+    def fit_with_attachments(
+        self,
+        messages: Sequence[ContextMessage],
+        attachments: Sequence[AttachmentContextItem],
+        *,
+        model_context_limit: int | None,
+        model_id: str | None = None,
+    ) -> tuple[ContextWindowResult, list[AttachmentContextItem]]:
+        """Keep existing history policy, then admit whole files in stable order.
+
+        Required prompt failure belongs to the base request. Attachment messages
+        are optional context and never become mandatory conversation turns.
+        """
+        base = self.fit(messages, model_context_limit=model_context_limit, model_id=model_id)
+        selected: list[ContextMessage] = []
+        outcomes: list[AttachmentContextItem] = []
+        total = base.estimated_input_tokens
+        for item in attachments:
+            if item.status not in (AttachmentContextStatus.EXTRACTED, AttachmentContextStatus.INCLUDED):
+                outcomes.append(item)
+                continue
+            message = ContextMessage(role=MessageRole.USER, content=attachment_context_text(item))
+            cost = self._estimator.estimate_messages([message], model_id=model_id)
+            # The existing window policy sums whole-message estimates. Count
+            # each file once using that same additive estimator contract.
+            candidate_total = total + cost
+            included = base.input_budget is None or candidate_total <= base.input_budget
+            outcomes.append(
+                item.model_copy(
+                    update={
+                        "status": AttachmentContextStatus.INCLUDED
+                        if included
+                        else AttachmentContextStatus.EXCLUDED_CONTEXT_LIMIT,
+                        "included": included,
+                        "text": item.text if included else None,
+                        "token_count": cost,
+                        "error_code": None if included else "attachment_context_limit",
+                        "error_message": None
+                        if included
+                        else "Complete attachment text does not fit the selected model context.",
+                    }
+                )
+            )
+            if included:
+                selected.append(message)
+                total = candidate_total
+        return replace(
+            base,
+            messages=[*base.messages[:-1], *selected, base.messages[-1]],
+            estimated_input_tokens=total,
+        ), outcomes
 
     def fit(
         self,

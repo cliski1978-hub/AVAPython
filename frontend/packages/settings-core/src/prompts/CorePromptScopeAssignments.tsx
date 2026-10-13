@@ -98,12 +98,12 @@ export function CorePromptScopeAssignments({
       ) : prompts.map((prompt) => {
         const state = stateByPrompt[prompt.id] ?? "inherit";
         return (
-          <article key={prompt.id} data-prompt-assignment={prompt.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(150px, 220px)", alignItems: "center", gap: t.spacing.md, padding: t.spacing.md, border: `${t.border.width}px solid ${t.colors.border}`, borderRadius: t.radius.md, background: t.colors.surface }}>
+          <article key={prompt.id} data-prompt-assignment={prompt.id} className="border border-border bg-card text-card-foreground" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(150px, 220px)", alignItems: "center", gap: t.spacing.md, padding: t.spacing.md, borderRadius: t.radius.md }}>
             <div>
               <strong>{prompt.name}</strong>
-              <div style={{ color: t.colors.mutedText, fontSize: t.font.sizeSm }}>{prompt.category}</div>
-              {!prompt.is_enabled && <div aria-label="Definition disabled" style={{ color: t.colors.warning, fontSize: t.font.sizeSm }}>Definition disabled</div>}
-              <div style={{ color: t.colors.mutedText, fontSize: t.font.sizeXs }}>{states.find((item) => item.value === state)?.meaning}</div>
+              <div className="text-muted-foreground" style={{ fontSize: t.font.sizeSm }}>{prompt.category}</div>
+              {!prompt.is_enabled && <div aria-label="Definition disabled" className="text-muted-foreground" style={{ fontSize: t.font.sizeSm }}>Definition disabled</div>}
+              <div className="text-muted-foreground" style={{ fontSize: t.font.sizeXs }}>{states.find((item) => item.value === state)?.meaning}</div>
             </div>
             <Select
               ariaLabel={`Assignment for ${prompt.name} at ${scopeLabel}`}

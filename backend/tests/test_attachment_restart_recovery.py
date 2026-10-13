@@ -16,9 +16,9 @@ doubles, no mocked stores:
   same exact bytes — physical content durability independent of process memory;
 * zero-byte content is a real empty object across restart (never treated as
   missing content);
-* hostile display filenames stay display-only under local storage: the storage
-  key is derived from the attachment id, physical placement stays under the
-  configured root, and download headers remain safe.
+* hostile filenames are reduced to a safe display basename under local
+  storage: the storage key is derived from the attachment id, physical
+  placement stays under the configured root, and download headers remain safe.
 
 These are attachment-specific recovery evidence only. The wider application
 restart/recovery story (conversations/messages/runs/documents/revisions) is
@@ -176,9 +176,9 @@ def test_hostile_filename_stays_display_only_under_local_storage(tmp_path) -> No
         )
         download = client.get(f"/attachments/{created['attachment_id']}/content")
 
-    # Wire response preserves the path-like display name (the quote arrives
-    # transport-encoded as %22) and the header stays a safe single line.
-    assert created["file_name"].startswith("../..")  # never narrowed to a safe basename
+    # Client paths are discarded before metadata is persisted; the response
+    # retains only the sanitized basename.
+    assert created["file_name"] == 'dangerous"name'
     assert download.status_code == 200
     disposition = download.headers["content-disposition"]
     assert disposition.startswith("attachment;")

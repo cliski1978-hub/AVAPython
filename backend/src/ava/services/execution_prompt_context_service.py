@@ -79,13 +79,16 @@ class ExecutionPromptContextService:
 
         core_prompts: list[ExecutionCorePrompt] = []
         for item in resolved.enabled_prompts:
-            if item.winning_scope_type is None or item.winning_assignment_mode != CorePromptAssignmentMode.ENABLE:
+            if item.winning_scope_type is None or (
+                item.winning_assignment_id is not None
+                and item.winning_assignment_mode != CorePromptAssignmentMode.ENABLE
+            ):
                 # The resolver's enabled collection guarantees this. Keep a
-                # defensive failure here rather than emitting an untraceable
-                # or disabled layer if that invariant ever changes.
+                # defensive failure here rather than emitting a disabled or
+                # untraceable assignment-backed layer if that invariant changes.
                 raise ExecutionPromptContextBuildError(
                     "effective_prompt_resolution_invalid",
-                    f"Enabled CORE prompt has no winning ENABLE assignment: {item.core_prompt_id}",
+                    f"Enabled CORE prompt has no valid effective scope: {item.core_prompt_id}",
                 )
             core_prompts.append(
                 ExecutionCorePrompt(
@@ -95,6 +98,7 @@ class ExecutionPromptContextService:
                     prompt_text=item.prompt_text,
                     winning_scope_type=item.winning_scope_type,
                     winning_scope_id=item.winning_scope_id,
+                    winning_assignment_id=item.winning_assignment_id,
                 )
             )
 

@@ -51,6 +51,7 @@ export interface ModalProps {
 }
 
 const t = defaultTheme;
+const semantic = (token: string) => `hsl(var(--${token}))`;
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -89,7 +90,9 @@ const dialogStyle = (width: number): CSSProperties => ({
   width: "100%",
   maxWidth: width,
   maxHeight: "100%",
-  background: t.colors.background,
+  background: semantic("background"),
+  color: semantic("foreground"),
+  border: `1px solid ${semantic("border")}`,
   borderRadius: t.radius.lg,
   boxShadow: "0 16px 40px rgba(17, 24, 39, 0.24)",
   boxSizing: "border-box",
@@ -213,18 +216,18 @@ export function Modal({
     borderRadius: t.radius.sm,
     border: "none",
     background: "transparent",
-    color: t.colors.mutedText,
-    fontSize: 18,
+    color: semantic("muted-foreground"),
+    fontSize: "calc(18px * var(--ava-font-scale, 1))",
     lineHeight: 1,
     cursor: "pointer",
     outline: "none",
     flexShrink: 0,
     transition: "background 120ms ease, color 120ms ease",
     ...(closeInteraction.hovered
-      ? { background: t.colors.ghostHover, color: t.colors.foreground }
+      ? { background: semantic("muted"), color: semantic("foreground") }
       : {}),
     ...(closeInteraction.focused
-      ? { boxShadow: `0 0 0 2px ${t.colors.focusRing}66` }
+      ? { boxShadow: "0 0 0 2px hsl(var(--ring) / 0.4)" }
       : {}),
   };
 
@@ -234,8 +237,8 @@ export function Modal({
     justifyContent: "flex-end",
     gap: t.spacing.sm,
     padding: `${t.spacing.md}px ${t.spacing.lg}px`,
-    borderTop: `${t.border.width}px solid ${t.colors.border}`,
-    background: t.colors.surface,
+    borderTop: `${t.border.width}px solid ${semantic("border")}`,
+    background: semantic("card"),
     flexShrink: 0,
   };
 
@@ -261,7 +264,7 @@ export function Modal({
             justifyContent: "space-between",
             gap: t.spacing.sm,
             padding: `${t.spacing.md}px ${t.spacing.lg}px`,
-            borderBottom: `${t.border.width}px solid ${t.colors.border}`,
+            borderBottom: `${t.border.width}px solid ${semantic("border")}`,
             flexShrink: 0,
           }}
         >
@@ -271,7 +274,7 @@ export function Modal({
               margin: 0,
               fontSize: t.font.sizeMd,
               fontWeight: t.font.weightSemibold,
-              color: t.colors.foreground,
+              color: semantic("foreground"),
             }}
           >
             {title}
@@ -315,9 +318,9 @@ export function Modal({
                   borderRadius: t.control.radius,
                   borderWidth: t.border.width,
                   borderStyle: "solid",
-                  borderColor: t.colors.borderStrong,
-                  background: t.colors.background,
-                  color: t.colors.foreground,
+                  borderColor: semantic("border"),
+                  background: semantic("background"),
+                  color: semantic("foreground"),
                   fontSize: t.control.fontSize,
                   fontWeight: t.font.weightSemibold,
                   fontFamily: t.font.family,
@@ -340,9 +343,9 @@ export function Modal({
                   borderRadius: t.control.radius,
                   borderWidth: t.border.width,
                   borderStyle: "solid",
-                  borderColor: t.colors.primary,
-                  background: t.colors.primary,
-                  color: t.colors.onPrimary,
+                  borderColor: semantic("primary"),
+                  background: semantic("primary"),
+                  color: semantic("primary-foreground"),
                   fontSize: t.control.fontSize,
                   fontWeight: t.font.weightSemibold,
                   fontFamily: t.font.family,

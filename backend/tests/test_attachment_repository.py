@@ -4,8 +4,8 @@ Prove the immutable attachment-metadata domain contract:
 
 * records are frozen snapshots with exactly the approved metadata fields;
 * the owner/status enums are AVA-owned ``StrEnum`` vocabulary;
-* the repository is an abstract contract declaring exactly four operations
-  (``create``/``get``/``list_for_owner``/``update_state``) and no mutation
+* the repository is an abstract contract declaring its metadata operations
+  (``create``/``get``/``list_for_owner``/``update_state``/``delete``);
   beyond the lifecycle-controlled ``size_bytes``/``status`` pair;
 * ``create`` accepts the immutable record wholesale (no caller-supplied
   identity/status split) and every boundary type is AVA-owned or stdlib.
@@ -96,6 +96,9 @@ class MemoryAttachmentRepository(AttachmentRepository):
         )
         self._attachments[attachment_id] = refreshed
         return refreshed
+
+    def delete(self, attachment_id: str) -> AttachmentRecord | None:
+        return self._attachments.pop(attachment_id, None)
 
 
 # ============================================================
@@ -251,7 +254,7 @@ def test_attachment_repository_is_an_abstract_contract() -> None:
 def test_port_declares_exactly_the_four_operations_as_abstract() -> None:
     """All four approved operations are abstract; nothing else is enforced."""
     assert AttachmentRepository.__abstractmethods__ == frozenset(
-        {"create", "get", "list_for_owner", "update_state"}
+        {"create", "get", "list_for_owner", "update_state", "delete"}
     )
 
 
@@ -289,14 +292,14 @@ def test_create_accepts_the_immutable_record_wholesale() -> None:
 # ============================================================
 
 
-def test_attachment_port_exposes_no_mutation_beyond_update_state() -> None:
-    """Metadata is otherwise immutable: no delete/replace/rename/generic update."""
+def test_attachment_port_exposes_scoped_delete_and_lifecycle_update() -> None:
+    """Metadata supports deletion and lifecycle update, not generic mutation."""
     operations = {
         name
         for name, member in getmembers(AttachmentRepository)
         if not name.startswith("_") and callable(member)
     }
-    assert operations == {"create", "get", "list_for_owner", "update_state"}
+    assert operations == {"create", "get", "list_for_owner", "update_state", "delete"}
 
 
 # ============================================================
@@ -386,7 +389,7 @@ def test_attachment_symbols_are_publicly_exported() -> None:
     assert isinstance(sample_attachment(), exported_record)
     assert exported_repository is AttachmentRepository
     assert exported_repository.__abstractmethods__ == frozenset(
-        {"create", "get", "list_for_owner", "update_state"}
+        {"create", "get", "list_for_owner", "update_state", "delete"}
     )
 
 

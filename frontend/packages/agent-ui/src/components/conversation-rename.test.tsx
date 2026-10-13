@@ -110,6 +110,25 @@ describe("ConversationList rename actions", () => {
     expect(actionsButton("Old Title")).not.toBeNull();
   });
 
+  it("keeps the ellipsis visible while its action menu is open", () => {
+    render(
+      <ConversationList
+        conversations={[conversation("c1", "Old Title")]}
+        activeConversationId={null}
+        onNewChat={noop}
+        onSelect={noop}
+        onRename={async () => undefined}
+      />,
+    );
+
+    const actions = actionsButton("Old Title");
+    expect(actions?.parentElement?.className).toContain("opacity-0");
+    click(actions!);
+
+    expect(menuItem()).not.toBeNull();
+    expect(actionsButton("Old Title")?.parentElement?.className).toContain("opacity-100");
+  });
+
   it("hides the action control when no rename handler is wired", () => {
     render(
       <ConversationList

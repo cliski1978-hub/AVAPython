@@ -39,6 +39,14 @@ from ava.repositories.run_repository import RunRepository
 from ava.services.project_service import ProjectNotFoundError
 
 DEFAULT_CONVERSATION_TITLE = "New Conversation"
+CONVERSATION_TITLE_MAX_LENGTH = 40
+
+
+def _derive_auto_title(prompt: str) -> str:
+    single_line = " ".join(prompt.split())
+    if len(single_line) <= CONVERSATION_TITLE_MAX_LENGTH:
+        return single_line
+    return f"{single_line[:CONVERSATION_TITLE_MAX_LENGTH].rstrip()}…"
 
 
 # ============================================================
@@ -114,9 +122,7 @@ class ConversationService:
         self._project_repository = project_repository
         self._folder_repository = folder_repository
 
-    def create_conversation(
-        self, title: str | None = None, *, folder_id: str | None = None
-    ) -> ConversationResponse:
+    def create_conversation(self, title: str | None = None, *, folder_id: str | None = None) -> ConversationResponse:
         """Create a new conversation, returning its response contract.
 
         Args:
@@ -153,22 +159,33 @@ class ConversationService:
     ) -> ConversationResponse:
         """Share normal identity, title, timestamp, and persistence semantics."""
         resolved_title = (title or "").strip() or DEFAULT_CONVERSATION_TITLE
+        is_title_custom = bool((title or "").strip())
         try:
             conversation_id = str(uuid4())
             if folder_id is not None:
+                if is_title_custom:
+                    record = self._conversation_repository.create(
+                        conversation_id, title=resolved_title, folder_id=folder_id, is_title_custom=True
+                    )
+                else:
+                    record = self._conversation_repository.create(
+                        conversation_id, title=resolved_title, folder_id=folder_id
+                    )
+            elif project_id is not None:
+                if is_title_custom:
+                    record = self._conversation_repository.create(
+                        conversation_id, title=resolved_title, project_id=project_id, is_title_custom=True
+                    )
+                else:
+                    record = self._conversation_repository.create(
+                        conversation_id, title=resolved_title, project_id=project_id
+                    )
+            elif is_title_custom:
                 record = self._conversation_repository.create(
-                    conversation_id,
-                    title=resolved_title,
-                    folder_id=folder_id,
+                    conversation_id, title=resolved_title, is_title_custom=True
                 )
-            elif project_id is None:
-                record = self._conversation_repository.create(conversation_id, title=resolved_title)
             else:
-                record = self._conversation_repository.create(
-                    conversation_id,
-                    title=resolved_title,
-                    project_id=project_id,
-                )
+                record = self._conversation_repository.create(conversation_id, title=resolved_title)
         except ValueError as exc:
             raise DuplicateConversationError(f"Conversation already exists: {exc}") from exc
         return _conversation_to_response(record)
@@ -238,6 +255,36 @@ class ConversationService:
         record = self._conversation_repository.set_project(conversation_id, project_id)
         return _conversation_to_response(record) if record is not None else None
 
+    def relocate(
+        self,
+        conversation_id: str,
+        *,
+        destination_type: str,
+        destination_id: str | None,
+    ) -> ConversationResponse | None:
+        """Move a conversation to exactly one organizational destination."""
+        if self._conversation_repository.get(conversation_id) is None:
+            return None
+        folder_id = project_id = None
+        if destination_type == "folder":
+            if destination_id is None:
+                raise ValueError("Folder destination requires an id")
+            if self._folder_repository is None or self._folder_repository.get(destination_id) is None:
+                from ava.services.conversation_folder_service import ConversationFolderNotFoundError
+
+                raise ConversationFolderNotFoundError(destination_id)
+            folder_id = destination_id
+        elif destination_type == "project":
+            if destination_id is None:
+                raise ValueError("Project destination requires an id")
+            if self._project_repository is None or self._project_repository.get(destination_id) is None:
+                raise ProjectNotFoundError(destination_id)
+            project_id = destination_id
+        elif destination_type != "ungrouped":
+            raise ValueError(f"Unknown conversation destination: {destination_type}")
+        record = self._conversation_repository.relocate(conversation_id, folder_id=folder_id, project_id=project_id)
+        return _conversation_to_response(record) if record is not None else None
+
     def delete_conversation(self, conversation_id: str) -> bool:
         """Permanently delete a conversation and its owned records.
 
@@ -256,6 +303,24 @@ class ConversationService:
             for storage_key in deletion.attachment_storage_keys:
                 self._attachment_content_store.delete(storage_key)
         return True
+
+    def delete_conversations(self, conversation_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """Hard-delete several conversation aggregates through the same lifecycle boundary."""
+        if self._hard_delete_coordinator is None:
+            raise RuntimeError("Conversation hard delete is not configured")
+        try:
+            deletion = self._hard_delete_coordinator.delete_many(conversation_ids)
+        except ActiveConversationRunDeletionError as exc:
+            raise ConversationHasActiveRunError(exc.conversation_id, exc.run_ids) from exc
+        if self._attachment_content_store is not None:
+            for storage_key in deletion.attachment_storage_keys:
+                self._attachment_content_store.delete(storage_key)
+        return deletion.deleted_conversation_ids
+
+    def delete_project_conversations(self, project_id: str) -> tuple[str, ...]:
+        """Hard-delete every current Project conversation through the conversation lifecycle."""
+        records = self._conversation_repository.list_by_project(project_id)
+        return self.delete_conversations(tuple(record.conversation_id for record in records))
 
     def append_message(
         self,
@@ -284,8 +349,17 @@ class ConversationService:
             ConversationNotFoundError: If the conversation is unknown.
             DuplicateMessageError: If a message identifier collides.
         """
-        if self._conversation_repository.get(conversation_id) is None:
+        conversation = self._conversation_repository.get(conversation_id)
+        if conversation is None:
             raise ConversationNotFoundError(f"Conversation not found: {conversation_id}")
+        first_user_message = (
+            role == MessageRole.USER
+            and not conversation.is_title_custom
+            and not any(
+                message.role == MessageRole.USER
+                for message in self._message_repository.list_for_conversation(conversation_id)
+            )
+        )
         now = datetime.now(UTC)
         message = MessageRecord(
             message_id=str(uuid4()),
@@ -301,6 +375,8 @@ class ConversationService:
             self._message_repository.append(message)
         except ValueError as exc:
             raise DuplicateMessageError(f"Message already exists: {exc}") from exc
+        if first_user_message:
+            self._conversation_repository.update_auto_title(conversation_id, _derive_auto_title(content))
         return self._message_to_response(message)
 
     def get_message(self, conversation_id: str, message_id: str) -> MessageResponse | None:
@@ -375,6 +451,7 @@ def _conversation_to_response(record: ConversationRecord) -> ConversationRespons
         is_archived=record.is_archived,
         folder_id=record.folder_id,
         project_id=record.project_id,
+        is_title_custom=record.is_title_custom,
     )
 
 

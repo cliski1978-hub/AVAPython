@@ -8,7 +8,10 @@ from ava.infrastructure.persistence.database import SqliteDatabase, translate_da
 from ava.models.model_configurations import ModelConfiguration
 from ava.repositories.model_configuration_repository import ModelConfigurationRepository
 
-_COLUMNS = "model_id, provider_connection_id, provider_model_name, display_name, hosting_mode, capabilities, enabled"
+_COLUMNS = (
+    "model_id, provider_connection_id, provider_model_name, display_name, hosting_mode, "
+    "capabilities, enabled, context_window_tokens"
+)
 
 
 class RelationalModelConfigurationRepository(ModelConfigurationRepository):
@@ -24,8 +27,8 @@ class RelationalModelConfigurationRepository(ModelConfigurationRepository):
                 connection.execute(
                     "INSERT INTO model_configurations "
                     "(model_id, provider_connection_id, provider_model_name, display_name, "
-                    "hosting_mode, capabilities, enabled) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "hosting_mode, capabilities, enabled, context_window_tokens) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         configuration.model_id,
                         configuration.provider_connection_id,
@@ -34,6 +37,7 @@ class RelationalModelConfigurationRepository(ModelConfigurationRepository):
                         configuration.hosting_mode.value,
                         _dump_capabilities(configuration.capabilities),
                         configuration.enabled,
+                        configuration.context_window_tokens,
                     ),
                 )
         except sqlite3.Error as exc:
@@ -63,13 +67,14 @@ class RelationalModelConfigurationRepository(ModelConfigurationRepository):
                 raise ValueError("Model configuration provider_connection_id cannot change")
             connection.execute(
                 "UPDATE model_configurations SET provider_model_name = ?, display_name = ?, hosting_mode = ?, "
-                "capabilities = ?, enabled = ? WHERE model_id = ?",
+                "capabilities = ?, enabled = ?, context_window_tokens = ? WHERE model_id = ?",
                 (
                     configuration.provider_model_name,
                     configuration.display_name,
                     configuration.hosting_mode.value,
                     _dump_capabilities(configuration.capabilities),
                     configuration.enabled,
+                    configuration.context_window_tokens,
                     configuration.model_id,
                 ),
             )
@@ -97,4 +102,5 @@ def _row_to_model_configuration(row: sqlite3.Row) -> ModelConfiguration:
         hosting_mode=ModelHostingMode(row["hosting_mode"]),
         capabilities=ModelCapabilities.model_validate(json.loads(row["capabilities"])),
         enabled=bool(row["enabled"]),
+        context_window_tokens=row["context_window_tokens"],
     )

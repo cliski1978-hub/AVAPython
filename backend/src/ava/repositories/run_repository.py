@@ -16,8 +16,9 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 
-from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.responses import RunStatus
+from ava.contracts.run_inspection import RunInspectionSnapshot
 
 # ============================================================
 # BEGIN: Run Record
@@ -45,10 +46,12 @@ class RunRecord:
     created_at: datetime
     updated_at: datetime
     execution_selection: RunExecutionSelection | None = None
+    execution_mode: ExecutionMode = ExecutionMode.CHAT
     conversation_id: str | None = None
     source_user_message_id: str | None = None
     assistant_message_id: str | None = None
     cancellation_requested_at: datetime | None = None
+    inspection_snapshot: RunInspectionSnapshot | None = None
 
     @property
     def cancellation_requested(self) -> bool:
@@ -113,6 +116,7 @@ class RunRepository(ABC):
         *,
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.CHAT,
     ) -> RunRecord:
         """Create a new pending run record.
 
@@ -270,6 +274,14 @@ class RunRepository(ABC):
         Returns:
             The updated snapshot, or ``None`` if the run is unknown.
         """
+        raise NotImplementedError
+
+    def set_inspection_snapshot(self, run_id: str, snapshot: RunInspectionSnapshot) -> RunRecord | None:
+        """Persist captured execution facts for this run."""
+        raise NotImplementedError
+
+    def list_for_conversation(self, conversation_id: str) -> list[RunRecord]:
+        """Return runs for a conversation in chronological order."""
         raise NotImplementedError
 
     def set_assistant_message_id(self, run_id: str, assistant_message_id: str) -> RunRecord | None:

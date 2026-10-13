@@ -62,6 +62,7 @@ class ConversationRecord:
     is_archived: bool = False
     folder_id: str | None = None
     project_id: str | None = None
+    is_title_custom: bool = False
 
 
 def normalize_conversation_search(search: str | None) -> str | None:
@@ -112,6 +113,7 @@ class ConversationRepository(ABC):
         title: str,
         project_id: str | None = None,
         folder_id: str | None = None,
+        is_title_custom: bool = False,
     ) -> ConversationRecord:
         """Create a new conversation record.
 
@@ -177,6 +179,12 @@ class ConversationRepository(ABC):
         """Set the Project relationship only, preserving folder and timestamps."""
         raise NotImplementedError
 
+    def relocate(
+        self, conversation_id: str, *, folder_id: str | None, project_id: str | None
+    ) -> ConversationRecord | None:
+        """Atomically replace both organizational destinations."""
+        raise NotImplementedError
+
     @abstractmethod
     def update_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
         """Rename a conversation, refreshing its ``updated_at``.
@@ -185,6 +193,14 @@ class ConversationRepository(ABC):
             The updated snapshot, or ``None`` if the conversation is unknown.
         """
         raise NotImplementedError
+
+    def update_auto_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
+        """Set an automatic title only while the conversation has no user title.
+
+        Adapters should perform the user-title check and write atomically so an
+        automatic title cannot race with a manual rename.
+        """
+        return None
 
 
 # ============================================================

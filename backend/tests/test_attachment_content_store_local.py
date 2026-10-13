@@ -330,6 +330,19 @@ def test_failed_write_leaves_no_final_object_and_cleans_temp(tmp_path) -> None:
     assert not list((tmp_path / "root").iterdir()), "temp file must be cleaned best-effort"
 
 
+def test_delete_prunes_empty_directories_left_by_a_failed_write(tmp_path) -> None:
+    root = tmp_path / "root"
+    store = _store(root)
+    key = "attachments/attachment-1/content"
+
+    with pytest.raises(OSError, match="source failed"):
+        store.put(key, _FailingSource())
+
+    assert (root / "attachments" / "attachment-1").is_dir()
+    assert store.delete(key) is False
+    assert not (root / "attachments").exists()
+
+
 class _FailingSource:
     """Source stream that raises on the first bounded read."""
 
@@ -412,6 +425,36 @@ def test_stored_content_lands_only_under_the_configured_root(tmp_path) -> None:
 
     assert (root / "attachments" / "doc-1" / "source.bin").read_bytes() == b"payload"
     assert not list((tmp_path / "doc-1").glob("*"))
+
+
+def test_delete_prunes_empty_attachment_directories_but_keeps_the_storage_root(tmp_path) -> None:
+    root = tmp_path / "root"
+    store = _store(root)
+    key = "attachments/attachment-1/content"
+    store.put(key, BytesIO(b"payload"))
+
+    assert store.delete(key) is True
+
+    assert root.is_dir()
+    assert not (root / "attachments").exists()
+    assert store.delete(key) is False
+
+
+def test_delete_keeps_shared_directory_until_its_last_attachment_is_removed(tmp_path) -> None:
+    root = tmp_path / "root"
+    store = _store(root)
+    first = "attachments/attachment-1/content"
+    second = "attachments/attachment-2/content"
+    store.put(first, BytesIO(b"first"))
+    store.put(second, BytesIO(b"second"))
+
+    assert store.delete(first) is True
+    assert (root / "attachments").is_dir()
+    assert not (root / "attachments" / "attachment-1").exists()
+    assert store.exists(second)
+
+    assert store.delete(second) is True
+    assert not (root / "attachments").exists()
 
 
 def test_content_survives_store_reconstruction_on_the_same_root(tmp_path) -> None:

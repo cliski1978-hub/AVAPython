@@ -13,6 +13,8 @@ describe("EmptyState", () => {
     );
     expect(html).toContain(">No conversations</h3>");
     expect(html).toContain("Start a new chat to get going.");
+    expect(html).toContain('class="text-foreground"');
+    expect(html).toContain('class="text-muted-foreground"');
   });
 
   it("renders the optional action slot", () => {

@@ -59,6 +59,7 @@ def test_create_conversation_returns_201_and_response_shape() -> None:
         "is_archived",
         "folder_id",
         "project_id",
+        "is_title_custom",
         "contract_version",
     }
     assert body["title"] == "My Project"
@@ -66,6 +67,7 @@ def test_create_conversation_returns_201_and_response_shape() -> None:
     assert body["is_archived"] is False
     assert body["folder_id"] is None
     assert body["project_id"] is None
+    assert body["is_title_custom"] is True
     assert body["contract_version"] == CONTRACT_VERSION
 
 
@@ -74,6 +76,7 @@ def test_create_conversation_defaults_title() -> None:
     with make_client() as client:
         body = create_conversation(client)
     assert body["title"] == "New Conversation"
+    assert body["is_title_custom"] is False
 
 
 def test_create_conversation_in_folder_sets_folder_atomically_without_project_membership() -> None:
@@ -251,6 +254,7 @@ def test_rename_conversation_returns_updated_snapshot() -> None:
     body = dict(response.json())
     assert body["title"] == "Renamed"
     assert body["conversation_id"] == created["conversation_id"]
+    assert body["is_title_custom"] is True
 
 
 def test_rename_unknown_conversation_returns_404_resource() -> None:
@@ -311,6 +315,22 @@ def test_append_message_returns_201_and_response_shape() -> None:
     assert body["error_code"] is None
     assert body["conversation_id"] == conversation["conversation_id"]
     assert body["contract_version"] == CONTRACT_VERSION
+
+
+def test_first_user_message_auto_titles_an_untouched_conversation() -> None:
+    with make_client() as client:
+        conversation = create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        message = client.post(
+            f"/conversations/{conversation_id}/messages",
+            json={"content": "  Explain   dependency injection  "},
+        )
+        assert message.status_code == 201
+        current = client.get(f"/conversations/{conversation_id}")
+
+    assert current.status_code == 200
+    assert current.json()["title"] == "Explain dependency injection"
+    assert current.json()["is_title_custom"] is False
 
 
 def test_append_message_mints_valid_ava_owned_uuid() -> None:
@@ -434,3 +454,25 @@ def test_list_messages_unknown_conversation_returns_404_resource() -> None:
 # ============================================================
 # END: List Messages
 # ============================================================
+
+
+def test_prompt_preview_returns_backend_resolved_root_for_a_conversation_without_runs() -> None:
+    with make_client() as client:
+        conversation = create_conversation(client)
+        response = client.get(f"/conversations/{conversation['conversation_id']}/prompt-preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["root_system_prompt"] == (
+        "You are AVA, an AI assistant. Respond helpfully and accurately to the user's request."
+    )
+    assert body["resolved_core_prompts"] == []
+    assert body["project_instructions"] is None
+
+
+def test_global_prompt_preview_is_available_before_a_conversation_is_created() -> None:
+    with make_client() as client:
+        response = client.get("/prompt-preview")
+
+    assert response.status_code == 200
+    assert response.json()["root_system_prompt"].startswith("You are AVA,")

@@ -135,6 +135,9 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
     "updateModelConfiguration",
     "createRuntimeConfiguration",
     "updateRuntimeConfiguration",
+    "updateToolFeatures",
+    "createWorkspaceAccess",
+    "updateWorkspaceAccess",
     "setExecutionDefaults",
     "createCorePrompt",
     "updateCorePrompt",
@@ -170,7 +173,7 @@ describe("Phase 5.15 boundary: the Settings surface is complete", () => {
 
   /** The writes the Settings module itself owns. */
   function settingsWriteExports(): string[] {
-    return ["settings.ts", "core-prompts.ts"].flatMap((module) => {
+    return ["settings.ts", "core-prompts.ts", "tool-features.ts", "workspace-access.ts"].flatMap((module) => {
       const source = readFileSync(join(packageRoot, "..", "..", "api-client", "src", module), "utf8");
       return [...source.matchAll(/export async function (\w+)/g)]
         .map((match) => match[1])

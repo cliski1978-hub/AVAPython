@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,27 +10,47 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from ava.agents.adapters.native.native_agent import NativeAgentAdapter
+from ava.agents.contracts import AgentPort, AgentRunResult
 from ava.configuration.settings import Settings
-from ava.contracts.execution import RunExecutionOverride
+from ava.contracts.capabilities import CapabilityName
+from ava.contracts.conversations import MessageRole, MessageStatus
+from ava.contracts.execution import RunExecutionOverride, RunExecutionSelection
 from ava.contracts.models import ModelCapabilities, ModelHostingMode
+from ava.contracts.projects import UpdateProjectExecutionDefaultsRequest
+from ava.contracts.requests import RunRequest
+from ava.contracts.responses import RunResponse, RunStatus
 from ava.execution.persisted_execution import (
     PersistedExecutionConfiguration,
     PersistedModelConfiguration,
     PersistedRuntimeConfiguration,
 )
-from ava.execution.selection import ExecutionSelectionSource, ProjectExecutionPreference, ResolvedExecutionSelection
+from ava.execution.selection import (
+    ExecutionSelectionSource,
+    ProjectExecutionDefaultsResolverPort,
+    ProjectExecutionPreference,
+    ResolvedExecutionSelection,
+)
 from ava.execution.selector import ExecutionSelector
-from ava.infrastructure.composition import create_application_persistence
+from ava.infrastructure.composition import create_application_persistence, create_runtime_registry
 from ava.models.bindings import ModelBindingResolver, model_binding_from_profile
 from ava.models.contracts import ModelProviderPort
+from ava.models.model_configurations import ModelConfiguration
 from ava.models.model_registry import ModelProfile, ModelRegistry
+from ava.models.provider_connections import ProviderConnection
 from ava.models.registry import ModelProviderRegistry
 from ava.models.resolver import ModelProviderResolver
+from ava.repositories.message_repository import MessageRecord
 from ava.repositories.project import ProjectExecutionDefaults, ProjectRecord
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.registry import RuntimeRegistry
 from ava.runtimes.resolver import RuntimeResolver
+from ava.services.context_construction_service import ContextConstructionService
 from ava.services.project_execution_defaults_resolver import ProjectExecutionDefaultsResolver
+from ava.services.project_execution_defaults_service import ProjectExecutionDefaultsService
+from ava.services.run_event_store import RunEventStore
+from ava.services.run_service import RunService
+from ava.services.run_store import RunStore
 
 if TYPE_CHECKING:
     from ava.configuration.execution_defaults import ApplicationExecutionDefaults
@@ -113,6 +134,38 @@ class _ProjectResolver:
         return self.preference
 
 
+class _SelectionAgent(AgentPort):
+    """Exercise run orchestration while reporting the selector's chosen model."""
+
+    def __init__(self, selector: ExecutionSelector) -> None:
+        self.selector = selector
+
+    def name(self) -> str:
+        return "selection-test"
+
+    async def start_run(self, run_id: str, request: RunRequest, *, context=None) -> AgentRunResult:
+        del run_id, context
+        execution = self.selector.resolve(
+            request.execution,
+            conversation_id=request.conversation_id,
+        )
+        selection = RunExecutionSelection(
+            runtime_id=execution.runtime_key,
+            model_provider_id=execution.model_binding.provider_id,
+            model_id=execution.model_binding.model_id,
+            runtime_source=execution.runtime_selection_source.value,
+            model_source=execution.model_selection_source.value,
+            project_id=execution.project_id,
+        )
+        return AgentRunResult(status=RunStatus.COMPLETED, content="ok", execution_selection=selection)
+
+    async def cancel_run(self, run_id: str) -> RunResponse:
+        return RunResponse(run_id=run_id, status=RunStatus.CANCELLED)
+
+    def get_capabilities(self) -> set[CapabilityName]:
+        return set()
+
+
 class _PersistedResolver:
     def __init__(self, defaults: ApplicationExecutionDefaults | None, profiles: dict[str, ModelProfile]) -> None:
         self.defaults = defaults
@@ -172,6 +225,25 @@ def _selection(
     project_resolver: _ProjectResolver | None = None,
     models: tuple[str, ...] = ("project-model", "app-model", "explicit-model"),
 ) -> ResolvedExecutionSelection:
+    selector, _ = _configured_selector(
+        project_resolver=project_resolver
+        or _ProjectResolver(
+            ProjectExecutionPreference("project-1", project_runtime, project_model)
+            if project_member
+            else None
+        ),
+        app=app,
+        models=models,
+    )
+    return selector.resolve(override, conversation_id="project-conversation").selection
+
+
+def _configured_selector(
+    *,
+    project_resolver: ProjectExecutionDefaultsResolverPort,
+    app: bool = True,
+    models: tuple[str, ...] = ("project-model", "app-model", "explicit-model"),
+) -> tuple[ExecutionSelector, dict[str, ModelProfile]]:
     from ava.configuration.execution_defaults import ApplicationExecutionDefaults
 
     profiles = {model_id: _profile(model_id) for model_id in models}
@@ -193,14 +265,160 @@ def _selection(
         default_runtime_id="native",
         default_model_provider_id="provider",
         persisted_configuration_resolver=_PersistedResolver(defaults, profiles),
-        project_execution_defaults_resolver=project_resolver
-        or _ProjectResolver(
-            ProjectExecutionPreference("project-1", project_runtime, project_model)
-            if project_member
-            else None
-        ),
+        project_execution_defaults_resolver=project_resolver,
     )
-    return selector.resolve(override, conversation_id="project-conversation").selection
+    return selector, profiles
+
+
+def test_existing_project_conversation_uses_current_default_and_persists_each_run(tmp_path: Path) -> None:
+    """Project edits, moves, removals, and explicit choices affect only later runs."""
+    persistence = create_application_persistence(
+        Settings(
+            persistence_provider="memory",
+            persistence_database_url=str(tmp_path / "unused.sqlite3"),
+        )
+    )
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    project = ProjectRecord(
+        "project-current-default",
+        "Current default",
+        now,
+        now,
+        execution_defaults=ProjectExecutionDefaults(None, "project-model"),
+    )
+    moved_project = ProjectRecord(
+        "project-moved-default",
+        "Moved default",
+        now,
+        now,
+        execution_defaults=ProjectExecutionDefaults(None, "project-model"),
+    )
+    try:
+        persistence.project_repository.create(project)
+        persistence.project_repository.create(moved_project)
+        persistence.provider_connection_repository.create(
+            ProviderConnection("connection-selection", "provider", "Provider")
+        )
+        for model_id in ("project-model", "next-model", "app-model", "explicit-model"):
+            persistence.model_configuration_repository.create(
+                ModelConfiguration(
+                    model_id=model_id,
+                    provider_connection_id="connection-selection",
+                    provider_model_name=f"provider-{model_id}",
+                    display_name=model_id,
+                    hosting_mode=ModelHostingMode.LOCAL,
+                    capabilities=ModelCapabilities(chat=True),
+                )
+            )
+        persistence.conversation_repository.create(
+            "conversation-current-default", title="Existing chat", project_id=project.id
+        )
+        project_resolver = ProjectExecutionDefaultsResolver(
+            conversations=persistence.conversation_repository,
+            projects=persistence.project_repository,
+        )
+        selector, _ = _configured_selector(
+            project_resolver=project_resolver,
+            models=("project-model", "next-model", "app-model", "explicit-model"),
+        )
+        agent = _SelectionAgent(selector)
+        run_repository = RunStore()
+        event_repository = RunEventStore()
+        context_service = ContextConstructionService(
+            run_repository=run_repository,
+            message_repository=persistence.message_repository,
+            conversation_repository=persistence.conversation_repository,
+        )
+        run_service = RunService(
+            agent,
+            run_repository=run_repository,
+            run_event_repository=event_repository,
+            conversation_repository=persistence.conversation_repository,
+            message_repository=persistence.message_repository,
+            context_service=context_service,
+        )
+
+        prompt_index = 0
+
+        def run(*, execution: RunExecutionOverride | None = None):
+            nonlocal prompt_index
+            prompt_index += 1
+            source_user_message_id = f"source-user-{prompt_index}"
+            created_at = datetime.now(UTC)
+            persistence.message_repository.append(
+                MessageRecord(
+                    message_id=source_user_message_id,
+                    conversation_id="conversation-current-default",
+                    role=MessageRole.USER,
+                    content="Resolve the current execution defaults.",
+                    status=MessageStatus.COMPLETE,
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+            return asyncio.run(
+                run_service.start_run(
+                    RunRequest(
+                        prompt="Resolve the current execution defaults.",
+                        conversation_id="conversation-current-default",
+                        source_user_message_id=source_user_message_id,
+                        execution=execution,
+                    )
+                )
+            )
+
+        first = run()
+        assert first.execution_selection is not None
+        assert first.execution_selection.model_id == "project-model"
+        assert first.execution_selection.model_source == ExecutionSelectionSource.PROJECT.value
+
+        settings_service = ProjectExecutionDefaultsService(
+            projects=persistence.project_repository,
+            models=persistence.model_configuration_repository,
+            runtimes=RuntimeResolver(create_runtime_registry()),
+        )
+        settings_service.update(
+            project.id,
+            UpdateProjectExecutionDefaultsRequest(model_id="next-model"),
+        )
+
+        next_run = run()
+        assert next_run.execution_selection is not None
+        assert next_run.execution_selection.model_id == "next-model"
+        assert next_run.execution_selection.model_source == ExecutionSelectionSource.PROJECT.value
+
+        explicit = run(execution=RunExecutionOverride(model_id="explicit-model"))
+        assert explicit.execution_selection is not None
+        assert explicit.execution_selection.model_id == "explicit-model"
+        assert explicit.execution_selection.model_source == ExecutionSelectionSource.EXPLICIT.value
+
+        after_override_removed = run()
+        assert after_override_removed.execution_selection is not None
+        assert after_override_removed.execution_selection.model_id == "next-model"
+        assert after_override_removed.execution_selection.model_source == ExecutionSelectionSource.PROJECT.value
+
+        persistence.conversation_repository.set_project("conversation-current-default", moved_project.id)
+        moved = run()
+        assert moved.execution_selection is not None
+        assert moved.execution_selection.project_id == moved_project.id
+        assert moved.execution_selection.model_id == "project-model"
+
+        persistence.conversation_repository.set_project("conversation-current-default", project.id)
+        assert persistence.project_repository.delete(project.id)
+        unlinked = run()
+        assert unlinked.execution_selection is not None
+        assert unlinked.execution_selection.project_id is None
+        assert unlinked.execution_selection.model_id == "app-model"
+        assert unlinked.execution_selection.model_source == ExecutionSelectionSource.APPLICATION.value
+
+        historical_first = run_service.get_run(first.run_id)
+        historical_next = run_service.get_run(next_run.run_id)
+        assert historical_first is not None and historical_first.execution_selection is not None
+        assert historical_next is not None and historical_next.execution_selection is not None
+        assert historical_first.execution_selection.model_id == "project-model"
+        assert historical_next.execution_selection.model_id == "next-model"
+    finally:
+        persistence.dispose()
 
 
 def test_project_and_explicit_axes_resolve_independently() -> None:
@@ -288,6 +506,23 @@ def test_project_model_keeps_its_configured_provider_connection_and_native_name(
     assert execution.model_binding.model_id == "project-model"
     assert execution.model_binding.provider_model_name == "native-project-model"
     assert execution.provider_connection_id == "connection-project-model"
+
+
+def test_native_run_metadata_keeps_project_model_provenance_when_configuration_is_persisted() -> None:
+    selector, _ = _configured_selector(
+        project_resolver=_ProjectResolver(
+            ProjectExecutionPreference("project-metadata", None, "project-model")
+        )
+    )
+    adapter = NativeAgentAdapter(execution_selector=selector)
+    resolved = selector.resolve(conversation_id="project-conversation")
+
+    selection = adapter._selection(resolved)
+
+    assert selection is not None
+    assert selection.model_id == "project-model"
+    assert selection.model_source == ExecutionSelectionSource.PROJECT.value
+    assert selection.project_id == "project-metadata"
 
 
 def test_each_execution_uses_fresh_project_defaults_and_keeps_active_selection_snapshot() -> None:

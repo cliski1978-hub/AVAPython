@@ -123,9 +123,9 @@ def test_pre_543_database_migrates_without_reset_and_startup_is_idempotent(tmp_p
             assert_metadata(record, False, False, None)
             assert record is not None and record.title == "Keep me" and record.conversation_id == "legacy"
             runner = MigrationRunner(database, default_registry())
-            assert runner.current_version() == 18
+            assert runner.current_version() == 25
             assert runner.migrate() == []
-            assert [entry.version for entry in runner.applied_migrations()] == list(range(1, 19))
+            assert [entry.version for entry in runner.applied_migrations()] == list(range(1, 26))
             with database.connect() as connection:
                 columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(conversations)")}
                 for name in ("is_pinned", "is_archived"):

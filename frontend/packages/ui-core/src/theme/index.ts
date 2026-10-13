@@ -41,16 +41,16 @@ export interface ThemeTokens {
   };
   font: {
     family: string;
-    sizeXs: number;
-    sizeSm: number;
-    sizeMd: number;
+    sizeXs: number | string;
+    sizeSm: number | string;
+    sizeMd: number | string;
     weightNormal: number;
     weightSemibold: number;
     weightBold: number;
   };
   control: {
     height: number;
-    fontSize: number;
+    fontSize: number | string;
     radius: number;
   };
 }
@@ -98,16 +98,16 @@ export const defaultTheme: ThemeTokens = {
   },
   font: {
     family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    sizeXs: 12,
-    sizeSm: 13,
-    sizeMd: 14,
+    sizeXs: "calc(12px * var(--ava-font-scale, 1))",
+    sizeSm: "calc(13px * var(--ava-font-scale, 1))",
+    sizeMd: "calc(14px * var(--ava-font-scale, 1))",
     weightNormal: 400,
     weightSemibold: 600,
     weightBold: 700,
   },
   control: {
     height: 36,
-    fontSize: 14,
+    fontSize: "calc(14px * var(--ava-font-scale, 1))",
     radius: 6,
   },
 };

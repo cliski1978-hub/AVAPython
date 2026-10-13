@@ -37,6 +37,7 @@ export type ConversationAction =
   | { type: "conversation:rename"; conversationId: string; title: string }
   | { type: "conversation:setFolder"; conversationId: string; folderId: string | null }
   | { type: "conversation:setProject"; conversationId: string; projectId: string | null }
+  | { type: "conversation:relocate"; conversationId: string; folderId: string | null; projectId: string | null }
   | { type: "conversation:setPinned"; conversationId: string; isPinned: boolean }
   | { type: "conversation:setArchived"; conversationId: string; isArchived: boolean }
   | { type: "conversation:delete"; conversationId: string; activeConversationId: string | null }
@@ -49,7 +50,7 @@ export type ConversationAction =
   | { type: "conversation:loadStart" }
   | { type: "conversation:loadFailure"; error: string }
   | { type: "conversation:create" }
-  | { type: "conversation:select"; id: string }
+  | { type: "conversation:select"; id: string | null }
   | {
       type: "conversation:addUserMessage";
       conversationId: string | null;
@@ -145,7 +146,7 @@ function appendUserMessage(
   }
 
   const updated: Conversation =
-    target.messages.length === 0
+    target.messages.length === 0 && target.isTitleCustom !== true
       ? {
           ...target,
           title: deriveTitle(content),
@@ -251,13 +252,12 @@ export function conversationReducer(
       return { ...state, conversations: [...ordered, ...localOnly] };
     }
     case "conversation:rename": {
-      // Rename only the title. Unlike upsert, this never touches selection or
-      // messages, so renaming a non-active conversation from the sidebar menu
-      // cannot switch the active conversation.
+      // Mark the user-set title explicitly without touching selection or
+      // messages, so renaming a non-active conversation cannot switch selection.
       return updateConversation(state, action.conversationId, (conversation) =>
-        conversation.title === action.title
+        conversation.title === action.title && conversation.isTitleCustom === true
           ? conversation
-          : { ...conversation, title: action.title },
+          : { ...conversation, title: action.title, isTitleCustom: true },
       );
     }
     case "conversation:setFolder": {
@@ -272,6 +272,13 @@ export function conversationReducer(
         conversation.projectId === action.projectId
           ? conversation
           : { ...conversation, projectId: action.projectId },
+      );
+    }
+    case "conversation:relocate": {
+      return updateConversation(state, action.conversationId, (conversation) =>
+        conversation.folderId === action.folderId && conversation.projectId === action.projectId
+          ? conversation
+          : { ...conversation, folderId: action.folderId, projectId: action.projectId },
       );
     }
     case "conversation:setPinned": {
@@ -321,7 +328,9 @@ export function conversationReducer(
     case "conversation:loadFailure": return { ...state, loading: false, error: action.error, loadError: action.error };
     case "conversation:hydrate": return {
       ...state, loading: false, error: null, loadError: null, conversations: action.conversations,
-      activeConversationId: state.activeConversationId ?? action.conversations[0]?.id ?? null,
+      activeConversationId: action.conversations.some((item) => item.id === state.activeConversationId)
+        ? state.activeConversationId
+        : action.conversations[0]?.id ?? null,
     };
     case "conversation:create": {
       const conversation = createConversationEntry(DEFAULT_CONVERSATION_TITLE);
@@ -331,6 +340,7 @@ export function conversationReducer(
       };
     }
     case "conversation:select": {
+      if (action.id == null) return { ...state, activeConversationId: null };
       const exists = state.conversations.some(
         (conversation) => conversation.id === action.id,
       );

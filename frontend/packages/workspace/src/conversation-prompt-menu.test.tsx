@@ -15,7 +15,14 @@ describe("System Prompt scoped entry points", () => {
       onSelect={onSelect}
       onOpenConversationSystemPrompts={onOpen}
     />);
-    fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Draft" }));
+    const actions = screen.getByRole("button", { name: "Conversation actions for Draft" });
+    expect(actions.getAttribute("aria-haspopup")).toBe("menu");
+    expect(actions.getAttribute("aria-expanded")).toBe("false");
+    expect(actions.className).toContain("bg-transparent");
+    expect(actions.className).toContain("h-8");
+    expect(actions.querySelector("svg")?.getAttribute("class")).toContain("lucide-ellipsis");
+    fireEvent.click(actions);
+    expect(actions.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(screen.getByRole("menuitem", { name: "System Prompts" }));
     expect(onOpen).toHaveBeenCalledWith("chat-1", "Draft");
     expect(onSelect).not.toHaveBeenCalled();
@@ -34,7 +41,13 @@ describe("System Prompt scoped entry points", () => {
       onOpenFolderSystemPrompts={onOpen}
       onMoveConversation={onMove}
     />);
-    fireEvent.click(screen.getByRole("button", { name: "Folder actions for Research" }));
+    const actions = screen.getByRole("button", { name: "Folder actions for Research" });
+    expect(actions.getAttribute("aria-haspopup")).toBe("menu");
+    expect(actions.getAttribute("aria-expanded")).toBe("false");
+    expect(actions.className).toContain("bg-transparent");
+    expect(actions.querySelector("svg")?.getAttribute("class")).toContain("lucide-ellipsis");
+    fireEvent.click(actions);
+    expect(actions.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(screen.getByRole("menuitem", { name: "System Prompts" }));
     expect(onOpen).toHaveBeenCalledWith("folder-1", "Research");
     expect(onSelect).not.toHaveBeenCalled();

@@ -20,7 +20,10 @@ from ava.contracts.conversations import (
     ConversationResponse,
     CreateConversationRequest,
     CreateMessageRequest,
+    ExecutionPromptLayers,
     MessageResponse,
+    RelocateConversationRequest,
+    RunContext,
     SetConversationArchivedRequest,
     SetConversationFolderRequest,
     SetConversationPinnedRequest,
@@ -147,6 +150,59 @@ async def get_conversation(request: Request, conversation_id: str) -> Conversati
     return conversation
 
 
+@router.get(
+    "/conversations/{conversation_id}/prompt-preview",
+    response_model=ExecutionPromptLayers,
+    responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+)
+async def get_conversation_prompt_preview(
+    request: Request, conversation_id: str
+) -> ExecutionPromptLayers | JSONResponse:
+    """Resolve current conversation prompt layers for the no-run inspector state."""
+    service: ConversationService = request.app.state.conversation_service
+    if service.get_conversation(conversation_id) is None:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="conversation_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown conversation: {conversation_id}",
+            ).model_dump(),
+        )
+    builder = request.app.state.execution_prompt_context_service
+    try:
+        context: RunContext = builder.build(
+            RunContext(conversation_id=conversation_id),
+            runtime_key=request.app.state.default_runtime_key,
+            capabilities=request.app.state.agent_port.get_capabilities(),
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=422,
+            content=ErrorResponse(
+                error_code="prompt_preview_unavailable",
+                category=ErrorCategory.VALIDATION,
+                message="Current prompt configuration could not be resolved.",
+            ).model_dump(),
+        )
+    if context.prompt_layers is None:  # pragma: no cover - builder always supplies layers
+        raise RuntimeError("Prompt context builder returned no prompt layers")
+    return context.prompt_layers
+
+
+@router.get("/prompt-preview", response_model=ExecutionPromptLayers)
+async def get_global_prompt_preview(request: Request) -> ExecutionPromptLayers:
+    """Resolve application-level prompts before any conversation or run exists."""
+    context: RunContext = request.app.state.execution_prompt_context_service.build(
+        RunContext(),
+        runtime_key=request.app.state.default_runtime_key,
+        capabilities=request.app.state.agent_port.get_capabilities(),
+    )
+    if context.prompt_layers is None:  # pragma: no cover - builder always supplies layers
+        raise RuntimeError("Prompt context builder returned no prompt layers")
+    return context.prompt_layers
+
+
 # ============================================================
 # END: Get Conversation
 # ============================================================
@@ -258,6 +314,44 @@ async def set_conversation_project(
                 error_code="project_not_found",
                 category=ErrorCategory.NOT_FOUND,
                 message=f"Unknown Project: {body.project_id}",
+            ).model_dump(),
+        )
+    if conversation is None:
+        return _unknown_conversation(conversation_id)
+    return conversation
+
+
+@router.patch(
+    "/conversations/{conversation_id}/move",
+    response_model=ConversationResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def relocate_conversation(
+    request: Request, conversation_id: str, body: RelocateConversationRequest
+) -> ConversationResponse | JSONResponse:
+    service: ConversationService = request.app.state.conversation_service
+    try:
+        conversation = service.relocate(
+            conversation_id,
+            destination_type=body.destination_type,
+            destination_id=body.destination_id,
+        )
+    except ProjectNotFoundError:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="project_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown Project: {body.destination_id}",
+            ).model_dump(),
+        )
+    except ConversationFolderNotFoundError:
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                error_code="conversation_folder_not_found",
+                category=ErrorCategory.NOT_FOUND,
+                message=f"Unknown conversation folder: {body.destination_id}",
             ).model_dump(),
         )
     if conversation is None:

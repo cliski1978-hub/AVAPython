@@ -49,38 +49,32 @@ After this phase:
 
 ## Where the limit comes from
 
-AVA does not invent a context window, and there is no global default. The limit
-is the selected model's own reported window:
+The budget follows the model selected by the backend:
 
-- `ModelInfo.context_limit` is the field. It is provider-reported discovery
-  metadata, produced by the provider adapter that will serve the run.
-- `NativeAgentAdapter._context_limit` reads it from the **already-resolved**
-  execution, so a run's budget always follows the model it actually uses. The
-  client cannot influence it: `RunRequest` carries no window, and no execution
-  override payload carries one either.
-- `ModelConfiguration` deliberately has no context-capacity field, preserving
-  the Phase 5.4 decision that a model is *configured* (identity, provider,
-  transport) and *described* (capabilities, context window) by separate concerns.
-  A client cannot add a window to a model definition.
+- `ModelConfiguration.context_window_tokens` is the optional AVA-owned model
+  setting. It is stored with the configured model and cannot be overridden by a
+  run request.
+- `ModelInfo.context_limit` remains an authoritative provider-reported maximum
+  when available. The effective limit is the lower of that maximum and the
+  configured value. With no configured value AVA uses the provider maximum; if
+  neither is usable, the existing unbounded compatibility behavior applies.
+- The resolved `ModelProfile` carries the configured value, so the same rule
+  applies to application, Project, and explicit model selections.
 - `ModelRequest.max_output_tokens` exists but AVA sets it nowhere today. There is
   no production output-token configuration, so the reserve is AVA's policy
   constant rather than a request value.
 
-### A known limitation of the current metadata
+### Provider metadata availability
 
 The context window is reported by a *provider adapter*, not by a model profile.
 Today each provider instance is built for one configured model, so the reported
-window is accurate for the model that provider serves. A future configuration
-that lets one provider adapter serve several models would need a per-model
-capacity source, and this phase deliberately does not invent one: the limit is
-read at the agent boundary and passed into the policy as a plain integer, so
-adding a better source later changes where the integer comes from and nothing
-else.
+window is accurate for the model that provider serves. If a provider adapter
+serves several models, the per-model AVA setting supplies the window and the
+provider's metadata still constrains it when available.
 
 `ModelDiscoveryService` does not currently surface `context_limit` on `/models`.
-The execution path does not depend on that endpoint, so the gap is left alone
-here rather than widening the discovery contract and the frontend in a
-backend-only phase.
+The Settings editor therefore allows a model window to be entered directly;
+runtime preview and execution still apply any provider maximum on the backend.
 
 ### An unknown limit is not a failure
 

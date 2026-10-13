@@ -4,8 +4,8 @@ import sqlite3
 
 from ava.infrastructure.persistence.database import SqliteDatabase, translate_database_error
 from ava.infrastructure.persistence.serialization import parse_utc, to_utc_iso
-from ava.repositories.project_file import ProjectFileRecord
-from ava.repositories.project_file_repository import ProjectFileRepository
+from ava.repositories.project_file import ProjectFileRecord, normalize_project_file_name
+from ava.repositories.project_file_repository import DuplicateProjectFileNameError, ProjectFileRepository
 
 
 def _record(row: sqlite3.Row) -> ProjectFileRecord:
@@ -32,7 +32,7 @@ class RelationalProjectFileRepository(ProjectFileRepository):
         try:
             with self._database.transaction() as connection:
                 connection.execute(
-                    f"INSERT INTO project_files ({_SELECT}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO project_files ({_SELECT}, normalized_file_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         record.id,
                         record.project_id,
@@ -42,9 +42,14 @@ class RelationalProjectFileRepository(ProjectFileRepository):
                         record.content_ref,
                         to_utc_iso(record.created_at),
                         to_utc_iso(record.updated_at),
+                        normalize_project_file_name(record.file_name),
                     ),
                 )
         except sqlite3.Error as exc:
+            if isinstance(exc, sqlite3.IntegrityError) and (
+                "project_files.project_id, project_files.normalized_file_name" in str(exc)
+            ):
+                raise DuplicateProjectFileNameError(record.project_id, record.file_name) from exc
             raise translate_database_error(exc, entity="Project file", key=record.id) from exc
         return record
 
