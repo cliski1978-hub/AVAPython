@@ -231,7 +231,12 @@ class _WindowsApi:
 
     def open_child(self, parent: int, component: str, *, directory: bool) -> int:
         name_buffer = ctypes.create_unicode_buffer(component)
-        name = _UnicodeString(len(component.encode("utf-16-le")), len(component.encode("utf-16-le")), name_buffer)
+        encoded_length = len(component.encode("utf-16-le"))
+        name = _UnicodeString(
+            encoded_length,
+            encoded_length,
+            ctypes.cast(name_buffer, wintypes.LPWSTR),
+        )
         attrs = _ObjectAttributes(
             ctypes.sizeof(_ObjectAttributes),
             wintypes.HANDLE(parent),
