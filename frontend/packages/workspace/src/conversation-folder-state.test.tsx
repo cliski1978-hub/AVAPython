@@ -55,9 +55,9 @@ describe("conversation folder state reconciliation", () => {
       }
       if (url === "http://ava.test/conversation-folders") return response({ folders: [initialFolder, secondFolder], contract_version: "v1" });
       if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
-      if (url.endsWith("/conversations/c1/folder") && init?.method === "PATCH") {
-        serverFolderId = "f2";
-        return response({ ...initialConversation, folder_id: serverFolderId });
+      if (url.endsWith("/conversations/c1/move") && init?.method === "PATCH") {
+        serverFolderId = JSON.parse(String(init.body)).destination_id;
+        return response({ ...initialConversation, folder_id: serverFolderId, project_id: null });
       }
       return response({}, 404);
     });
@@ -72,7 +72,7 @@ describe("conversation folder state reconciliation", () => {
     expect(view.managerNow().conversations[0].messages[0].content).toBe("Streamed after Folder move");
     expect(view.managerNow().conversations[0].run).toMatchObject({ runId: "run-1", uiPhase: "running" });
     expect(state.conversations[0].folderId).toBe("f2");
-    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/conversations/c1/folder") && init?.method === "PATCH")).toBe(true);
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/conversations/c1/move") && init?.method === "PATCH")).toBe(true);
   });
 
   it("serializes rapid Folder moves so a late earlier response cannot overwrite the latest destination", async () => {
@@ -88,8 +88,8 @@ describe("conversation folder state reconciliation", () => {
       if (url === "http://ava.test/conversation-folders") return response({ folders: [initialFolder, secondFolder], contract_version: "v1" });
       if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
       if (url.endsWith("/conversations/c2/messages")) return response({ conversation_id: "c2", messages: [], contract_version: "v1" });
-      if (url.endsWith("/conversations/c1/folder") && init?.method === "PATCH") {
-        const folderId = JSON.parse(String(init.body)).folder_id as string | null;
+      if (url.endsWith("/conversations/c1/move") && init?.method === "PATCH") {
+        const folderId = JSON.parse(String(init.body)).destination_id as string | null;
         targets.push(folderId);
         return folderId === "f1" ? first.promise : second.promise;
       }
@@ -106,13 +106,13 @@ describe("conversation folder state reconciliation", () => {
     act(() => { secondMove = view.managerNow().moveConversation("c1", "f2"); });
     expect(targets).toEqual(["f1"]); // one conversation has at most one mutation in flight
 
-    first.resolve(response({ ...projectConversation, folder_id: "f1" }));
+    first.resolve(response({ ...projectConversation, folder_id: "f1", project_id: null }));
     await waitFor(() => expect(targets).toEqual(["f1", "f2"]));
     expect(view.managerNow().conversations[0].folderId).toBeNull(); // stale intermediate response is not published
-    second.resolve(response({ ...projectConversation, folder_id: "f2" }));
+    second.resolve(response({ ...projectConversation, folder_id: "f2", project_id: null }));
     await act(async () => { await Promise.all([firstMove, secondMove]); });
 
-    expect(view.managerNow().conversations[0]).toMatchObject({ folderId: "f2", projectId: "project-a" });
+    expect(view.managerNow().conversations[0]).toMatchObject({ folderId: "f2", projectId: null });
     expect(view.managerNow().conversations[0].messages[0].content).toBe("Transcript retained");
     expect(view.managerNow().conversations[0].run).toMatchObject({ runId: "run-active", uiPhase: "running" });
     expect(view.managerNow().state.activeConversationId).toBe("c1");
@@ -131,11 +131,11 @@ describe("conversation folder state reconciliation", () => {
       if (url === "http://ava.test/conversation-folders") return response({ folders: [initialFolder, secondFolder], contract_version: "v1" });
       if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
       if (url.endsWith("/conversations/c2/messages")) return response({ conversation_id: "c2", messages: [], contract_version: "v1" });
-      if (url.endsWith("/conversations/c1/folder") && init?.method === "PATCH") {
+      if (url.endsWith("/conversations/c1/move") && init?.method === "PATCH") {
         requests.push("c1");
         return c1Move.promise;
       }
-      if (url.endsWith("/conversations/c2/folder") && init?.method === "PATCH") {
+      if (url.endsWith("/conversations/c2/move") && init?.method === "PATCH") {
         requests.push("c2");
         return c2Move.promise;
       }
@@ -155,8 +155,8 @@ describe("conversation folder state reconciliation", () => {
     c2Move.resolve(response({ ...secondConversation, folder_id: "f1" }));
     await act(async () => { await Promise.all([move1, move2]); });
 
-    expect(view.managerNow().conversations.map((item) => [item.id, item.folderId])).toEqual([
-      ["c1", "f2"], ["c2", "f1"],
+    expect(view.managerNow().conversations.map((item) => [item.id, item.folderId, item.projectId ?? null])).toEqual([
+      ["c1", "f2", null], ["c2", "f1", null],
     ]);
   });
 
@@ -204,6 +204,45 @@ describe("conversation folder state reconciliation", () => {
     expect(view.managerNow().state.activeConversationId).toBe("c1");
   });
 
+  it("selects the next active conversation when the selected conversation is archived", async () => {
+    window.sessionStorage.clear();
+    const first = { ...initialConversation, is_archived: false, folder_id: null, project_id: null };
+    const second = { ...first, conversation_id: "c2", title: "Next" };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/conversations") && init?.method !== "PATCH") return response({ conversations: [first, second], contract_version: "v1" });
+      if (url === "http://ava.test/conversation-folders") return response({ folders: [], contract_version: "v1" });
+      if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
+      if (url.endsWith("/conversations/c2/messages")) return response({ conversation_id: "c2", messages: [], contract_version: "v1" });
+      if (url.endsWith("/conversations/c1/archive") && init?.method === "PATCH") return response({ ...first, is_archived: true });
+      return response({}, 404);
+    });
+    const view = renderProvider(fetchMock as typeof fetch);
+    await waitFor(() => expect(view.managerNow().conversations).toHaveLength(2));
+    await act(async () => { await view.managerNow().selectConversation("c1"); });
+    await act(async () => { await view.managerNow().setConversationArchived("c1", true); });
+    expect(view.managerNow().state.activeConversationId).toBe("c2");
+    expect(view.managerNow().conversations.find((item) => item.id === "c1")?.isArchived).toBe(true);
+  });
+
+  it("clears selection when archiving the last active conversation", async () => {
+    window.sessionStorage.clear();
+    const only = { ...initialConversation, is_archived: false, folder_id: null, project_id: null };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/conversations") && init?.method !== "PATCH") return response({ conversations: [only], contract_version: "v1" });
+      if (url === "http://ava.test/conversation-folders") return response({ folders: [], contract_version: "v1" });
+      if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
+      if (url.endsWith("/conversations/c1/archive") && init?.method === "PATCH") return response({ ...only, is_archived: true });
+      return response({}, 404);
+    });
+    const view = renderProvider(fetchMock as typeof fetch);
+    await waitFor(() => expect(view.managerNow().conversations).toHaveLength(1));
+    await act(async () => { await view.managerNow().selectConversation("c1"); });
+    await act(async () => { await view.managerNow().setConversationArchived("c1", true); });
+    expect(view.managerNow().state.activeConversationId).toBeNull();
+  });
+
   it("reconciles a destination Folder deleted while its move request is pending", async () => {
     const moveResponse = deferred<Response>();
     let serverFolderId: string | null = null;
@@ -214,7 +253,7 @@ describe("conversation folder state reconciliation", () => {
       }
       if (url === "http://ava.test/conversation-folders") return response({ folders: [initialFolder, secondFolder], contract_version: "v1" });
       if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
-      if (url.endsWith("/conversations/c1/folder") && init?.method === "PATCH") return moveResponse.promise;
+      if (url.endsWith("/conversations/c1/move") && init?.method === "PATCH") return moveResponse.promise;
       if (url.endsWith("/conversation-folders/f2") && init?.method === "DELETE") return response({}, 204);
       return response({}, 404);
     });
@@ -309,7 +348,7 @@ describe("conversation folder state reconciliation", () => {
       if (url.endsWith("/conversations")) return response({ conversations: [initialConversation], contract_version: "v1" });
       if (url === "http://ava.test/conversation-folders") return response({ folders: [initialFolder], contract_version: "v1" });
       if (url.endsWith("/conversations/c1/messages")) return response({ conversation_id: "c1", messages: [message], contract_version: "v1" });
-      if (url.endsWith("/conversations/c1/folder") && init?.method === "PATCH") {
+      if (url.endsWith("/conversations/c1/move") && init?.method === "PATCH") {
         return response({ error_code: "conversation_folder_not_found" }, 404);
       }
       return response({}, 404);

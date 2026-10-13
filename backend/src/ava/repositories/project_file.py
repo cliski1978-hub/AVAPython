@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
+def normalize_project_file_name(file_name: str) -> str:
+    """Return the Project-scoped comparison key for a display filename."""
+    return file_name.strip().casefold()
+
+
 @dataclass(frozen=True)
 class ProjectFileRecord:
     """Project-owned file metadata with an opaque reference to separately stored bytes.

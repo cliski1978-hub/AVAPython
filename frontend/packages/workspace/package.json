@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ava/agent-ui": "workspace:*",
+    "@ava/approvals-core": "workspace:*",
     "@ava/api-client": "workspace:*",
     "@ava/document-core": "workspace:*",
     "@ava/settings-core": "workspace:*",

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "e2e",
+  "description": "Embedded WebDriver permission for debug-only desktop acceptance tests",
+  "windows": ["main"],
+  "permissions": ["wdio-webdriver:default"]
+}

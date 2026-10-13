@@ -1,7 +1,8 @@
 """Read-only resolution of effective CORE prompts for an AVA context.
 
 Resolution is deliberately separate from execution injection. It reads the
-canonical conversation membership and applicable assignments, then returns
+canonical conversation membership and applicable assignments, applies explicit
+scope overrides to the enabled-definition global baseline, then returns
 structured prompt snapshots with provenance.
 """
 
@@ -88,7 +89,7 @@ _SCOPE_RANK = {scope: rank for rank, scope in enumerate(_SCOPE_PRECEDENCE)}
 
 
 class EffectivePromptResolver:
-    """Resolve each enabled definition using nearest explicit scope assignment."""
+    """Resolve enabled definitions from the global baseline and nearest override."""
 
     def __init__(
         self,
@@ -207,7 +208,11 @@ class EffectivePromptResolver:
         if not prompt.is_enabled:
             reason = "definition_disabled"
         elif winner is None:
-            reason = "no_matching_assignment"
+            # An enabled CORE prompt is part of AVA's global baseline unless
+            # an explicit assignment overrides it. This keeps newly saved
+            # prompts in every conversation without requiring a separate
+            # global assignment row.
+            state, reason = EffectivePromptState.ENABLED, "inherited_global"
         elif winner.mode == CorePromptAssignmentMode.DISABLE:
             reason = "explicit_disable"
         else:
@@ -220,7 +225,7 @@ class EffectivePromptResolver:
             effective_state=state,
             definition_enabled=prompt.is_enabled,
             reason=reason,
-            winning_scope_type=winner.scope_type if winner else None,
+            winning_scope_type=winner.scope_type if winner else CorePromptScopeType.GLOBAL,
             winning_scope_id=winner.scope_id if winner else None,
             winning_assignment_mode=winner.mode if winner else None,
             winning_assignment_id=winner.id if winner else None,

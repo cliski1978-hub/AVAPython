@@ -14,3 +14,5 @@ export * from "./runtimes";
 export * from "./execution-profiles";
 export * from "./workspaces";
 export * from "./settings";
+export * from "./tool-features";
+export * from "./workspace-access";

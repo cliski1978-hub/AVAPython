@@ -3,6 +3,18 @@
 Framework-neutral, provider-neutral, JSON-compatible, versionable contracts.
 """
 
+from ava.contracts.approvals import (
+    ApprovalDecision,
+    ApprovalDecisionAuthorityPort,
+    ApprovalDecisionMetadata,
+    ApprovalDecisionValue,
+    ApprovalHumanAuthority,
+    ApprovalInvocationResolverPort,
+    ApprovalReason,
+    ApprovalRecord,
+    ApprovalRequest,
+    ApprovalStatus,
+)
 from ava.contracts.attachments import (
     AttachmentListResponse,
     AttachmentOwnerType,
@@ -57,7 +69,7 @@ from ava.contracts.documents import (
 )
 from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.events import EventType, RunEvent
-from ava.contracts.execution import RunExecutionOverride, RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionOverride, RunExecutionSelection
 from ava.contracts.json_types import JsonValue
 from ava.contracts.models import (
     ModelCapabilities,
@@ -101,6 +113,16 @@ from ava.contracts.version import CONTRACT_VERSION
 from ava.repositories.core_prompt import CorePromptCategory
 
 __all__ = [
+    "ApprovalDecision",
+    "ApprovalDecisionAuthorityPort",
+    "ApprovalDecisionMetadata",
+    "ApprovalDecisionValue",
+    "ApprovalHumanAuthority",
+    "ApprovalInvocationResolverPort",
+    "ApprovalReason",
+    "ApprovalRecord",
+    "ApprovalRequest",
+    "ApprovalStatus",
     "CONTRACT_VERSION",
     "AttachmentListResponse",
     "AttachmentOwnerType",
@@ -165,6 +187,7 @@ __all__ = [
     "RunEvent",
     "RunExecutionSelection",
     "RunExecutionOverride",
+    "ExecutionMode",
     "RunContext",
     "RunRequest",
     "RunResponse",

@@ -165,6 +165,7 @@ function shellSource(): string {
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   vi.clearAllMocks();
   vi.stubEnv("VITE_API_BASE_URL", "http://desktop-acceptance.test");
   mocks.listConversations.mockResolvedValue({ contract_version: "v1", conversations: [] });
@@ -183,9 +184,9 @@ describe("Desktop shell composition", () => {
     // The shared shell's own landmarks are present with no Desktop layer in
     // between: workspace tabs, conversation navigation, conversation view, and
     // prompt composer all come from @ava/workspace and its packages.
-    expect((await screen.findByRole("tab", { name: "Chat" })).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: "Documents" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "Chat" })).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: "Documents" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Settings" })).toBeTruthy();
     expect(await screen.findByText("Durable answer")).toBeTruthy();
     expect(screen.getByLabelText("Message")).toBeTruthy();
     // Conversation navigation and the conversation view both name the turn.
@@ -321,7 +322,7 @@ describe("Desktop Settings navigation", () => {
     await renderDesktop();
     await screen.findByText("Durable answer");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
 
     for (const section of ["Providers", "Models", "Runtimes", "Defaults"]) {
       expect(await screen.findByRole("tab", { name: section })).toBeTruthy();
@@ -338,9 +339,9 @@ describe("Desktop Settings navigation", () => {
     await renderDesktop();
     await screen.findByText("Durable answer");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("link", { name: "Settings" }));
     await screen.findByRole("tab", { name: "Providers" });
-    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("link", { name: "Chat" }));
 
     // Durable state, not remounted local state, is what comes back.
     expect((await screen.findByText("Durable answer")).textContent).toBe("Durable answer");
@@ -389,9 +390,9 @@ describe("Desktop accessibility surface", () => {
 
     // Everything a reader needs to drive Desktop comes from shared components
     // with real roles and accessible names — no Desktop-specific affordances.
-    expect(screen.getByRole("tab", { name: "Chat" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Documents" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Documents" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Settings" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Message" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
     // A completed turn offers Regenerate and not Retry, exactly as on Web.

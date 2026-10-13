@@ -1,9 +1,17 @@
 import {
-  Button,
-  IconButton,
-  Input,
   defaultTheme,
   Modal,
+  shadcn,
+  PlusIcon,
+  SquarePenIcon,
+  SearchIcon,
+  XIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  FolderPlusIcon,
+  RocketIcon,
+  EllipsisIcon,
+  LoaderCircleIcon,
   useInteraction,
 } from "@ava/ui-core";
 import {
@@ -21,6 +29,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import type { Conversation } from "../types";
 import type { ConversationFolder } from "@ava/contracts";
 import type { Project } from "@ava/contracts";
+import { isActiveRunStatus } from "../lib/runActions";
 
 export interface ConversationListProps {
   conversations: Conversation[];
@@ -70,6 +79,7 @@ export interface ConversationListProps {
 }
 
 const t = defaultTheme;
+const semantic = (token: string) => `hsl(var(--${token}))`;
 
 function conversationRowStyle(
   active: boolean,
@@ -81,14 +91,16 @@ function conversationRowStyle(
     alignItems: "center",
     gap: t.spacing.sm,
     width: "100%",
+    minWidth: 0,
+    minHeight: 44,
     boxSizing: "border-box",
-    padding: `${t.spacing.sm}px ${t.spacing.md}px`,
+    padding: `0 ${t.spacing.md}px`,
     borderRadius: t.radius.md,
     border: `${t.border.width}px solid ${
-      active ? t.colors.primary : "transparent"
+      active ? semantic("primary") : "transparent"
     }`,
-    background: active ? t.colors.ghostHover : "transparent",
-    color: active ? t.colors.primary : t.colors.foreground,
+    background: active ? semantic("secondary") : "transparent",
+    color: semantic("foreground"),
     fontSize: t.font.sizeSm,
     fontWeight: active ? t.font.weightSemibold : t.font.weightNormal,
     fontFamily: t.font.family,
@@ -97,9 +109,9 @@ function conversationRowStyle(
     outline: "none",
     transition:
       "background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease",
-    ...(interaction.hovered ? { background: t.colors.ghostHover } : {}),
+    ...(interaction.hovered ? { background: semantic("secondary") } : {}),
     ...(interaction.focused
-      ? { boxShadow: `0 0 0 2px ${t.colors.focusRing}33` }
+      ? { boxShadow: "0 0 0 2px hsl(var(--ring) / 0.25)" }
       : {}),
   };
 }
@@ -107,10 +119,11 @@ function conversationRowStyle(
 const selectStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
+  alignSelf: "stretch",
   gap: t.spacing.sm,
   flex: 1,
   minWidth: 0,
-  padding: 0,
+  padding: `${t.spacing.sm}px 0`,
   border: "none",
   background: "transparent",
   color: "inherit",
@@ -120,10 +133,12 @@ const selectStyle: CSSProperties = {
   textAlign: "left",
   cursor: "pointer",
   outline: "none",
+  overflow: "hidden",
 };
 
 const titleStyle: CSSProperties = {
-  flex: 1,
+  flex: "1 1 0%",
+  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -138,10 +153,10 @@ const menuStyle: CSSProperties = {
   minWidth: 140,
   boxSizing: "border-box",
   padding: `${t.spacing.xs}px`,
-  background: t.colors.surface,
-  border: `${t.border.width}px solid ${t.colors.borderStrong}`,
+  background: semantic("popover"),
+  border: `${t.border.width}px solid ${semantic("border")}`,
   borderRadius: t.radius.md,
-  boxShadow: "0 4px 12px rgba(17, 24, 39, 0.12)",
+  boxShadow: "0 4px 12px hsl(var(--foreground) / 0.08)",
 };
 
 const menuItemStyle: CSSProperties = {
@@ -152,7 +167,7 @@ const menuItemStyle: CSSProperties = {
   border: "none",
   borderRadius: t.radius.sm,
   background: "transparent",
-  color: t.colors.foreground,
+  color: semantic("popover-foreground"),
   fontSize: t.font.sizeSm,
   fontFamily: t.font.family,
   textAlign: "left",
@@ -233,10 +248,10 @@ function RenameEditor({
         }
       }}
     >
-      <Input
-        ariaLabel="Rename conversation"
+      <shadcn.Input
+        aria-label="Rename conversation"
         value={value}
-        onChange={setValue}
+        onChange={(event) => setValue(event.currentTarget.value)}
         disabled={disabled}
       />
     </div>
@@ -270,7 +285,7 @@ function ConversationFolderDropTarget({
       data-drop-target-active={isOver ? "" : undefined}
       style={{
         ...style,
-        ...(isOver ? { outline: `2px solid ${t.colors.primary}`, outlineOffset: 2, borderRadius: t.radius.md } : {}),
+        ...(isOver ? { outline: `2px solid ${semantic("primary")}`, outlineOffset: 2, borderRadius: t.radius.md } : {}),
       }}
     >
       {children}
@@ -292,10 +307,8 @@ function ConversationItem({
   onCloseMenu,
   onStartRename,
   onRenameDone,
-  folders,
-  onMove,
-  projects,
-  onSetProject,
+  onRequestMove,
+  canMoveToFolder = true,
   onSetPinned,
   onSetArchived,
   onOpenSystemPrompts,
@@ -315,10 +328,8 @@ function ConversationItem({
   onCloseMenu: () => void;
   onStartRename: (rowKey: string) => void;
   onRenameDone: (id: string, title: string) => void;
-  folders: ConversationFolder[];
-  onMove?: (conversationId: string, folderId: string | null) => void;
-  projects: Project[];
-  onSetProject?: (conversationId: string, projectId: string | null) => Promise<void>;
+  onRequestMove?: (conversationId: string, allowFolder: boolean) => void;
+  canMoveToFolder?: boolean;
   onSetPinned?: (conversationId: string, isPinned: boolean) => Promise<void>;
   onSetArchived?: (conversationId: string, isArchived: boolean) => Promise<void>;
   onOpenSystemPrompts?: (conversationId: string, title: string) => void;
@@ -339,12 +350,9 @@ function ConversationItem({
     data: { type: "conversation", conversationId: conversation.id },
   });
   const interaction = useInteraction(true);
-  const [moveMenuOpen, setMoveMenuOpen] = useState(false);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [projectMovePending, setProjectMovePending] = useState(false);
   const [metadataPending, setMetadataPending] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
-  const showMenu = onRename != null || onDeleteRequested != null || onMove != null || onSetProject != null || onSetPinned != null || onSetArchived != null || onOpenSystemPrompts != null;
+  const showMenu = onRename != null || onDeleteRequested != null || onRequestMove != null || onSetPinned != null || onSetArchived != null || onOpenSystemPrompts != null;
 
   const updateMetadata = async (callback: typeof onSetPinned, next: boolean, safeError: string) => {
     if (callback == null || metadataPending) return;
@@ -360,21 +368,10 @@ function ConversationItem({
     }
   };
 
-  const setProject = async (projectId: string | null) => {
-    if (onSetProject == null || projectMovePending) return;
-    setProjectMovePending(true);
-    try {
-      await onSetProject(conversation.id, projectId);
-      setProjectMenuOpen(false);
-      onCloseMenu();
-    } finally {
-      setProjectMovePending(false);
-    }
-  };
-
   return (
     <div
       ref={setNodeRef}
+      className="group min-w-0"
       data-conversation-row={conversation.id}
       data-dragging-conversation={isDragging ? "" : undefined}
       style={{ ...conversationRowStyle(active, interaction), ...(isDragging ? { opacity: 0.45 } : {}) }}
@@ -410,34 +407,50 @@ function ConversationItem({
                   width: 6,
                   height: 6,
                   borderRadius: "50%",
-                  background: t.colors.primary,
+                  background: semantic("primary"),
                   flexShrink: 0,
                 }}
               />
             )}
-            <span style={titleStyle}>{conversation.title}</span>
+            <span data-conversation-title="" style={titleStyle}>{conversation.title}</span>
             {showArchivedStatus && conversation.isArchived && (
-              <span data-archived-indicator="" style={{ color: t.colors.mutedText, fontSize: t.font.sizeXs, flexShrink: 0 }}>
+              <span data-archived-indicator="" style={{ color: semantic("muted-foreground"), fontSize: t.font.sizeXs, flexShrink: 0 }}>
                 Archived
               </span>
             )}
           </button>
+          <span
+            role={isActiveRunStatus(conversation.run?.backendStatus) ? "img" : undefined}
+            aria-label={isActiveRunStatus(conversation.run?.backendStatus) ? "Response in progress" : undefined}
+            title={isActiveRunStatus(conversation.run?.backendStatus) ? "Response in progress" : undefined}
+            data-conversation-run-indicator={isActiveRunStatus(conversation.run?.backendStatus) ? "active" : "idle"}
+            style={{ width: 16, height: 16, flex: "0 0 16px", display: "grid", placeItems: "center" }}
+          >
+            {isActiveRunStatus(conversation.run?.backendStatus) && (
+              <LoaderCircleIcon aria-hidden className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+          </span>
           {showMenu && (
             <span
-              aria-haspopup="menu"
-              aria-expanded={menuOpen || undefined}
+              className={active || menuOpen
+                ? "flex shrink-0 opacity-100 transition-opacity"
+                : "flex shrink-0 pointer-events-none opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"}
+              data-conversation-actions=""
               style={{ display: "flex", flexShrink: 0 }}
             >
-              <IconButton
-                size="sm"
-                ariaLabel={`Conversation actions for ${conversation.title}`}
-                title="Conversation actions"
+              <shadcn.IconButton
+                size="compact"
+                icon={EllipsisIcon}
+                appearance="row-action"
+                label={`Conversation actions for ${conversation.title}`}
+                tooltip="Conversation actions"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className="shrink-0"
                 onClick={() =>
                   menuOpen ? onCloseMenu() : onOpenMenu(rowKey)
                 }
-              >
-                {"\u2026"}
-              </IconButton>
+              />
             </span>
           )}
           {menuOpen && (
@@ -475,7 +488,7 @@ function ConversationItem({
                   type="button"
                   role="menuitem"
                   data-conversation-delete=""
-                  style={{ ...menuItemStyle, color: t.colors.dangerText }}
+                  style={{ ...menuItemStyle, color: semantic("destructive") }}
                   onClick={() => {
                     onCloseMenu();
                     onDeleteRequested(conversation.id);
@@ -484,83 +497,11 @@ function ConversationItem({
                   Delete
                 </button>
               )}
-              {onMove != null && (
-                <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    aria-haspopup="menu"
-                    aria-expanded={moveMenuOpen}
-                    data-conversation-move=""
-                    style={menuItemStyle}
-                    onClick={() => setMoveMenuOpen((open) => !open)}
-                  >
-                    Move to folder
-                  </button>
-                  {moveMenuOpen && (
-                    <div role="group" aria-label={`Move ${conversation.title} to folder`} data-conversation-move-options="">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        aria-label="Move to Ungrouped"
-                        disabled={conversation.folderId == null}
-                        style={menuItemStyle}
-                        onClick={() => { setMoveMenuOpen(false); void onMove(conversation.id, null); }}
-                      >Ungrouped</button>
-                      {folders.map((folder) => (
-                        <button
-                          key={folder.id}
-                          type="button"
-                          role="menuitem"
-                          aria-label={`Move to ${folder.name}`}
-                          disabled={conversation.folderId === folder.id}
-                          style={menuItemStyle}
-                          onClick={() => { setMoveMenuOpen(false); void onMove(conversation.id, folder.id); }}
-                        >{folder.name}</button>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-              {onSetProject != null && (
-                <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    aria-haspopup="menu"
-                    aria-expanded={projectMenuOpen}
-                    disabled={projectMovePending}
-                    style={menuItemStyle}
-                    onClick={() => setProjectMenuOpen((open) => !open)}
-                  >Move to Project</button>
-                  {projectMenuOpen && (
-                    <div role="group" aria-label={`Move ${conversation.title} to Project`}>
-                      {projects.filter((project) => !project.is_archived).map((project) => (
-                        <button
-                          key={project.id}
-                          type="button"
-                          role="menuitem"
-                          disabled={projectMovePending || conversation.projectId === project.id}
-                          style={menuItemStyle}
-                          onClick={() => { void setProject(project.id); }}
-                        >{project.name}</button>
-                      ))}
-                    </div>
-                  )}
-                  {conversation.projectId != null && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      disabled={projectMovePending}
-                      style={menuItemStyle}
-                      onClick={() => { void setProject(null); }}
-                    >Remove from Project</button>
-                  )}
-                </>
-              )}
+              {onRequestMove != null && <button type="button" role="menuitem" data-conversation-move=""
+                style={menuItemStyle} onClick={() => { onCloseMenu(); onRequestMove(conversation.id, canMoveToFolder); }}>Move</button>}
             </div>
           )}
-          {metadataError != null && <div role="alert" style={{ fontSize: t.font.sizeXs, color: t.colors.dangerText }}>{metadataError}</div>}
+          {metadataError != null && <div role="alert" style={{ fontSize: t.font.sizeXs, color: semantic("destructive") }}>{metadataError}</div>}
         </>
       )}
     </div>
@@ -634,6 +575,11 @@ export function ConversationList({
   const [creatingFolderChatId, setCreatingFolderChatId] = useState<string | null>(null);
   const [projectActionError, setProjectActionError] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ conversationId: string; allowFolder: boolean } | null>(null);
+  const [moveType, setMoveType] = useState<"project" | "folder">("project");
+  const [moveDestination, setMoveDestination] = useState("");
+  const [moveSaving, setMoveSaving] = useState(false);
+  const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
   const [folderChatError, setFolderChatError] = useState<string | null>(null);
   const deleteTarget = conversations.find((item) => item.id === deleteTargetId) ?? null;
   const searchActive = searchQuery.trim().length > 0;
@@ -779,13 +725,32 @@ export function ConversationList({
     }
   };
 
-  const requestProjectMove = async (conversationId: string, projectId: string | null) => {
-    if (onSetConversationProject == null) return;
-    setProjectActionError(null);
+  const openMoveDialog = (conversationId: string, allowFolder: boolean) => {
+    setMoveTarget({ conversationId, allowFolder });
+    setMoveType(onSetConversationProject != null ? "project" : "folder");
+    setMoveDestination("");
+    setMoveDialogError(null);
+  };
+
+  const submitMove = async () => {
+    if (moveTarget == null || moveDestination === "" || moveSaving) return;
+    setMoveSaving(true);
+    setMoveDialogError(null);
     try {
-      await onSetConversationProject(conversationId, projectId);
+      if (moveType === "project") {
+        if (onSetConversationProject == null) return;
+        await onSetConversationProject(moveTarget.conversationId, moveDestination === "__none__" ? null : moveDestination);
+      } else {
+        if (onMoveConversation == null) return;
+        await onMoveConversation(moveTarget.conversationId, moveDestination === "__ungrouped__" ? null : moveDestination);
+      }
+      setMoveTarget(null);
     } catch {
-      setProjectActionError("Unable to move this conversation to the Project. Please try again.");
+      setMoveDialogError(moveType === "project"
+        ? "Unable to move this conversation to the Project. Please try again."
+        : "Unable to move this conversation to the Folder. Please try again.");
+    } finally {
+      setMoveSaving(false);
     }
   };
 
@@ -813,15 +778,16 @@ export function ConversationList({
     flexDirection: "column",
     gap: t.spacing.sm,
     width: "100%",
+    minWidth: 0,
   };
 
   const errorStyle: CSSProperties = {
     boxSizing: "border-box",
     padding: `${t.spacing.sm}px ${t.spacing.md}px`,
     borderRadius: t.radius.md,
-    background: t.colors.surface,
-    border: `${t.border.width}px solid ${t.colors.danger}`,
-    color: t.colors.dangerText,
+    background: semantic("card"),
+    border: `${t.border.width}px solid ${semantic("destructive")}`,
+    color: semantic("destructive"),
     fontSize: t.font.sizeSm,
     fontFamily: t.font.family,
   };
@@ -830,14 +796,13 @@ export function ConversationList({
     if (onSetConversationArchived == null) return;
     await onSetConversationArchived(conversationId, isArchived);
     setArchiveStatusMessage(isArchived ? "Conversation archived." : "Conversation restored.");
-    if (conversationId === activeConversationId) setArchivedView(isArchived);
     const focusTarget = () => {
       const item = Array.from(document.querySelectorAll<HTMLElement>("[data-conversation-item]"))
         .find((element) => element.dataset.conversationItem === conversationId);
       const selected = activeConversationId == null ? undefined : Array.from(
         document.querySelectorAll<HTMLElement>("[data-conversation-item]"),
       ).find((element) => element.dataset.conversationItem === activeConversationId);
-      (item ?? selected ?? (isArchived ? archivedViewButtonRef.current : activeViewButtonRef.current))?.focus();
+      (item ?? selected ?? (isArchived ? activeViewButtonRef.current : archivedViewButtonRef.current))?.focus();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusTarget);
     else setTimeout(focusTarget, 0);
@@ -863,11 +828,11 @@ export function ConversationList({
       onCloseMenu={() => { setRenamingId(null); setMenuOpenId(null); }}
       onStartRename={startRename}
       onRenameDone={(id, title) => void finishRename(id, title)}
-      folders={folders}
-      onMove={options.allowFolderMove === false || onMoveConversation == null ? undefined : requestMove}
+      onRequestMove={onSetConversationProject == null && (options.allowFolderMove === false || onMoveConversation == null)
+        ? undefined
+        : openMoveDialog}
+      canMoveToFolder={options.allowFolderMove !== false && onMoveConversation != null}
       dragDisabled={options.dragDisabled ?? !dragEnabled}
-      projects={projects}
-      onSetProject={onSetConversationProject == null ? undefined : requestProjectMove}
       onSetPinned={onSetConversationPinned}
       onSetArchived={onSetConversationArchived == null ? undefined : changeArchiveStatus}
       onOpenSystemPrompts={onOpenConversationSystemPrompts}
@@ -879,15 +844,17 @@ export function ConversationList({
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
     <div data-conversation-list="" style={listStyle}>
       <span data-new-chat>
-        <Button variant="primary" onClick={onNewChat}>
+        <shadcn.Button variant="navigation" size="sm" className="w-full justify-start gap-2" onClick={onNewChat}>
+          <SquarePenIcon aria-hidden="true" focusable="false" className="size-4" />
           New Chat
-        </Button>
+        </shadcn.Button>
       </span>
       {!archivedView && onCreateFolder != null && (
         <span data-new-folder>
-          <Button variant="secondary" onClick={() => openFolderEditor(null)}>
+          <shadcn.Button variant="outline" className="w-full justify-start gap-2" onClick={() => openFolderEditor(null)}>
+            <FolderPlusIcon aria-hidden="true" focusable="false" className="size-4" />
             New Folder
-          </Button>
+          </shadcn.Button>
         </span>
       )}
       {onSearchChange != null && (
@@ -903,52 +870,54 @@ export function ConversationList({
             }
           }}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Input
+          <div className="relative min-w-0 flex-1">
+            <SearchIcon aria-hidden="true" focusable="false" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <shadcn.Input
               type="search"
-              ariaLabel="Search conversations"
+              aria-label="Search conversations"
               placeholder="Search conversations"
               value={searchQuery}
-              onChange={onSearchChange}
+              onChange={(event) => onSearchChange(event.currentTarget.value)}
+              className="h-9 pl-9 pr-10"
             />
+            {searchQuery.length > 0 && (
+              <shadcn.IconButton
+                icon={XIcon}
+                label="Clear conversation search"
+                tooltip="Clear search"
+                size="compact"
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+                onClick={() => onSearchChange("")}
+              />
+            )}
           </div>
-          {searchQuery.length > 0 && (
-            <button
-              type="button"
-              aria-label="Clear conversation search"
-              title="Clear search"
-              onClick={() => onSearchChange("")}
-              style={{
-                flexShrink: 0,
-                border: 0,
-                background: "transparent",
-                color: t.colors.mutedText,
-                fontSize: t.font.sizeMd,
-                cursor: "pointer",
-              }}
-            >
-              ×
-            </button>
-          )}
         </div>
       )}
-      <nav aria-label="Conversation views" data-conversation-view-nav="" style={{ display: "flex", gap: t.spacing.xs }}>
-        <button
-          ref={activeViewButtonRef}
-          type="button"
-          aria-current={!archivedView ? "page" : undefined}
-          data-conversation-view="active"
-          onClick={() => setArchivedView(false)}
-          style={{ ...selectStyle, flex: 1, padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontWeight: !archivedView ? t.font.weightSemibold : t.font.weightNormal }}
-        >Active</button>
-        <button
-          ref={archivedViewButtonRef}
-          type="button"
-          aria-current={archivedView ? "page" : undefined}
-          data-conversation-view="archived"
-          onClick={() => setArchivedView(true)}
-          style={{ ...selectStyle, flex: 1, padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontWeight: archivedView ? t.font.weightSemibold : t.font.weightNormal }}
-        >Archived</button>
+      <nav aria-label="Conversation views" data-conversation-view-nav="">
+        <div role="group" aria-label="Conversation views" className="grid w-full grid-cols-2 gap-1 rounded-md bg-muted p-1">
+          <shadcn.Button
+            ref={activeViewButtonRef}
+            variant={archivedView ? "ghost" : "outline"}
+            size="sm"
+            aria-current={!archivedView ? "page" : undefined}
+            aria-pressed={!archivedView}
+            data-conversation-view="active"
+            onClick={() => setArchivedView(false)}
+            style={archivedView ? undefined : { backgroundColor: "#000000", color: "#ffffff" }}
+            className="h-8 w-full text-foreground dark:bg-black dark:text-white dark:hover:bg-neutral-950 dark:aria-pressed:bg-black dark:aria-pressed:text-white dark:aria-pressed:hover:bg-neutral-950"
+          >Active</shadcn.Button>
+          <shadcn.Button
+            ref={archivedViewButtonRef}
+            variant={archivedView ? "outline" : "ghost"}
+            size="sm"
+            aria-current={archivedView ? "page" : undefined}
+            aria-pressed={archivedView}
+            data-conversation-view="archived"
+            onClick={() => setArchivedView(true)}
+            style={archivedView ? { backgroundColor: "#000000", color: "#ffffff" } : undefined}
+            className="h-8 w-full text-foreground dark:bg-black dark:text-white dark:hover:bg-neutral-950 dark:aria-pressed:bg-black dark:aria-pressed:text-white dark:aria-pressed:hover:bg-neutral-950"
+          >Archived</shadcn.Button>
+        </div>
       </nav>
       {archiveStatusMessage != null && (
         <span role="status" aria-live="polite" data-conversation-archive-status="" style={{
@@ -957,8 +926,8 @@ export function ConversationList({
         }}>{archiveStatusMessage}</span>
       )}
       {!archivedView && !searchActive && <section data-projects-sidebar="" aria-label="Projects" style={{ display: "grid", gap: t.spacing.xs }}>
-        <strong style={{ padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontSize: t.font.sizeSm }}>Projects</strong>
-        {projectsLoading && <span role="status" style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText }}>Loading Projects…</span>}
+        <strong className="px-2 py-1 text-sm font-semibold text-foreground">Projects</strong>
+        {projectsLoading && <span role="status" style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground") }}>Loading Projects…</span>}
         {projectsError != null && (
           <div role="alert" data-projects-load-error="" style={errorStyle}>
             <span>{projectsError}</span>
@@ -967,7 +936,7 @@ export function ConversationList({
         )}
         {projectActionError != null && <div role="alert" data-project-action-error="" style={errorStyle}>{projectActionError}</div>}
         {!projectsLoading && projectsError == null && projects.length === 0 && (
-          <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText, fontSize: t.font.sizeXs }}>No active Projects</span>
+          <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>No active Projects</span>
         )}
         {activeProjects.map((project) => {
           const expanded = expandedProjects[project.id] === true;
@@ -984,21 +953,24 @@ export function ConversationList({
                   aria-expanded={expanded}
                   data-project-toggle={project.id}
                   onClick={() => toggleProject(project.id)}
-                  style={{ ...selectStyle, flex: 1, padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontWeight: t.font.weightSemibold }}
-                ><span aria-hidden>{expanded ? "▾" : "▸"}</span>{project.name}</button>
-                {onNewChatInProject != null && (
-                  <IconButton
-                    size="sm"
-                    ariaLabel={`New Chat in ${project.name}`}
-                    title="New Chat in Project"
+                  className="rounded-md text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  style={{ ...selectStyle, minHeight: 44, flex: 1, padding: `${t.spacing.sm}px ${t.spacing.sm}px`, fontWeight: t.font.weightSemibold }}
+                ><RocketIcon aria-hidden="true" focusable="false" className="size-4 shrink-0" /><span style={titleStyle}>{project.name}</span></button>
+              {onNewChatInProject != null && (
+                  <shadcn.IconButton
+                    size="compact"
+                    icon={PlusIcon}
+                    appearance="row-action"
+                    label={`New Chat in ${project.name}`}
+                    tooltip="New Chat in Project"
                     disabled={creatingProjectChatId != null}
                     onClick={() => void createProjectChat(project.id)}
-                  >+</IconButton>
+                  />
                 )}
               </div>
               {expanded && (
                 <div style={{ display: "grid", gap: t.spacing.xs }}>
-                  {projectConversationLoading[project.id] && <span role="status" style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText }}>Loading conversations…</span>}
+                  {projectConversationLoading[project.id] && <span role="status" style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground") }}>Loading conversations…</span>}
                   {projectConversationErrors[project.id] != null && (
                     <div role="alert" data-project-conversation-error={project.id} style={errorStyle}>
                       <span>{projectConversationErrors[project.id]}</span>
@@ -1006,7 +978,7 @@ export function ConversationList({
                     </div>
                   )}
                   {!projectConversationLoading[project.id] && projectConversationErrors[project.id] == null && projectItems.length === 0 && (
-                    <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText, fontSize: t.font.sizeXs }}>No conversations</span>
+                    <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>No conversations</span>
                   )}
                   {projectItems.map((conversation) => renderConversation(conversation, `project:${project.id}:${conversation.id}`, { dragDisabled: true }))}
                 </div>
@@ -1016,7 +988,7 @@ export function ConversationList({
         })}
       </section>}
       {searchLoading && (
-        <div role="status" data-conversation-search-loading="" style={{ color: t.colors.mutedText, fontSize: t.font.sizeXs }}>
+        <div role="status" data-conversation-search-loading="" style={{ color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>
           Searching…
         </div>
       )}
@@ -1026,12 +998,12 @@ export function ConversationList({
         </div>
       )}
       {conversationsLoading && !searchActive && (
-        <div role="status" data-conversations-loading="" style={{ color: t.colors.mutedText, fontSize: t.font.sizeXs }}>
+        <div role="status" data-conversations-loading="" style={{ color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>
           Loading conversations…
         </div>
       )}
       {foldersLoading && !searchActive && (
-        <div role="status" data-folders-loading="" style={{ color: t.colors.mutedText, fontSize: t.font.sizeXs }}>
+        <div role="status" data-folders-loading="" style={{ color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>
           Loading folders…
         </div>
       )}
@@ -1065,7 +1037,7 @@ export function ConversationList({
         <section aria-label="Archived conversations" data-archived-conversations="" style={{ display: "grid", gap: t.spacing.xs }}>
           {searchActive && <strong style={{ padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontSize: t.font.sizeSm }}>Archived</strong>}
           {conversationCollectionSettled && (searchActive ? conversations.filter((conversation) => conversation.isArchived) : archivedConversationItems).length === 0 ? (
-            <p data-archived-empty="" style={{ margin: 0, padding: t.spacing.md, color: t.colors.mutedText, fontSize: t.font.sizeSm, fontStyle: "italic" }}>
+            <p data-archived-empty="" style={{ margin: 0, padding: t.spacing.md, color: semantic("muted-foreground"), fontSize: t.font.sizeSm, fontStyle: "italic" }}>
               {searchActive ? `No archived conversations found for “${searchQuery.trim()}”.` : "No archived conversations"}
             </p>
           ) : (searchActive ? conversations.filter((conversation) => conversation.isArchived) : archivedConversationItems)
@@ -1074,7 +1046,7 @@ export function ConversationList({
       ) : searchActive ? (
         <section aria-label="Conversation search results" data-conversation-search-results="" style={{ display: "grid", gap: t.spacing.xs }}>
           {conversationCollectionSettled && searchLoading !== true && searchError == null && conversations.length === 0 ? (
-            <p style={{ margin: 0, padding: t.spacing.md, color: t.colors.mutedText, fontSize: t.font.sizeSm, textAlign: "center", fontStyle: "italic" }}>
+            <p style={{ margin: 0, padding: t.spacing.md, color: semantic("muted-foreground"), fontSize: t.font.sizeSm, textAlign: "center", fontStyle: "italic" }}>
               No conversations found for “{searchQuery.trim()}”.
             </p>
           ) : conversations.map((conversation) => renderConversation(conversation, `search:${conversation.id}`, { dragDisabled: true, showArchivedStatus: true }))}
@@ -1082,7 +1054,7 @@ export function ConversationList({
       ) : (
         <div data-active-conversations="" style={{ display: "flex", flexDirection: "column", gap: t.spacing.xs }}>
           {!conversationCollectionSettled ? null : activeConversationItems.length === 0 && folders.length === 0 && activeProjects.length === 0 ? (
-            <p style={{ margin: 0, padding: t.spacing.md, color: t.colors.mutedText, fontSize: t.font.sizeSm, textAlign: "center", fontStyle: "italic" }}>
+            <p style={{ margin: 0, padding: t.spacing.md, color: semantic("muted-foreground"), fontSize: t.font.sizeSm, textAlign: "center", fontStyle: "italic" }}>
               No active conversations
             </p>
           ) : !showFolderSections ? (
@@ -1098,38 +1070,83 @@ export function ConversationList({
                       <button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${folder.name}`}
                         aria-expanded={expanded} data-folder-toggle={folder.id}
                         onClick={() => setCollapsedFolders((current) => ({ ...current, [folder.id]: expanded }))}
-                        style={{ ...selectStyle, flex: 1, padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontWeight: t.font.weightSemibold }}>
-                        <span aria-hidden>{expanded ? "▾" : "▸"}</span>{folder.name}
+                        className="rounded-md text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                        style={{ ...selectStyle, minHeight: 44, flex: 1, padding: `${t.spacing.sm}px ${t.spacing.sm}px`, fontWeight: t.font.weightSemibold }}>
+                        {expanded ? <FolderOpenIcon aria-hidden="true" focusable="false" className="size-4 shrink-0" /> : <FolderIcon aria-hidden="true" focusable="false" className="size-4 shrink-0" />}<span style={titleStyle}>{folder.name}</span>
                       </button>
                       {onRenameFolder != null || onDeleteFolder != null || onOpenFolderSystemPrompts != null || onNewChatInFolder != null ? (
-                        <IconButton size="sm" ariaLabel={`Folder actions for ${folder.name}`} title="Folder actions"
-                          onClick={() => setFolderMenuOpenId((current) => current === folder.id ? null : folder.id)}>…</IconButton>
+                        <shadcn.IconButton size="compact" icon={EllipsisIcon} appearance="row-action" label={`Folder actions for ${folder.name}`} tooltip="Folder actions"
+                          aria-haspopup="menu" aria-expanded={folderMenuOpenId === folder.id}
+                          onClick={() => setFolderMenuOpenId((current) => current === folder.id ? null : folder.id)} />
                       ) : null}
                       {folderMenuOpenId === folder.id && (
                         <div role="menu" aria-label={`Folder actions for ${folder.name}`} style={{ ...menuStyle, top: "100%" }}>
                           {onNewChatInFolder != null && <button type="button" role="menuitem" disabled={creatingFolderChatId != null} onClick={() => void createFolderChat(folder.id)} style={menuItemStyle}>{creatingFolderChatId === folder.id ? "Creating…" : "New Chat"}</button>}
                           {onOpenFolderSystemPrompts != null && <button type="button" role="menuitem" onClick={() => { setFolderMenuOpenId(null); onOpenFolderSystemPrompts(folder.id, folder.name); }} style={menuItemStyle}>System Prompts</button>}
                           {onRenameFolder != null && <button type="button" role="menuitem" onClick={() => openFolderEditor(folder)} style={menuItemStyle}>Rename</button>}
-                          {onDeleteFolder != null && <button type="button" role="menuitem" onClick={() => { setDeleteFolderTarget(folder); setDeleteFolderError(null); setFolderMenuOpenId(null); }} style={{ ...menuItemStyle, color: t.colors.dangerText }}>Delete</button>}
+                          {onDeleteFolder != null && <button type="button" role="menuitem" onClick={() => { setDeleteFolderTarget(folder); setDeleteFolderError(null); setFolderMenuOpenId(null); }} style={{ ...menuItemStyle, color: semantic("destructive") }}>Delete</button>}
                         </div>
                       )}
                     </div>
                     {expanded && (items.length > 0
                       ? items.map((conversation) => renderConversation(conversation, `folder:${folder.id}:${conversation.id}`))
-                      : <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText, fontSize: t.font.sizeXs }}>No conversations</span>)}
+                      : <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>No conversations</span>)}
                   </ConversationFolderDropTarget>
                 );
               })}
               <ConversationFolderDropTarget folderId={null} disabled={!dragEnabled} style={{ display: "grid", gap: t.spacing.xs }}>
                 <strong style={{ padding: `${t.spacing.xs}px ${t.spacing.sm}px`, fontSize: t.font.sizeSm }}>Ungrouped</strong>
                 {ungrouped.length > 0 ? ungrouped.map((conversation) => renderConversation(conversation, `ungrouped:${conversation.id}`)) : (
-                  <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: t.colors.mutedText, fontSize: t.font.sizeXs }}>No conversations</span>
+                  <span style={{ padding: `${t.spacing.xs}px ${t.spacing.md}px`, color: semantic("muted-foreground"), fontSize: t.font.sizeXs }}>No conversations</span>
                 )}
               </ConversationFolderDropTarget>
             </>
           )}
         </div>
       )}
+      <Modal
+        open={moveTarget != null}
+        title="Move Conversation"
+        primaryAction="Move"
+        onPrimaryAction={() => void submitMove()}
+        secondaryAction="Cancel"
+        onSecondaryAction={() => { if (!moveSaving) setMoveTarget(null); }}
+        primaryBusy={moveSaving}
+        primaryDisabled={moveDestination === "" || moveSaving}
+        onClose={() => { if (!moveSaving) setMoveTarget(null); }}
+        closeOnOverlayClick={!moveSaving}
+        closeOnEscape={!moveSaving}
+      >
+        <div style={{ display: "grid", gap: t.spacing.md }}>
+          <fieldset disabled={moveSaving} style={{ display: "flex", gap: t.spacing.lg, border: 0, padding: 0, margin: 0 }}>
+            <legend style={{ marginBottom: t.spacing.sm, fontWeight: t.font.weightSemibold }}>Move to:</legend>
+            {onSetConversationProject != null && <label style={{ display: "flex", alignItems: "center", gap: t.spacing.xs }}>
+              <input type="radio" name="conversation-move-type" value="project" checked={moveType === "project"}
+                onChange={() => { setMoveType("project"); setMoveDestination(""); setMoveDialogError(null); }} />Project
+            </label>}
+            {moveTarget?.allowFolder && onMoveConversation != null && <label style={{ display: "flex", alignItems: "center", gap: t.spacing.xs }}>
+              <input type="radio" name="conversation-move-type" value="folder" checked={moveType === "folder"}
+                onChange={() => { setMoveType("folder"); setMoveDestination(""); setMoveDialogError(null); }} />Folder
+            </label>}
+          </fieldset>
+          <label style={{ display: "grid", gap: t.spacing.xs, fontWeight: t.font.weightSemibold }}>
+            Destination:
+            <select aria-label="Move destination" value={moveDestination} disabled={moveSaving}
+              onChange={(event) => { setMoveDestination(event.currentTarget.value); setMoveDialogError(null); }}
+              style={{ width: "100%", minHeight: 38, padding: `${t.spacing.xs}px ${t.spacing.sm}px`, border: `1px solid ${semantic("border")}`, borderRadius: t.radius.md, background: semantic("background"), color: semantic("foreground") }}>
+              <option value="">{moveType === "project" ? "Select project…" : "Select folder…"}</option>
+              {moveType === "project" ? <>
+                {projects.filter((project) => !project.is_archived).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                {moveTarget != null && conversations.find((item) => item.id === moveTarget.conversationId)?.projectId != null && <option value="__none__">No Project</option>}
+              </> : <>
+                {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                <option value="__ungrouped__">Ungrouped</option>
+              </>}
+            </select>
+          </label>
+          {moveDialogError != null && <div role="alert" style={errorStyle}>{moveDialogError}</div>}
+        </div>
+      </Modal>
       <Modal
         open={folderEditor != null}
         title={folderEditor?.id == null ? "New Folder" : `Rename “${folderEditor.name}”`}
@@ -1144,7 +1161,7 @@ export function ConversationList({
         closeOnEscape={!folderSaving}
       >
         <div style={{ display: "grid", gap: t.spacing.md }}>
-          <Input ariaLabel="Folder name" value={folderEditorName} onChange={setFolderEditorName} disabled={folderSaving} />
+          <shadcn.Input aria-label="Folder name" value={folderEditorName} onChange={(event) => setFolderEditorName(event.currentTarget.value)} disabled={folderSaving} />
           {folderEditorError != null && <div role="alert" style={errorStyle}>{folderEditorError}</div>}
         </div>
       </Modal>

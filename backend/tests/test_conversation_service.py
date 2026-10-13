@@ -120,12 +120,15 @@ def test_create_conversation_accepts_explicit_title_and_trims_blanks() -> None:
 
     titled = service.create_conversation(title="  My Project  ")
     assert titled.title == "My Project"
+    assert titled.is_title_custom is True
 
     blank = service.create_conversation(title="   ")
     assert blank.title == DEFAULT_CONVERSATION_TITLE
+    assert blank.is_title_custom is False
 
     empty = service.create_conversation(title="")
     assert empty.title == DEFAULT_CONVERSATION_TITLE
+    assert empty.is_title_custom is False
 
 
 def test_create_conversation_mints_a_valid_ava_owned_uuid_identifier() -> None:

@@ -161,11 +161,11 @@ export function RuntimeConfigurationsSection({ client }: { client: ApiClient }) 
         }}
       >
         <h3
+          className="text-foreground"
           style={{
             margin: 0,
             fontSize: t.font.sizeSm,
             fontWeight: t.font.weightSemibold,
-            color: t.colors.foreground,
           }}
         >
           Configured runtimes

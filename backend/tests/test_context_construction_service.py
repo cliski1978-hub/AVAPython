@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 
 from ava.contracts.conversations import MessageRole, MessageStatus, RunContext
+from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.repositories.message_repository import MessageRecord
 from ava.services.context_construction_service import (
@@ -24,6 +25,8 @@ from ava.services.context_construction_service import (
 )
 from ava.services.conversation_store import ConversationStore
 from ava.services.message_store import MessageStore
+from ava.services.run_event_store import RunEventStore
+from ava.services.run_service import RunService
 from ava.services.run_store import RunStore
 
 # ============================================================
@@ -163,6 +166,45 @@ def test_multi_turn_context_keeps_every_prior_turn_in_order(graph: Graph) -> Non
     context = graph.service.build_for_source(conversation_id, third)
 
     assert graph.texts(context) == ["U1", "A1", "U2", "A2", "U3"]
+
+
+def test_draft_preview_context_includes_the_latest_completed_assistant_answer(graph: Graph) -> None:
+    """An unsent draft follows the whole visible transcript, not just the last user."""
+    conversation_id = graph.conversation()
+    graph.user(conversation_id, "U1")
+    graph.assistant(conversation_id, "A1 " + "long answer " * 500, RunStatus.COMPLETED)
+
+    context = graph.service.build_for_preview(conversation_id)
+
+    assert graph.texts(context) == ["U1", "A1 " + "long answer " * 500]
+
+
+def test_run_preview_passes_the_full_transcript_to_the_agent(graph: Graph) -> None:
+    conversation_id = graph.conversation()
+    graph.user(conversation_id, "U1")
+    graph.assistant(conversation_id, "A1", RunStatus.COMPLETED)
+
+    class PreviewAgent:
+        context: RunContext | None = None
+
+        def preview_context_window(self, _request: RunRequest, *, context: RunContext | None = None):
+            self.context = context
+            return None
+
+    agent = PreviewAgent()
+    service = RunService(
+        agent,  # type: ignore[arg-type]
+        run_repository=graph.runs,
+        run_event_repository=RunEventStore(),
+        conversation_repository=graph.conversations,
+        message_repository=graph.messages,
+        context_service=graph.service,
+    )
+
+    service.preview_context_window(RunRequest(prompt="next draft", conversation_id=conversation_id))
+
+    assert agent.context is not None
+    assert graph.texts(agent.context) == ["U1", "A1"]
 
 
 def test_source_user_message_appears_exactly_once(graph: Graph) -> None:

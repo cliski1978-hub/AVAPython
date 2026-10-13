@@ -191,7 +191,7 @@ def _schema_info(app: FastAPI) -> tuple[list[int], int]:
 
 def _assert_schema_current(app: FastAPI) -> None:
     applied, pending = _schema_info(app)
-    assert applied == list(range(1, 19)), f"[migrations] applied versions changed across restart: {applied}"
+    assert applied == list(range(1, 26)), f"[migrations] applied versions changed across restart: {applied}"
     assert pending == 0, f"[migrations] unexpected pending migrations after startup: {pending}"
 
 
@@ -365,7 +365,7 @@ def test_recovered_application_continues_writing_across_a_second_restart(tmp_pat
             json={"content": POST_RECOVERY_MESSAGE, "role": "user"},
         )
         assert appended.status_code == 201, "[message] post-recovery write failed"
-        assert _schema_info(app_b)[0] == list(range(1, 19)), "[migrations] write churn touched the schema"
+        assert _schema_info(app_b)[0] == list(range(1, 26)), "[migrations] write churn touched the schema"
 
     assert allocated_rev3 is not None
     app_b.state.persistence.dispose()

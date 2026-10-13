@@ -1,46 +1,33 @@
 import { type ReactNode } from "react";
-import { defaultTheme } from "../theme";
+import { cn } from "../lib/utils";
+
+const avaWordmark = new URL("../assets/ava-wordmark.png", import.meta.url).href;
 
 export interface HeaderProps {
   title?: string;
   actions?: ReactNode;
 }
 
-const t = defaultTheme;
-
 export function Header({ title = "AVA", actions }: HeaderProps) {
   return (
     <header
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: t.spacing.md,
-        padding: `0 ${t.spacing.lg}px`,
-        borderBottom: `${t.border.width}px solid ${t.colors.border}`,
-        background: t.colors.background,
-        height: 48,
-        flexShrink: 0,
-        boxSizing: "border-box",
-      }}
+      className="flex h-[var(--ava-header-height)] shrink-0 items-center justify-between gap-4 border-b border-border bg-background px-4 text-foreground sm:px-6"
     >
       <h1
-        style={{
-          margin: 0,
-          fontSize: t.font.sizeMd,
-          fontWeight: t.font.weightSemibold,
-          color: t.colors.foreground,
-        }}
+        className={cn("m-0 shrink-0 text-base font-semibold tracking-tight")}
       >
-        {title}
+        {title === "AVA" ? (
+          <img
+            data-ava-brand-mark=""
+            src={avaWordmark}
+            alt="AVA"
+            className="h-9 w-[76px] rounded-md object-cover object-center"
+          />
+        ) : title}
       </h1>
       {actions != null && (
         <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: t.spacing.md,
-          }}
+          className="flex min-w-0 flex-1 items-center justify-end gap-3"
         >
           {actions}
         </div>

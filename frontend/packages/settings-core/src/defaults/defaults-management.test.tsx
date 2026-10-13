@@ -144,6 +144,8 @@ describe("execution defaults display", () => {
     expect(within(group).getByText("Acme Primary")).toBeTruthy();
     expect(within(group).getByText("Acme Large")).toBeTruthy();
     expect(within(group).getByText("Native")).toBeTruthy();
+    expect(screen.getAllByTestId("settings-default-row")[0].className).toContain("dark:bg-black");
+    expect(screen.getAllByTestId("settings-default-row")[0].className).toContain("dark:text-white");
     // The id stays visible underneath: the display name is a convenience, and
     // the stored reference is the thing that has to remain auditable.
     expect(within(group).getByText("conn-a")).toBeTruthy();

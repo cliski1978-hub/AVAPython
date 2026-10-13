@@ -86,6 +86,7 @@ def test_list_models_requests_safe_catalog_and_deserializes() -> None:
         requested_paths.append(request.url.path)
         return httpx.Response(200, json={
             "contract_version": "v1",
+            "default_model_id": "ava/local",
             "models": [{
                 "provider_name": "local", "model_id": "ava/local", "display_name": "Local",
                 "context_limit": None,
@@ -105,4 +106,5 @@ def test_list_models_requests_safe_catalog_and_deserializes() -> None:
     assert requested_paths == ["/models"]
     assert response.models[0].model_id == "ava/local"
     assert response.models[0].hosting_mode is not None
+    assert response.default_model_id == "ava/local"
     assert "provider_model_name" not in str(response.model_dump())

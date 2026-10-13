@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 from typing import BinaryIO
 from uuid import uuid4
 
-from ava.repositories.project_file import ProjectFileRecord
+from ava.repositories.project_file import ProjectFileRecord, normalize_project_file_name
 from ava.repositories.project_file_content import ProjectFileContentPort
-from ava.repositories.project_file_repository import ProjectFileRepository
+from ava.repositories.project_file_repository import DuplicateProjectFileNameError, ProjectFileRepository
 from ava.repositories.project_repository import ProjectRepository
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,14 @@ class ProjectFileNotFoundError(Exception):
 
 class ProjectFileStorageError(Exception):
     """Raised when binary storage or compensating cleanup fails."""
+
+
+class ProjectFileAlreadyExistsError(Exception):
+    """Raised when a Project already contains the normalized filename."""
+
+    def __init__(self, file_name: str) -> None:
+        super().__init__(file_name)
+        self.file_name = file_name
 
 
 class ProjectFileService:
@@ -45,6 +53,17 @@ class ProjectFileService:
             raise ValueError("file_name must not be blank")
         if content_type is not None and not content_type.strip():
             raise ValueError("content_type must not be blank when provided")
+        normalized_name = normalize_project_file_name(file_name)
+        existing = next(
+            (
+                item
+                for item in self._files.list_by_project(project_id)
+                if normalize_project_file_name(item.file_name) == normalized_name
+            ),
+            None,
+        )
+        if existing is not None:
+            raise ProjectFileAlreadyExistsError(existing.file_name)
         file_id = str(uuid4())
         content_ref = uuid4().hex
         try:
@@ -64,6 +83,8 @@ class ProjectFileService:
                 raise ProjectFileStorageError(
                     "Project file metadata failed and stored content cleanup also failed."
                 ) from cleanup_error
+            if isinstance(metadata_error, DuplicateProjectFileNameError):
+                raise ProjectFileAlreadyExistsError(metadata_error.file_name) from metadata_error
             raise metadata_error
 
     def list(self, project_id: str) -> list[ProjectFileRecord]:

@@ -77,12 +77,17 @@ class NativeRuntime(AgentRuntimePort):
         model_name = None
         if model_binding is not None and model_binding.provider_model_name.strip():
             model_name = model_binding.provider_model_name
+        model_request = ModelRequest(messages=_model_messages(context, request.prompt))
         try:
-            model_request = ModelRequest(messages=_model_messages(context, request.prompt))
             task = asyncio.create_task(model_provider.generate(model_request, model_name=model_name))
             self._run_tasks[run_id] = task
             response = await task
-            result = RuntimeRunResult(status=RunStatus.COMPLETED, content=response.content)
+            result = RuntimeRunResult(
+                status=RunStatus.COMPLETED,
+                content=response.content,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+                runtime_response=response.model_dump(mode="json"),
+            )
         except asyncio.CancelledError:
             result = RuntimeRunResult(status=RunStatus.CANCELLED)
         except ModelProviderError as exc:
@@ -90,10 +95,19 @@ class NativeRuntime(AgentRuntimePort):
             # would make every provider problem indistinguishable at the public
             # boundary, which is exactly what the taxonomy exists to prevent.
             logger.warning("Model provider failure for run %s: %s", run_id, exc)
-            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code)
+            result = RuntimeRunResult(
+                status=RunStatus.FAILED,
+                content=_FAILURE_CONTENT,
+                failure_code=exc.safe_code,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+            )
         except Exception:
             logger.exception("Unexpected model provider failure for run %s", run_id)
-            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT)
+            result = RuntimeRunResult(
+                status=RunStatus.FAILED,
+                content=_FAILURE_CONTENT,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+            )
         finally:
             self._run_tasks.pop(run_id, None)
 
@@ -134,6 +148,7 @@ class NativeRuntime(AgentRuntimePort):
             if model_binding is not None and model_binding.provider_model_name.strip()
             else None
         )
+        model_request = ModelRequest(messages=_model_messages(context, request.prompt))
 
         async def consume() -> ModelResponse:
             """Iterate provider deltas, publishing the growing snapshot per delta.
@@ -143,7 +158,6 @@ class NativeRuntime(AgentRuntimePort):
             content as one replaceable snapshot, so appending here would
             duplicate prefixes on replay and on refresh.
             """
-            model_request = ModelRequest(messages=_model_messages(context, request.prompt))
             snapshot = ""
             async for delta in model_provider.stream(model_request, model_name=model_name):
                 snapshot += delta
@@ -154,15 +168,29 @@ class NativeRuntime(AgentRuntimePort):
             task = asyncio.create_task(consume())
             self._run_tasks[run_id] = task
             response = await task
-            result = RuntimeRunResult(status=RunStatus.COMPLETED, content=response.content)
+            result = RuntimeRunResult(
+                status=RunStatus.COMPLETED,
+                content=response.content,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+                runtime_response=response.model_dump(mode="json"),
+            )
         except asyncio.CancelledError:
             result = RuntimeRunResult(status=RunStatus.CANCELLED)
         except ModelProviderError as exc:
             logger.warning("Model provider streaming failure for run %s: %s", run_id, exc)
-            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT, failure_code=exc.safe_code)
+            result = RuntimeRunResult(
+                status=RunStatus.FAILED,
+                content=_FAILURE_CONTENT,
+                failure_code=exc.safe_code,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+            )
         except Exception:
             logger.exception("Unexpected model provider streaming failure for run %s", run_id)
-            result = RuntimeRunResult(status=RunStatus.FAILED, content=_FAILURE_CONTENT)
+            result = RuntimeRunResult(
+                status=RunStatus.FAILED,
+                content=_FAILURE_CONTENT,
+                runtime_request={"model_request": model_request.model_dump(mode="json"), "model_name": model_name},
+            )
         finally:
             self._run_tasks.pop(run_id, None)
         if self._final_status.get(run_id) == RunStatus.CANCELLED:

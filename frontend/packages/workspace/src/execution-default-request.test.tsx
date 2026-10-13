@@ -6,12 +6,13 @@ import { describe, expect, it } from "vitest";
 import { AppWorkspace } from "./AppWorkspace";
 
 // Real workspace, providers, and API client. Only the HTTP boundary is replaced.
-function transport(options: { models?: unknown[]; defaultModelId?: string | null; failModels?: boolean } = {}) {
+function transport(options: { models?: unknown[]; defaultModelId?: string | null; projectDefaultModelId?: string | null; failModels?: boolean } = {}) {
   const runs: Record<string, unknown>[] = [];
   const conversation = {
     conversation_id: "conversation", title: "Chat", created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z", contract_version: "v1",
   };
+  const projectConversation = { ...conversation, conversation_id: "project-conversation", project_id: "project" };
   const fetchImpl: typeof fetch = async (input, init) => {
     const path = new URL(String(input)).pathname;
     const method = init?.method ?? "GET";
@@ -43,12 +44,20 @@ function transport(options: { models?: unknown[]; defaultModelId?: string | null
       ],
     };
     else if (path === "/workspaces") body = { workspaces: [] };
+    else if (path === "/projects") body = { projects: [{ id: "project", name: "Project A", is_archived: false }] };
+    else if (path === "/projects/project/execution-defaults") body = {
+      project_id: "project", runtime_key: null, model_id: options.projectDefaultModelId ?? null, contract_version: "v1",
+    };
+    else if (path === "/projects/project/conversations") body = method === "POST"
+      ? projectConversation
+      : { conversations: [projectConversation] };
     else if (path === "/conversations") body = method === "POST" ? conversation : { conversations: [] };
-    else if (path === "/conversations/conversation/messages") {
+    else if (path === "/conversations/conversation/messages" || path === "/conversations/project-conversation/messages") {
+      const activeConversation = path.includes("project-conversation") ? projectConversation : conversation;
       body = method === "POST" ? {
-        ...JSON.parse(String(init?.body)), message_id: "message", conversation_id: "conversation", status: "complete",
-        created_at: conversation.created_at, updated_at: conversation.updated_at, contract_version: "v1",
-      } : { conversation_id: "conversation", messages: [] };
+        ...JSON.parse(String(init?.body)), message_id: "message", conversation_id: activeConversation.conversation_id, status: "complete",
+        created_at: activeConversation.created_at, updated_at: activeConversation.updated_at, contract_version: "v1",
+      } : { conversation_id: activeConversation.conversation_id, messages: [] };
     } else if (path === "/runs" && method === "POST") {
       runs.push(JSON.parse(String(init?.body)));
       body = { run_id: "run", status: "completed", contract_version: "v1" };
@@ -66,9 +75,10 @@ async function submit(runs: Record<string, unknown>[]) {
   return runs[0];
 }
 
-async function setup(options: { models?: unknown[]; defaultModelId?: string | null; failModels?: boolean } = {}) {
+async function setup(options: { models?: unknown[]; defaultModelId?: string | null; projectDefaultModelId?: string | null; failModels?: boolean } = {}) {
   const fixture = transport(options);
   render(<AppWorkspace client={fixture.client} />);
+  fireEvent.click(screen.getByRole("button", { name: /Execution settings/ }));
   await screen.findByRole("option", { name: "Local Coding" });
   return fixture;
 }
@@ -83,6 +93,7 @@ describe("application defaults and explicit execution request bodies", () => {
   it.each([
     ["Select runtime", "openhands", { runtime_id: "openhands" }],
     ["Select model", "local", { model_provider_id: "local" }],
+    ["Select execution profile", "local-default", { runtime_id: "native", model_provider_id: "local" }],
     ["Select execution profile", "openhands-local", { runtime_id: "openhands", model_provider_id: "local" }],
     ["Select execution profile", "auto", { mode: "auto" }],
   ])("preserves the explicit choice from %s (%s)", async (label, value, expected) => {
@@ -148,6 +159,16 @@ const CONFIGURED_CATALOG = [
 ];
 
 describe("configured models in the composer", () => {
+  it("shows the active Project's inherited model without sending it as an explicit override", async () => {
+    const { runs } = await setup({ models: CONFIGURED_CATALOG, defaultModelId: "qwen25-coder-7b", projectDefaultModelId: "qwen35-9b" });
+    fireEvent.click(screen.getByRole("button", { name: "New Chat in Project A" }));
+    const modelOption = await screen.findByRole("option", { name: "Project default (Qwen 3.5 9B)" });
+    expect(modelOption).toBeTruthy();
+    const request = await submit(runs) as { conversation_id: string; execution?: unknown };
+    expect(request.conversation_id).toBe("project-conversation");
+    expect(request).not.toHaveProperty("execution");
+  });
+
   it("lists every configured model by its stable id, not by a provider identity", async () => {
     await setup({ models: CONFIGURED_CATALOG, defaultModelId: "qwen25-coder-7b" });
     const options = (screen.getByLabelText("Select model") as HTMLSelectElement).options;

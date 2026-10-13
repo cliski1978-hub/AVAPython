@@ -1,4 +1,5 @@
 import { ApiClient } from "@ava/api-client";
+import { AppearanceProvider } from "@ava/ui-core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -117,6 +118,19 @@ beforeEach(() => {
 });
 
 describe("Settings section navigation", () => {
+  it("uses semantic AVA colors for the Settings shell and section navigation", async () => {
+    await renderSettings();
+
+    expect(screen.getByTestId("settings-workspace").getAttribute("style"))
+      .toContain("background: hsl(var(--background))");
+    expect(screen.getByTestId("settings-workspace").getAttribute("style"))
+      .toContain("color: hsl(var(--foreground))");
+    expect(sectionTab("Providers").getAttribute("style"))
+      .toContain("color: hsl(var(--foreground))");
+    expect(sectionTab("Providers").getAttribute("style"))
+      .toContain("background: hsl(var(--secondary))");
+  });
+
   it("shows the settings sections and starts on Providers", async () => {
     await renderSettings();
 
@@ -125,6 +139,31 @@ describe("Settings section navigation", () => {
     }
     expect(sectionTab("Providers").getAttribute("aria-selected")).toBe("true");
     expect(sectionTab("Models").getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("exposes the accessible appearance mode control in its dedicated section", async () => {
+    render(<AppearanceProvider><SettingsWorkspace client={client} initialSection="appearance" /></AppearanceProvider>);
+    const selector = await screen.findByRole("combobox", { name: "Appearance mode" });
+    expect(Array.from((selector as HTMLSelectElement).options).map((option) => option.value)).toEqual(["system", "light", "dark"]);
+    fireEvent.change(selector, { target: { value: "dark" } });
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+
+    const fontSelector = screen.getByRole("combobox", { name: "Font family" }) as HTMLSelectElement;
+    expect(Array.from(fontSelector.options).map((option) => option.value)).toEqual([
+      "system",
+      "lato",
+      "noto-serif",
+      "noto-sans",
+      "dejavu-sans",
+      "liberation-serif",
+    ]);
+    fireEvent.change(fontSelector, { target: { value: "noto-sans" } });
+    const fontSize = screen.getByRole("slider", { name: "Font size" }) as HTMLInputElement;
+    fireEvent.change(fontSize, { target: { value: "18" } });
+    expect(fontSize.value).toBe("18");
+    expect(document.documentElement.dataset.fontFamily).toBe("noto-sans");
+    expect(document.documentElement.style.getPropertyValue("--ava-font-family")).toBe('"Noto Sans", Arial, sans-serif');
+    expect(document.documentElement.style.getPropertyValue("--ava-font-scale")).toBe(String(18 / 14));
   });
 
   it("keeps the Settings shell and navigation present while a section loads", async () => {

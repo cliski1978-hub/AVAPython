@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ava.contracts.conversations import ConversationListResponse, ConversationResponse, CreateConversationRequest
@@ -24,9 +24,18 @@ from ava.models.model_registry import ModelDisabledError, UnknownModelError
 from ava.repositories.project import ProjectRecord
 from ava.repositories.project_file import ProjectFileRecord
 from ava.runtimes.resolver import UnknownRuntimeError
-from ava.services.conversation_service import ConversationService, DuplicateConversationError
+from ava.services.conversation_service import (
+    ConversationHasActiveRunError,
+    ConversationService,
+    DuplicateConversationError,
+)
 from ava.services.project_execution_defaults_service import ProjectExecutionDefaultsService
-from ava.services.project_file_service import ProjectFileNotFoundError, ProjectFileService, ProjectFileStorageError
+from ava.services.project_file_service import (
+    ProjectFileAlreadyExistsError,
+    ProjectFileNotFoundError,
+    ProjectFileService,
+    ProjectFileStorageError,
+)
 from ava.services.project_service import (
     DuplicateProjectIdentityError,
     ProjectNotFoundError,
@@ -83,7 +92,12 @@ async def list_project_files(request: Request, project_id: str) -> ProjectFileLi
         return _not_found(project_id)
 
 
-@router.post("/projects/{project_id}/files", response_model=ProjectFileResponse, status_code=201)
+@router.post(
+    "/projects/{project_id}/files",
+    response_model=ProjectFileResponse,
+    status_code=201,
+    responses={409: {"model": ErrorResponse}},
+)
 async def upload_project_file(
     request: Request,
     project_id: str,
@@ -102,6 +116,18 @@ async def upload_project_file(
         return _project_file_response(record)
     except ProjectNotFoundError:
         return _not_found(project_id)
+    except ProjectFileAlreadyExistsError as exc:
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                error_code="project_file_name_conflict",
+                category=ErrorCategory.VALIDATION,
+                message=(
+                    f'A file named "{exc.file_name}" already exists in this Project. '
+                    "Delete or rename the existing file before uploading another."
+                ),
+            ).model_dump(mode="json"),
+        )
     except ProjectFileStorageError:
         return _project_file_storage_error()
     except ValueError as exc:
@@ -380,14 +406,35 @@ async def set_project_archived(
     status_code=204,
     response_class=Response,
     response_model=None,
-    responses={404: {"model": ErrorResponse}},
+    responses={
+        200: {"description": "Project and conversation IDs deleted when requested"},
+        404: {"model": ErrorResponse},
+    },
 )
-async def delete_project(request: Request, project_id: str) -> Response | JSONResponse:
+async def delete_project(
+    request: Request,
+    project_id: str,
+    delete_conversations: Annotated[bool, Query()] = False,
+) -> Response | JSONResponse:
     service: ProjectService = request.app.state.project_service
     try:
-        service.delete_project(project_id)
+        deleted_conversation_ids = service.delete_project(project_id, delete_conversations=delete_conversations)
     except ProjectNotFoundError:
         return _not_found(project_id)
     except ProjectFileStorageError:
         return _project_file_storage_error()
+    except ConversationHasActiveRunError:
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                error_code="conversation_run_active",
+                category=ErrorCategory.VALIDATION,
+                message="Project conversations cannot be deleted while a run is active.",
+            ).model_dump(),
+        )
+    if delete_conversations:
+        return JSONResponse(
+            status_code=200,
+            content={"deleted_conversation_ids": list(deleted_conversation_ids or ())},
+        )
     return Response(status_code=204)

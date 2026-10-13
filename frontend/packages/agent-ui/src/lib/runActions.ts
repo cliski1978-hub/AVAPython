@@ -1,4 +1,17 @@
 import type { MessageStatus, UIRunPhase } from "../types";
+import type { RunStatus } from "@ava/contracts";
+
+/** AVA backend run statuses that have not reached a terminal outcome. */
+export const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  "pending",
+  "running",
+  "waiting_for_approval",
+]);
+
+/** Whether a backend-owned run status is still active. */
+export function isActiveRunStatus(status: RunStatus | null | undefined): boolean {
+  return status != null && ACTIVE_RUN_STATUSES.has(status);
+}
 
 /**
  * Phase 5.31 attempt policy.

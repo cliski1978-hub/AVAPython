@@ -26,11 +26,9 @@ class ModelConfiguration:
     exposes it; endpoint and credential data remain on that connection.
     ``provider_model_name`` is the opaque provider-facing target name.
 
-    Capabilities are static declared configuration metadata using the existing
-    AVA vocabulary. Context capacity is intentionally absent: it is currently
-    provider-reported discovery metadata (``ModelInfo.context_limit``), not a
-    model-profile/configuration field, so adding it here would create a second
-    authority before its lifecycle is defined.
+    Capabilities and the optional AVA context window are declared configuration
+    metadata. Provider-reported ``ModelInfo.context_limit`` remains an
+    authoritative hard ceiling when available.
     """
 
     model_id: str
@@ -40,6 +38,7 @@ class ModelConfiguration:
     hosting_mode: ModelHostingMode
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
     enabled: bool = True
+    context_window_tokens: int | None = None
 
     def __post_init__(self) -> None:
         _require_text("model_id", self.model_id)
@@ -58,3 +57,9 @@ class ModelConfiguration:
             raise ValueError("capabilities must be a ModelCapabilities")
         if not isinstance(self.enabled, bool):
             raise ValueError("enabled must be a bool")
+        if self.context_window_tokens is not None and (
+            not isinstance(self.context_window_tokens, int)
+            or isinstance(self.context_window_tokens, bool)
+            or self.context_window_tokens <= 0
+        ):
+            raise ValueError("context_window_tokens must be a positive integer or None")

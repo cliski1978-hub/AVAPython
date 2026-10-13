@@ -5,9 +5,15 @@
  * here.
  */
 
-import type { RunEvent, RunRequest, RunResponse } from "@ava/contracts";
+import type { ContextWindowPreview, ExecutionMode, RunEvent, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
 
 import { ApiClient } from "./client";
+export type { ContextWindowPreview, ExecutionMode, RunEvent, RunExecutionOverride, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
+
+export async function previewContextWindow(client: ApiClient, request: Pick<RunRequest, "prompt" | "conversation_id" | "execution" | "execution_mode">): Promise<ContextWindowPreview> {
+  const response = await client.request("/runs/context-preview", { method: "POST", body: JSON.stringify(request) });
+  return (await response.json()) as ContextWindowPreview;
+}
 
 function runPath(runId: string): string {
   return `/runs/${encodeURIComponent(runId)}`;
@@ -32,6 +38,18 @@ export async function getRun(
 ): Promise<RunResponse> {
   const response = await client.request(runPath(runId));
   return (await response.json()) as RunResponse;
+}
+
+/** Retrieve the authoritative runs belonging to a conversation. */
+export async function listConversationRuns(client: ApiClient, conversationId: string): Promise<RunListItem[]> {
+  const response = await client.request(`/runs?conversation_id=${encodeURIComponent(conversationId)}`);
+  return (await response.json()) as RunListItem[];
+}
+
+/** Retrieve one run's captured prompt/runtime facts and ordered events. */
+export async function getRunInspection(client: ApiClient, runId: string): Promise<RunInspectionResponse> {
+  const response = await client.request(`${runPath(runId)}/inspection`);
+  return (await response.json()) as RunInspectionResponse;
 }
 
 /** Retrieve a run's normalized events in append order (GET /runs/{run_id}/events). */

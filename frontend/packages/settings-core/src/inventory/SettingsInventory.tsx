@@ -85,6 +85,7 @@ export function SettingsInventory({
         <li
           key={entry.id}
           data-testid="settings-inventory-entry"
+          className="border-border bg-card text-card-foreground dark:bg-black dark:text-white"
           style={{
             display: "flex",
             alignItems: "center",
@@ -93,7 +94,6 @@ export function SettingsInventory({
             padding: `${t.spacing.md}px ${t.spacing.lg}px`,
             border: `${t.border.width}px solid ${t.colors.border}`,
             borderRadius: t.radius.lg,
-            background: t.colors.background,
             boxSizing: "border-box",
           }}
         >
@@ -106,10 +106,10 @@ export function SettingsInventory({
             }}
           >
             <span
+              className="text-card-foreground dark:text-white"
               style={{
                 fontSize: t.font.sizeSm,
                 fontWeight: t.font.weightSemibold,
-                color: t.colors.foreground,
               }}
             >
               {entry.title}
@@ -117,12 +117,12 @@ export function SettingsInventory({
             <span
               data-testid="settings-inventory-entry-id"
               title={entry.id}
+              className="text-muted-foreground dark:text-white/80"
               style={{
                 fontSize: t.font.sizeXs,
                 fontFamily: monospaceId
                   ? "ui-monospace, SFMono-Regular, Menlo, monospace"
                   : t.font.family,
-                color: t.colors.mutedText,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -138,10 +138,10 @@ export function SettingsInventory({
                     ? `${entry.association} · ${entry.metadata}`
                     : (entry.association ?? entry.metadata)
                 }
+                className="text-muted-foreground dark:text-white/80"
                 style={{
                   fontSize: t.font.sizeXs,
                   fontFamily: t.font.family,
-                  color: t.colors.mutedText,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
@@ -156,10 +156,10 @@ export function SettingsInventory({
               <span
                 data-testid="settings-inventory-entry-details"
                 title={entry.details}
+                className="text-muted-foreground dark:text-white/80"
                 style={{
                   fontSize: t.font.sizeXs,
                   fontFamily: t.font.family,
-                  color: t.colors.mutedText,
                   opacity: 0.85,
                   overflow: "hidden",
                   textOverflow: "ellipsis",

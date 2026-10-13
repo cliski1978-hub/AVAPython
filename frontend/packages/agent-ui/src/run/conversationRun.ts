@@ -38,6 +38,7 @@ import {
 } from "./runEventProcessor";
 import { observeRunWithResume } from "./runStreamResume";
 import { presentAvaError } from "../lib/errorPresentation";
+import { ACTIVE_RUN_STATUSES } from "../lib/runActions";
 import { selectTranscriptMessages } from "../lib/transcript";
 import type { Conversation } from "../types";
 
@@ -124,12 +125,6 @@ export type RunEventCommands = Pick<
   // submission uses rather than a second, weaker one.
   | "addAssistantMessage"
 >;
-
-const ACTIVE_RUN_STATUSES = new Set<RunResponse["status"]>([
-  "pending",
-  "running",
-  "waiting_for_approval",
-]);
 
 /**
  * Observer ownership for one conversation's run.
@@ -337,6 +332,8 @@ export async function startRunForPrompt(options: {
   acquireRunStream?: AcquireRunStream;
   agent: RunAgent;
   commands: RunEventCommands;
+  /** Let an initial composer submission restore its draft when creation fails. */
+  rejectOnStartFailure?: boolean;
 }): Promise<void> {
   const { agent, commands } = options;
   const reusesLocalSlot = options.assistantMessageId != null;
@@ -497,6 +494,7 @@ export async function startRunForPrompt(options: {
     if (options.assistantMessageId != null) {
       commands.removeMessage?.(options.conversationId, options.assistantMessageId);
     }
+    if (options.rejectOnStartFailure) throw error;
   } finally {
     // This run no longer observes, so its conversation may be recovered again.
     stream?.release();
@@ -539,6 +537,7 @@ export async function submitPrompt(
     acquireRunStream,
     agent,
     commands,
+    rejectOnStartFailure: true,
   });
 }
 

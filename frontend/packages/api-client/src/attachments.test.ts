@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AttachmentResponse } from "@ava/contracts";
 
-import { ApiClient, ApiError, AttachmentInputError, createAttachment, getAttachment, getAttachmentContent, listAttachments } from "./index";
+import { ApiClient, ApiError, AttachmentInputError, createAttachment, deleteConversationAttachment, getAttachment, getAttachmentContent, listAttachments, listConversationAttachments, uploadConversationAttachment } from "./index";
 
 const response: AttachmentResponse = {
   attachment_id: "attachment-1",
@@ -154,6 +154,29 @@ describe("createAttachment", () => {
       }),
     ).rejects.toBeInstanceOf(AttachmentInputError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("conversation attachments", () => {
+  it("uses scoped conversation routes for list, upload and delete", async () => {
+    const collection = { contract_version: "v1", owner_type: "conversation", owner_id: "conv/a", attachments: [response] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(collection), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = makeClient(fetchMock);
+
+    expect(await listConversationAttachments(client, "conv/a")).toEqual(collection);
+    expect(await uploadConversationAttachment(client, "conv/a", new File(["data"], "notes.md"))).toEqual(response);
+    await deleteConversationAttachment(client, "conv/a", "attachment-1");
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:8000/conversations/conv%2Fa/attachments",
+      "http://localhost:8000/conversations/conv%2Fa/attachments",
+      "http://localhost:8000/conversations/conv%2Fa/attachments/attachment-1",
+    ]);
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[2][1]?.method).toBe("DELETE");
   });
 });
 

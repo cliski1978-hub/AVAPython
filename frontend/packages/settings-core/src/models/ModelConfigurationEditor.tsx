@@ -49,6 +49,7 @@ interface ModelFormValues {
   hosting_mode: ModelHostingMode;
   capabilities: CapabilityToggles;
   enabled: boolean;
+  context_window_tokens: string;
 }
 
 const emptyForm: ModelFormValues = {
@@ -59,6 +60,7 @@ const emptyForm: ModelFormValues = {
   hosting_mode: "local",
   capabilities: capabilityToggles(emptyCapabilities()),
   enabled: true,
+  context_window_tokens: "",
 };
 
 function formFromRecord(record: ModelConfigurationResponse): ModelFormValues {
@@ -70,6 +72,7 @@ function formFromRecord(record: ModelConfigurationResponse): ModelFormValues {
     hosting_mode: record.hosting_mode,
     capabilities: capabilityToggles(record.capabilities),
     enabled: record.enabled,
+    context_window_tokens: record.context_window_tokens == null ? "" : String(record.context_window_tokens),
   };
 }
 
@@ -110,6 +113,9 @@ function validateForm(
   }
   if (values.display_name.trim() === "") {
     errors.display_name = "A display name is required.";
+  }
+  if (values.context_window_tokens.trim() !== "" && (!/^\d+$/.test(values.context_window_tokens) || Number(values.context_window_tokens) <= 0)) {
+    errors.context_window_tokens = "Enter a positive whole number of tokens, or leave it blank.";
   }
   if (modelId !== "" && modelId === connectionId) {
     errors.model_id = "The model ID must be distinct from the provider connection ID.";
@@ -180,6 +186,7 @@ export function ModelConfigurationEditor({
             hosting_mode: values.hosting_mode,
             capabilities: capabilitiesFrom(values.capabilities, version),
             enabled: values.enabled,
+            context_window_tokens: values.context_window_tokens.trim() ? Number(values.context_window_tokens) : null,
           };
           await updateModelConfiguration(client, record.model_id, request);
           return;
@@ -193,6 +200,7 @@ export function ModelConfigurationEditor({
           hosting_mode: values.hosting_mode,
           capabilities: capabilitiesFrom(values.capabilities, version),
           enabled: values.enabled,
+          context_window_tokens: values.context_window_tokens.trim() ? Number(values.context_window_tokens) : null,
         };
         await createModelConfiguration(client, request);
       },
@@ -340,6 +348,15 @@ export function ModelConfigurationEditor({
           placeholder="Acme Large (EU)"
           error={errors.display_name}
           helpText="How this model appears in Settings and later selectors."
+        />
+
+        <Input
+          label="Context window size (tokens)"
+          type="number"
+          value={values.context_window_tokens}
+          onChange={(value) => set("context_window_tokens", value)}
+          error={errors.context_window_tokens}
+          helpText="Optional AVA context window for this model. Leave blank to use the provider-reported limit when available."
         />
 
         <Select

@@ -77,10 +77,15 @@ def test_create_get_list_duplicate_and_missing_behavior_match(repositories: Setu
     second = _model("ava.model.b", provider_model_name="provider-model-b", enabled=False)
     assert repositories.models.list() == []
     assert repositories.models.create(first) == first
+    configured_window = _model("ava.model.window", context_window_tokens=32768)
+    assert repositories.models.create(configured_window) == configured_window
+    assert repositories.models.get(configured_window.model_id) == configured_window
     assert repositories.models.create(second) == second
     assert repositories.models.get(first.model_id) == first
     assert repositories.models.get("missing") is None
-    assert [model.model_id for model in repositories.models.list()] == ["ava.model.a", "ava.model.b"]
+    assert [model.model_id for model in repositories.models.list()] == [
+        "ava.model.a", "ava.model.window", "ava.model.b"
+    ]
     with pytest.raises(ValueError, match="Model configuration already exists: ava.model.a"):
         repositories.models.create(first)
 
@@ -137,7 +142,7 @@ def test_v5_upgrades_a_v4_database_and_preserves_provider_connections(tmp_path) 
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 ("connection-a", "openai-compatible", "Connection A", None, True, None),
             )
-        assert MigrationRunner(database, default_registry()).migrate() == list(range(5, 19))
+        assert MigrationRunner(database, default_registry()).migrate() == list(range(5, 22))
         with database.connect() as connection:
             row = connection.execute(
                 "SELECT provider_id FROM provider_connections WHERE provider_connection_id = 'connection-a'"

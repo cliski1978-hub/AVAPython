@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { IconButton } from "./IconButton";
+import { Sidebar } from "./Sidebar";
 
 describe("IconButton", () => {
   it("renders the required accessible label and native tooltip", () => {
@@ -22,5 +23,10 @@ describe("IconButton", () => {
       </IconButton>,
     );
     expect(html).toContain('disabled=""');
+  });
+
+  it("keeps the sidebar toggle visually light in Dark mode", () => {
+    const html = renderToStaticMarkup(<Sidebar onToggle={() => undefined} />);
+    expect(html).toContain("dark:hover:bg-black");
   });
 });

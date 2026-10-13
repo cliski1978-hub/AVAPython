@@ -234,8 +234,8 @@ async def test_phase_5_82_fresh_app_reconstructs_the_durable_phase_5_graph(tmp_p
             content = {}
             for filename, raw in (
                 ("brief.txt", b"durable text\n"),
-                ("duplicate.txt", b"one"),
-                ("duplicate.txt", b"two"),
+                ("duplicate-one.txt", b"one"),
+                ("duplicate-two.txt", b"two"),
                 ("設計仕様書.bin", bytes([0, 255, 1, 128])),
                 ("empty.txt", b""),
             ):
@@ -360,7 +360,7 @@ async def test_phase_5_82_fresh_app_reconstructs_the_durable_phase_5_graph(tmp_p
                 assert [row["conversation_id"] for row in searched] == [ids["c1"]]
                 files = (await client.get(f"/projects/{ids['p1']}/files")).json()["files"]
                 assert len(files) == 5
-                assert len({row["id"] for row in files if row["file_name"] == "duplicate.txt"}) == 2
+                assert len({row["id"] for row in files if row["file_name"].startswith("duplicate-")}) == 2
                 for file_id, raw in content.items():
                     response = await client.get(f"/projects/{ids['p1']}/files/{file_id}/content")
                     assert response.content == raw
@@ -376,7 +376,7 @@ async def test_phase_5_82_fresh_app_reconstructs_the_durable_phase_5_graph(tmp_p
             with persistence.database.connect() as connection:
                 assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                 assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-                assert connection.execute("SELECT MAX(version) FROM ava_schema_migrations").fetchone()[0] == 18
+                assert connection.execute("SELECT MAX(version) FROM ava_schema_migrations").fetchone()[0] == 25
     finally:
         app_b.state.persistence.dispose()
 
@@ -472,10 +472,10 @@ async def test_phase_5_82_deleted_resources_and_cleanup_remain_deleted_after_res
             p_delete.id, file_name="project-owned.bin", content_type=None, source=BytesIO(b"owned by deleted project")
         )
         removed_file = app_a.state.project_file_service.create(
-            p_keep.id, file_name="duplicate.txt", content_type=None, source=BytesIO(b"remove this one")
+            p_keep.id, file_name="remove.txt", content_type=None, source=BytesIO(b"remove this one")
         )
         surviving_file = app_a.state.project_file_service.create(
-            p_keep.id, file_name="duplicate.txt", content_type=None, source=BytesIO(b"keep this sibling")
+            p_keep.id, file_name="surviving.txt", content_type=None, source=BytesIO(b"keep this sibling")
         )
         deleted_ref = deleted_conversation_file.content_ref
         removed_ref = removed_file.content_ref

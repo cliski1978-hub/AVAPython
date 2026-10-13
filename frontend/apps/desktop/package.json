@@ -13,6 +13,7 @@
   },
 "dependencies": {
     "@ava/api-client": "workspace:*",
+    "@ava/ui-core": "workspace:*",
     "@ava/workspace": "workspace:*",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"

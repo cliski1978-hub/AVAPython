@@ -137,21 +137,46 @@ describe("conversation folder sidebar", () => {
       folders={[folder("f1", "Engineering"), folder("f2", "Personal")]} activeConversationId="c1"
       onNewChat={noop} onSelect={selected} onMoveConversation={onMove} />);
     fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Selected" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to folder" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Personal" }));
+    expect(screen.getAllByRole("menuitem", { name: "Move" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move" }));
+    expect(screen.getByRole("dialog", { name: "Move Conversation" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Move destination"), { target: { value: "f2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
     await waitFor(() => expect(onMove).toHaveBeenCalledWith("c1", "f2"));
     expect(screen.getByText("Selected")).toBeTruthy();
     expect(selected).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Move Conversation" })).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Unable to move this conversation");
 
     rerender(<ConversationList conversations={[conversation("c1", "Selected", "f2")]}
       folders={[folder("f1", "Engineering"), folder("f2", "Personal")]} activeConversationId="c1"
       onNewChat={noop} onSelect={selected} onMoveConversation={onMove} />);
     fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Selected" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to folder" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Ungrouped" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move" }));
+    fireEvent.change(screen.getByLabelText("Move destination"), { target: { value: "__ungrouped__" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
     await waitFor(() => expect(onMove).toHaveBeenCalledWith("c1", null));
     expect(selected).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Move Conversation" })).toBeNull());
+  });
+
+  it("switches Move destinations by type and clears the previous destination", () => {
+    const project = { id: "p1", name: "Project One", description: null, instructions: null, is_archived: false,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", contract_version: "v1" as const };
+    render(<ConversationList conversations={[conversation("c1", "Selected", "f1")]} folders={[folder("f1", "Engineering")]}
+      projects={[project]} activeConversationId="c1" onNewChat={noop} onSelect={noop}
+      onMoveConversation={vi.fn().mockResolvedValue(undefined)} onSetConversationProject={vi.fn().mockResolvedValue(undefined)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Conversation actions for Selected" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move" }));
+    const destination = screen.getByLabelText("Move destination") as HTMLSelectElement;
+    expect(within(destination).getByRole("option", { name: "Project One" })).toBeTruthy();
+    expect(within(destination).queryByRole("option", { name: "Engineering" })).toBeNull();
+    fireEvent.change(destination, { target: { value: "p1" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Folder" }));
+    expect(destination.value).toBe("");
+    expect(within(destination).getByRole("option", { name: "Engineering" })).toBeTruthy();
+    expect(within(destination).queryByRole("option", { name: "Project One" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Move" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("registers conversation IDs and Folder/Ungrouped targets with dnd-kit", () => {

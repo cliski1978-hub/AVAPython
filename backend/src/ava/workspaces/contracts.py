@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 
 
 class WorkspaceKind(StrEnum):
@@ -28,6 +29,8 @@ class ResolvedWorkspace:
     info: WorkspaceInfo
     root_path: Path | None
     permissions: WorkspacePermissions
+    configuration_revision: int = 0
+    configured_capabilities: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,16 @@ class RuntimeWorkspaceBinding:
     kind: WorkspaceKind
     local_path: Path | None
     permissions: WorkspacePermissions
+    configuration_revision: int = 0
+    configured_capabilities: frozenset[str] | None = None
+
+
+class WorkspaceAccessLookupPort(Protocol):
+    """Current durable Workspace configuration lookup; it grants no caller authority."""
+
+    def resolve(self, workspace_id: str) -> tuple[bool, ResolvedWorkspace | None]:
+        """Return whether an identity is configured and its current binding, if usable."""
+        ...
 
 
 def bind_workspace(resolved: ResolvedWorkspace) -> RuntimeWorkspaceBinding:
@@ -51,4 +64,6 @@ def bind_workspace(resolved: ResolvedWorkspace) -> RuntimeWorkspaceBinding:
         kind=resolved.info.kind,
         local_path=resolved.root_path,
         permissions=resolved.permissions,
+        configuration_revision=resolved.configuration_revision,
+        configured_capabilities=resolved.configured_capabilities,
     )

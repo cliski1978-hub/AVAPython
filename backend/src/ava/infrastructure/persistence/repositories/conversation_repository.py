@@ -21,7 +21,9 @@ from ava.repositories.conversation_repository import (
     normalize_conversation_search,
 )
 
-_CONVERSATION_COLUMNS = "conversation_id, title, created_at, updated_at, is_pinned, is_archived, folder_id, project_id"
+_CONVERSATION_COLUMNS = (
+    "conversation_id, title, created_at, updated_at, is_pinned, is_archived, folder_id, project_id, is_title_custom"
+)
 _CONVERSATION_ORDER = "is_pinned DESC, updated_at DESC, created_at DESC, conversation_id ASC"
 
 # ============================================================
@@ -42,14 +44,24 @@ class RelationalConversationRepository(ConversationRepository):
         title: str,
         project_id: str | None = None,
         folder_id: str | None = None,
+        is_title_custom: bool = False,
     ) -> ConversationRecord:
         now = datetime.now(UTC)
         try:
             with self._database.transaction() as connection:
                 connection.execute(
-                    "INSERT INTO conversations (conversation_id, title, created_at, updated_at, project_id, folder_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (conversation_id, title, to_utc_iso(now), to_utc_iso(now), project_id, folder_id),
+                    "INSERT INTO conversations (conversation_id, title, created_at, updated_at, "
+                    "project_id, folder_id, is_title_custom) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        conversation_id,
+                        title,
+                        to_utc_iso(now),
+                        to_utc_iso(now),
+                        project_id,
+                        folder_id,
+                        int(is_title_custom),
+                    ),
                 )
         except sqlite3.Error as exc:
             raise translate_database_error(exc, entity="Conversation", key=conversation_id) from exc
@@ -60,6 +72,7 @@ class RelationalConversationRepository(ConversationRepository):
             updated_at=now,
             project_id=project_id,
             folder_id=folder_id,
+            is_title_custom=is_title_custom,
         )
 
     def get(self, conversation_id: str) -> ConversationRecord | None:
@@ -150,15 +163,43 @@ class RelationalConversationRepository(ConversationRepository):
             ).fetchone()
         return row_to_conversation_record(row) if row is not None else None
 
+    def relocate(
+        self, conversation_id: str, *, folder_id: str | None, project_id: str | None
+    ) -> ConversationRecord | None:
+        with self._database.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE conversations SET folder_id = ?, project_id = ? WHERE conversation_id = ?",
+                (folder_id, project_id, conversation_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return row_to_conversation_record(row) if row is not None else None
+
     def update_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
         now = datetime.now(UTC)
         with self._database.transaction() as connection:
             cursor = connection.execute(
-                "UPDATE conversations SET title = ?, updated_at = ? WHERE conversation_id = ?",
+                "UPDATE conversations SET title = ?, updated_at = ?, is_title_custom = 1 WHERE conversation_id = ?",
                 (title, to_utc_iso(now), conversation_id),
             )
             if cursor.rowcount == 0:
                 return None
+            row = connection.execute(
+                f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return row_to_conversation_record(row) if row is not None else None
+
+    def update_auto_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
+        with self._database.transaction() as connection:
+            connection.execute(
+                "UPDATE conversations SET title = ? WHERE conversation_id = ? AND is_title_custom = 0",
+                (title, conversation_id),
+            )
             row = connection.execute(
                 f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),

@@ -19,12 +19,13 @@ export function UserMessage({ content }: UserMessageProps) {
       <div
         data-message-bubble="user"
         style={{
+          width: "fit-content",
           maxWidth: "68%",
           minWidth: 0,
           boxSizing: "border-box",
-          background: t.colors.primary,
-          color: t.colors.onPrimary,
-          borderRadius: 999,
+          background: "hsl(var(--primary))",
+          color: "hsl(var(--primary-foreground))",
+          borderRadius: t.radius.lg,
           padding: "10px 14px",
           whiteSpace: "pre-wrap",
           lineHeight: 1.5,

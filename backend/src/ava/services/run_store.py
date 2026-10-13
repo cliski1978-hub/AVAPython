@@ -8,8 +8,9 @@ cache, or queue. Assistant content intentionally lives in events, never here.
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.responses import ACTIVE_RUN_STATUSES, RunStatus
+from ava.contracts.run_inspection import RunInspectionSnapshot
 from ava.repositories.run_repository import (
     ActiveConversationRunError,
     RunRecord,
@@ -37,6 +38,7 @@ class RunStore(RunRepository):
         *,
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.CHAT,
     ) -> RunRecord:
         """Create a new pending run record.
 
@@ -63,6 +65,7 @@ class RunStore(RunRepository):
             updated_at=now,
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
+            execution_mode=execution_mode,
         )
         self._runs[run_id] = record
         return record
@@ -125,6 +128,20 @@ class RunStore(RunRepository):
         updated = replace(record, execution_selection=selection, updated_at=datetime.now(UTC))
         self._runs[run_id] = updated
         return updated
+
+    def set_inspection_snapshot(self, run_id: str, snapshot: RunInspectionSnapshot) -> RunRecord | None:
+        record = self._runs.get(run_id)
+        if record is None:
+            return None
+        updated = replace(record, inspection_snapshot=snapshot, updated_at=datetime.now(UTC))
+        self._runs[run_id] = updated
+        return updated
+
+    def list_for_conversation(self, conversation_id: str) -> list[RunRecord]:
+        return sorted(
+            (record for record in self._runs.values() if record.conversation_id == conversation_id),
+            key=lambda record: (record.created_at, record.run_id),
+        )
 
     def set_assistant_message_id(self, run_id: str, assistant_message_id: str) -> RunRecord | None:
         record = self._runs.get(run_id)

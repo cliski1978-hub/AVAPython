@@ -69,9 +69,10 @@ class ModelProfile:
     """One configured model deployment in the AVA catalog (v1).
 
     Fields are intentionally minimal: stable identity, display label, provider
-    deployment identity, hosting placement, *declared* capabilities, and an
-    operational catalog flag. Future increments (lineage, licensing, measured
-    qualification, resource state) will extend this type additively.
+    deployment identity, hosting placement, *declared* capabilities, an
+    optional configured context window, and an operational catalog flag. Future
+    increments (lineage, licensing, measured qualification, resource state)
+    will extend this type additively.
 
     Security: a profile never carries a shell/write/network/workspace/sandbox
     grant and never carries a credential. ``provider_model_name`` is a
@@ -86,6 +87,7 @@ class ModelProfile:
     hosting_mode: ModelHostingMode
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
     enabled: bool = True
+    context_window_tokens: int | None = None
 
 
 # ============================================================

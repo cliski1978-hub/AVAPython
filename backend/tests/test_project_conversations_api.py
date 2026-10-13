@@ -219,7 +219,7 @@ def test_project_conversation_routes_work_after_startup_upgrades_schema_12_datab
                 "SELECT COUNT(*) FROM conversations WHERE conversation_id = ?",
                 ("conversation-pre-relationship",),
             ).fetchone()[0]
-        assert schema_version == 18
+        assert schema_version == 21
         assert stored_project_id == "project-live"
         assert old_chat_count == 1
     finally:

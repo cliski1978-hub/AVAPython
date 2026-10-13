@@ -8,15 +8,20 @@ seam arrives in Step 4.14.B+).
 ``create`` is the validation boundary this slice guarantees: the owner pair
 must be both-set or both-``None``, ``size_bytes`` must be non-negative, and
 a duplicate ``attachment_id`` or duplicate ``storage_key`` is a
-``ValueError``. Duplicate display filenames are allowed.
+``ValueError``. Conversation attachment filenames are unique within their
+Conversation after trimming and Unicode case-folding; other owner types retain
+their existing filename behavior.
 """
 
 from collections.abc import Collection
+from threading import RLock
 
 from ava.contracts.attachments import AttachmentOwnerType, AttachmentStatus
 from ava.repositories.attachment_repository import (
     AttachmentRecord,
     AttachmentRepository,
+    DuplicateConversationAttachmentNameError,
+    normalize_conversation_attachment_name,
 )
 
 # ============================================================
@@ -35,6 +40,7 @@ class InMemoryAttachmentRepository(AttachmentRepository):
     def __init__(self) -> None:
         self._attachments: dict[str, AttachmentRecord] = {}
         self._storage_keys: set[str] = set()
+        self._lock = RLock()
 
     def create(self, record: AttachmentRecord) -> AttachmentRecord:
         """Persist a new attachment metadata record.
@@ -50,20 +56,35 @@ class InMemoryAttachmentRepository(AttachmentRepository):
                 ``storage_key`` already exists, if the owner pair is not
                 both-set/both-``None``, or if ``size_bytes`` is negative.
         """
-        if record.attachment_id in self._attachments:
-            raise ValueError(f"Attachment already exists: {record.attachment_id}")
-        if record.storage_key in self._storage_keys:
-            raise ValueError(f"Attachment storage key already in use: {record.storage_key}")
-        if (record.owner_type is None) != (record.owner_id is None):
-            raise ValueError(
-                "owner_type and owner_id must be both set or both None, "
-                f"got owner_type={record.owner_type!r} owner_id={record.owner_id!r}"
-            )
-        if record.size_bytes < 0:
-            raise ValueError(f"size_bytes must be non-negative: {record.size_bytes}")
-        self._attachments[record.attachment_id] = record
-        self._storage_keys.add(record.storage_key)
-        return record
+        with self._lock:
+            if record.attachment_id in self._attachments:
+                raise ValueError(f"Attachment already exists: {record.attachment_id}")
+            if record.storage_key in self._storage_keys:
+                raise ValueError(f"Attachment storage key already in use: {record.storage_key}")
+            if (record.owner_type is None) != (record.owner_id is None):
+                raise ValueError(
+                    "owner_type and owner_id must be both set or both None, "
+                    f"got owner_type={record.owner_type!r} owner_id={record.owner_id!r}"
+                )
+            if record.size_bytes < 0:
+                raise ValueError(f"size_bytes must be non-negative: {record.size_bytes}")
+            if record.owner_type is AttachmentOwnerType.CONVERSATION:
+                normalized_name = normalize_conversation_attachment_name(record.file_name)
+                existing = next(
+                    (
+                        item
+                        for item in self._attachments.values()
+                        if item.owner_type is AttachmentOwnerType.CONVERSATION
+                        and item.owner_id == record.owner_id
+                        and normalize_conversation_attachment_name(item.file_name) == normalized_name
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    raise DuplicateConversationAttachmentNameError(existing.file_name)
+            self._attachments[record.attachment_id] = record
+            self._storage_keys.add(record.storage_key)
+            return record
 
     def get(self, attachment_id: str) -> AttachmentRecord | None:
         """Return the attachment's metadata snapshot, or ``None`` if unknown."""
@@ -127,6 +148,13 @@ class InMemoryAttachmentRepository(AttachmentRepository):
         )
         self._attachments[attachment_id] = refreshed
         return refreshed
+
+    def delete(self, attachment_id: str) -> AttachmentRecord | None:
+        with self._lock:
+            record = self._attachments.pop(attachment_id, None)
+            if record is not None:
+                self._storage_keys.discard(record.storage_key)
+            return record
 
     def clear(self) -> None:
         """Remove all attachment metadata and forget every storage key.

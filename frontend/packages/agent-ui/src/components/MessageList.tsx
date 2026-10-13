@@ -31,9 +31,9 @@ function SystemMessage({ content }: { content: string }) {
         margin: 0,
         textAlign: "center",
         fontSize: t.font.sizeXs,
-        color: t.colors.mutedText,
         fontStyle: "italic",
       }}
+      className="text-muted-foreground"
     >
       {content}
     </p>

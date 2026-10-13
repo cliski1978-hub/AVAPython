@@ -67,9 +67,9 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
     try:
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert [m.version for m in runner.pending_migrations()] == list(range(1, 19))
-        assert runner.migrate() == list(range(1, 19))
-        assert runner.current_version() == 18
+        assert [m.version for m in runner.pending_migrations()] == list(range(1, 28))
+        assert runner.migrate() == list(range(1, 28))
+        assert runner.current_version() == 27
         assert list(runner.pending_migrations()) == []
         tables = _tables(database)
         assert {
@@ -108,6 +108,15 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             (16, "Scoped CORE prompt assignments"),
             (17, "Project execution defaults"),
             (18, "Project files"),
+            (19, "Conversation title ownership"),
+            (20, "Run inspection snapshots"),
+            (21, "Configured model context windows"),
+            (22, "Conversation context summaries"),
+            (23, "Project file name uniqueness"),
+            (24, "tool feature configuration"),
+            (25, "workspace access configuration"),
+            (26, "durable tool approvals"),
+            (27, "run execution mode"),
         ]
         assert applied[0].applied_at
     finally:
@@ -122,9 +131,107 @@ def test_migrate_is_idempotent_for_an_already_current_database() -> None:
         runner.migrate()
         tables_before = _tables(database)
         assert runner.migrate() == []
-        assert runner.current_version() == 18
+        assert runner.current_version() == 27
         assert _tables(database) == tables_before
-        assert _metadata_versions(database) == list(range(1, 19))
+        assert _metadata_versions(database) == list(range(1, 28))
+    finally:
+        database.dispose()
+        path.unlink()
+
+
+def test_project_file_name_migration_reports_existing_duplicates_without_cleanup() -> None:
+    from ava.infrastructure.persistence.migrations.versions.v0023_project_file_name_uniqueness import migrate_up
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "CREATE TABLE project_files (id TEXT, project_id TEXT, file_name TEXT, content_type TEXT, "
+        "size_bytes INTEGER, content_ref TEXT, created_at TEXT, updated_at TEXT)"
+    )
+    connection.executemany(
+        "INSERT INTO project_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("file-1", "project-a", "SKILL.md", "text/markdown", 1, "blob-1", "now", "now"),
+            ("file-2", "project-a", "skill.md ", "text/markdown", 2, "blob-2", "now", "now"),
+            ("file-3", "project-b", "SKILL.md", "text/markdown", 3, "blob-3", "now", "now"),
+        ],
+    )
+
+    with pytest.raises(MigrationError, match="No files or records were changed") as error:
+        migrate_up(connection)
+
+    assert "project-a" in str(error.value)
+    assert "file-1" in str(error.value) and "file-2" in str(error.value)
+    assert connection.execute("SELECT COUNT(*) FROM project_files").fetchone()[0] == 3
+    assert "normalized_file_name" not in {row[1] for row in connection.execute("PRAGMA table_info(project_files)")}
+    connection.close()
+
+
+def test_project_file_name_migration_preserves_existing_unique_metadata() -> None:
+    database, path = _file_database()
+    try:
+        through_22 = MigrationRegistry()
+        for migration in default_registry():
+            if migration.version <= 22:
+                through_22.register(migration)
+        assert MigrationRunner(database, through_22).migrate() == list(range(1, 23))
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO projects(id,name,created_at,updated_at) VALUES ('project-a','A','now','now')"
+            )
+            connection.execute(
+                "INSERT INTO project_files("
+                "id,project_id,file_name,content_type,size_bytes,content_ref,created_at,updated_at) "
+                "VALUES ('file-a','project-a','SKILL.md','text/markdown',12,'blob-a','created','updated')"
+            )
+
+        assert MigrationRunner(database, default_registry()).migrate() == [23, 24, 25, 26, 27]
+        with database.connect() as connection:
+            row = connection.execute(
+                "SELECT id,project_id,file_name,content_type,size_bytes,content_ref,created_at,updated_at,"
+                "normalized_file_name FROM project_files WHERE id='file-a'"
+            ).fetchone()
+        assert tuple(row) == (
+            "file-a",
+            "project-a",
+            "SKILL.md",
+            "text/markdown",
+            12,
+            "blob-a",
+            "created",
+            "updated",
+            "skill.md",
+        )
+    finally:
+        database.dispose()
+        path.unlink()
+
+
+def test_migration_0019_marks_previously_renamed_conversations() -> None:
+    database, path = _file_database()
+    try:
+        through_18 = MigrationRegistry()
+        for migration in default_registry():
+            if migration.version <= 18:
+                through_18.register(migration)
+        assert MigrationRunner(database, through_18).migrate() == list(range(1, 19))
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO conversations(conversation_id,title,created_at,updated_at) "
+                "VALUES ('renamed','Custom title','2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')"
+            )
+            connection.execute(
+                "INSERT INTO conversations(conversation_id,title,created_at,updated_at) "
+                "VALUES ('untouched','New Conversation','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+            )
+
+        assert MigrationRunner(database, default_registry()).migrate() == [19, 20, 21, 22, 23, 24, 25, 26, 27]
+        with database.connect() as connection:
+            rows = connection.execute(
+                "SELECT conversation_id,is_title_custom FROM conversations ORDER BY conversation_id"
+            ).fetchall()
+            states = {row["conversation_id"]: row["is_title_custom"] for row in rows}
+        assert states == {"renamed": 1, "untouched": 0}
     finally:
         database.dispose()
         path.unlink()
@@ -150,9 +257,23 @@ def test_migration_0015_upgrades_version_14_without_resetting_existing_data() ->
                 "VALUES ('existing-conversation', 'Keep conversation', "
                 "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 0, 0, NULL, 'existing-project')"
             )
-        assert MigrationRunner(database, default_registry()).migrate() == [15, 16, 17, 18]
+        assert MigrationRunner(database, default_registry()).migrate() == [
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+        ]
         assert MigrationRunner(database, default_registry()).migrate() == []
-        assert MigrationRunner(database, default_registry()).current_version() == 18
+        assert MigrationRunner(database, default_registry()).current_version() == 27
         with database.connect() as connection:
             project_name = connection.execute("SELECT name FROM projects WHERE id='existing-project'").fetchone()[0]
             assert project_name == "Keep me"
@@ -218,7 +339,7 @@ def test_migration_0017_upgrades_populated_schema_16_additively() -> None:
             )
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == [17, 18]
+        assert runner.migrate() == [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
         assert runner.migrate() == []
         with database.connect() as connection:
             project = connection.execute(
@@ -236,6 +357,10 @@ def test_migration_0017_upgrades_populated_schema_16_additively() -> None:
             ):
                 assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
             assert connection.execute("SELECT COUNT(*) FROM project_files").fetchone()[0] == 0
+            columns = connection.execute("PRAGMA table_info(project_files)").fetchall()
+            assert columns[-1]["name"] == "normalized_file_name"
+            index_names = {row["name"] for row in connection.execute("PRAGMA index_list(project_files)")}
+            assert "ux_project_files_project_normalized_name" in index_names
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
@@ -251,7 +376,7 @@ def test_migration_records_version_and_name_metadata() -> None:
             rows = connection.execute(
                 "SELECT version, name, applied_at FROM ava_schema_migrations ORDER BY version"
             ).fetchall()
-        assert len(rows) == 18
+        assert len(rows) == 27
         assert [(row["version"], row["name"]) for row in rows] == [
             (1, "initial application persistence schema"),
             (2, "document revision history"),
@@ -271,6 +396,15 @@ def test_migration_records_version_and_name_metadata() -> None:
             (16, "Scoped CORE prompt assignments"),
             (17, "Project execution defaults"),
             (18, "Project files"),
+            (19, "Conversation title ownership"),
+            (20, "Run inspection snapshots"),
+            (21, "Configured model context windows"),
+            (22, "Conversation context summaries"),
+            (23, "Project file name uniqueness"),
+            (24, "tool feature configuration"),
+            (25, "workspace access configuration"),
+            (26, "durable tool approvals"),
+            (27, "run execution mode"),
         ]
         assert rows[0]["applied_at"].startswith("20")
         assert rows[1]["applied_at"].startswith("20")
@@ -490,13 +624,14 @@ def test_migrate_adopts_a_legacy_step4_6_database_without_destroying_data() -> N
 
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert runner.migrate() == list(range(1, 19))
-        assert runner.current_version() == 18
-        assert _metadata_versions(database) == list(range(1, 19))
+        assert runner.migrate() == list(range(1, 28))
+        assert runner.current_version() == 27
+        assert _metadata_versions(database) == list(range(1, 28))
         with database.connect() as connection:
-            row = connection.execute("SELECT run_id, status FROM runs").fetchone()
+                row = connection.execute("SELECT run_id, status, execution_mode FROM runs").fetchone()
         assert row["run_id"] == "legacy-run"
         assert row["status"] == "completed"
+        assert row["execution_mode"] == "chat"
         assert "document_revisions" in _tables(database)
         assert "attachments" in _tables(database)
         assert list(runner.pending_migrations()) == []
@@ -556,8 +691,8 @@ def test_legacy_v1_v2_database_upgrades_to_v3_without_backfill() -> None:
         assert "document_revisions" in before
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
-        assert _metadata_versions(database) == list(range(1, 19))
+        assert runner.migrate() == list(range(3, 28))
+        assert _metadata_versions(database) == list(range(1, 28))
 
         with database.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
@@ -584,7 +719,7 @@ def test_create_relational_repositories_adopts_a_legacy_database_usable_through_
         assert repositories.run_repository.get("via-port") is not None
         repositories.dispose()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 18
+            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 27
     finally:
         path.unlink()
 
@@ -834,7 +969,7 @@ def test_migrated_file_database_keeps_schema_and_data_across_reopen() -> None:
 
         reopened = SqliteDatabase(str(path), auto_migrate=False)
         runner = MigrationRunner(reopened, default_registry())
-        assert runner.current_version() == 18
+        assert runner.current_version() == 27
         assert runner.migrate() == []
         with reopened.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
@@ -919,10 +1054,10 @@ def test_v9_leaves_existing_runs_with_no_cancellation_request() -> None:
         try:
             runner = MigrationRunner(reopened, default_registry())
             assert runner.current_version() == 8
-            assert runner.migrate() == [9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+            assert runner.migrate() == [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
 
             with reopened.connect() as connection:
-                assert _table_columns(connection, "runs")[-1] == "cancellation_requested_at"
+                assert "cancellation_requested_at" in _table_columns(connection, "runs")
                 rows = connection.execute(
                     "SELECT run_id, status, cancellation_requested_at FROM runs ORDER BY run_id"
                 ).fetchall()
@@ -956,6 +1091,8 @@ def test_v9_preserves_the_existing_runs_table_and_its_rows() -> None:
                     "source_user_message_id",
                     "assistant_message_id",
                     "cancellation_requested_at",
+                    "inspection_snapshot",
+                    "execution_mode",
                 )
                 assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
                 assert (

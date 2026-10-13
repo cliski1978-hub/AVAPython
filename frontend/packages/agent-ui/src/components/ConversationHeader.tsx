@@ -15,23 +15,22 @@ export function ConversationHeader({ title }: ConversationHeaderProps) {
         alignItems: "center",
         gap: t.spacing.md,
         padding: `${t.spacing.md}px ${t.spacing.lg}px`,
-        borderBottom: `${t.border.width}px solid ${t.colors.border}`,
-        background: t.colors.background,
         flexShrink: 0,
         boxSizing: "border-box",
         minHeight: 40,
       }}
+      className="border-b border-border bg-background text-foreground"
     >
       <h2
         style={{
           margin: 0,
           fontSize: t.font.sizeSm,
           fontWeight: t.font.weightSemibold,
-          color: t.colors.foreground,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
         }}
+        className="text-foreground"
       >
         {title ?? "New Conversation"}
       </h2>

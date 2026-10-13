@@ -125,6 +125,7 @@ describe("Checkbox", () => {
     const box = screen.getByLabelText("Enabled") as HTMLInputElement;
     expect(box.type).toBe("checkbox");
     expect(box.checked).toBe(true);
+    expect((screen.getByText("Enabled") as HTMLLabelElement).style.color).toBe("hsl(var(--foreground))");
   });
 
   it("reports the toggled state", () => {

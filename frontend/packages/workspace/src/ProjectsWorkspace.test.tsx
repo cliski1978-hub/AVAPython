@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectsWorkspace, type ProjectsWorkspaceProps } from "./ProjectsWorkspace";
+import type { Conversation } from "@ava/agent-ui";
 
 vi.mock("@ava/api-client", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@ava/api-client")>();
@@ -84,6 +85,64 @@ beforeEach(() => {
 });
 
 describe("Projects page", () => {
+  it("keeps Project B authoritative when Project A's detail response arrives late", async () => {
+    let resolveA!: (value: ReturnType<typeof project>) => void;
+    const delayedA = new Promise<ReturnType<typeof project>>((resolve) => { resolveA = resolve; });
+    vi.mocked(getProject).mockImplementation((_client, id) => id === "p-a" ? delayedA : Promise.resolve(project("p-b", "Project B")));
+    const view = renderPage("p-a");
+    view.rerender(<ProjectsWorkspace client={client} active projectId="p-b" onOpenProject={vi.fn()} onBackToProjects={vi.fn()} />);
+    expect(screen.queryByRole("heading", { name: "Project A" })).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Project B" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Project A" })).toBeNull();
+
+    resolveA(project("p-a", "Project A"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Project B" })).toBeTruthy());
+    expect(screen.queryByRole("heading", { name: "Project A" })).toBeNull();
+  });
+
+  it("ignores late Project A conversation references after Project B is selected", async () => {
+    type ConversationList = Awaited<ReturnType<typeof listProjectConversations>>;
+    const conversation = (id: string, title: string, projectId: string) => ({
+      id, title, createdAt: "2026-01-01T00:00:00Z", projectId, messages: [],
+    });
+    const projectConversationList = (conversationId: string): ConversationList => ({
+      conversations: [{
+        conversation_id: conversationId,
+        title: conversationId,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        is_pinned: false,
+        is_archived: false,
+        folder_id: null,
+        project_id: conversationId === "a-chat" ? "p-a" : "p-b",
+        contract_version: "v1",
+      }],
+      contract_version: "v1",
+    });
+    let resolveA!: (value: ConversationList) => void;
+    const delayedA = new Promise<ConversationList>((resolve) => { resolveA = resolve; });
+    vi.mocked(getProject).mockImplementation(async (_client, id) => project(id, id === "p-a" ? "Project A" : "Project B"));
+    vi.mocked(listProjectConversations).mockImplementation(async (_client, id) => id === "p-a"
+      ? delayedA
+      : projectConversationList("b-chat"));
+    const view = renderPage("p-a", vi.fn(), {
+      conversations: [conversation("a-chat", "A conversation", "p-a"), conversation("b-chat", "B conversation", "p-b")],
+    });
+    await screen.findByRole("heading", { name: "Project A" });
+    fireEvent.click(screen.getByRole("tab", { name: "Conversations" }));
+    await waitFor(() => expect(listProjectConversations).toHaveBeenCalledWith(client, "p-a"));
+
+    view.rerender(<ProjectsWorkspace client={client} active projectId="p-b" onOpenProject={vi.fn()} onBackToProjects={vi.fn()} conversations={[
+      conversation("a-chat", "A conversation", "p-a"), conversation("b-chat", "B conversation", "p-b"),
+    ]} />);
+    await screen.findByRole("heading", { name: "Project B" });
+    fireEvent.click(screen.getByRole("tab", { name: "Conversations" }));
+    expect(await screen.findByRole("button", { name: "B conversation" })).toBeTruthy();
+    resolveA(projectConversationList("a-chat"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "A conversation" })).toBeNull());
+    expect(screen.getByRole("button", { name: "B conversation" })).toBeTruthy();
+  });
+
   it("preserves backend order while grouping active and archived Projects", async () => {
     vi.mocked(listProjects).mockResolvedValue({
       projects: [project("p-a", "Alpha"), project("p-z", "Zulu"), project("p-old", "Archived", true)],
@@ -96,6 +155,8 @@ describe("Projects page", () => {
     expect(screen.getByRole("heading", { name: "Active Projects" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Archived Projects" })).toBeTruthy();
     expect(container.querySelectorAll("article")).toHaveLength(3);
+    expect(container.querySelector("article")?.className).toContain("dark:bg-black");
+    expect(container.querySelector("article")?.className).toContain("dark:text-white");
     expect(screen.getAllByRole("button", { name: "Archive" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
   });
@@ -226,9 +287,55 @@ describe("Projects page", () => {
     vi.mocked(deleteProject).mockResolvedValue(undefined);
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete Project" }));
+    const dialog = screen.getByRole("dialog");
+    const checkbox = within(dialog).getByRole("checkbox", { name: "Also permanently delete all conversations in this Project" });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete Project" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "One" })).toBeNull());
     expect(deleteProject).toHaveBeenCalledWith(client, "p-1");
+  });
+
+  it("starts Project deletion safely unchecked and explicitly passes the optional cascade choice", async () => {
+    vi.mocked(listProjects).mockResolvedValue({ projects: [project("p-1", "One")], contract_version: "v1" });
+    vi.mocked(deleteProject).mockResolvedValue(undefined);
+    const chat: Conversation = { id: "c-1", title: "Keep or delete", createdAt: "2026-01-01T00:00:00Z",
+      projectId: "p-1", folderId: "f-1", messages: [], run: undefined };
+    const onProjectDeleted = vi.fn();
+    const first = renderPage(null, vi.fn(), { conversations: [chat], onProjectDeleted });
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog");
+    const checkbox = within(dialog).getByRole("checkbox", { name: /Also permanently delete all 1 conversations/i }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete Project" }));
+    await waitFor(() => expect(deleteProject).toHaveBeenCalledWith(client, "p-1"));
+    expect(onProjectDeleted).toHaveBeenCalledWith("p-1", []);
+    first.unmount();
+
+    vi.mocked(listProjects).mockResolvedValue({ projects: [project("p-1", "One")], contract_version: "v1" });
+    vi.mocked(deleteProject).mockResolvedValue(["c-1"]);
+    const second = renderPage(null, vi.fn(), { conversations: [chat], onProjectDeleted });
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const secondDialog = screen.getByRole("dialog");
+    const secondCheckbox = within(secondDialog).getByRole("checkbox", { name: /Also permanently delete all 1 conversations/i });
+    fireEvent.click(secondCheckbox);
+    fireEvent.click(within(secondDialog).getByRole("button", { name: "Delete Project" }));
+    await waitFor(() => expect(deleteProject).toHaveBeenLastCalledWith(client, "p-1", { deleteConversations: true }));
+    expect(onProjectDeleted).toHaveBeenLastCalledWith("p-1", ["c-1"]);
+    second.unmount();
+  });
+
+  it("keeps confirmation open and explains when an active Project run prevents the cascade", async () => {
+    vi.mocked(listProjects).mockResolvedValue({ projects: [project("p-1", "One")], contract_version: "v1" });
+    vi.mocked(deleteProject).mockRejectedValueOnce(new ApiError("active run", 409, { error_code: "conversation_run_active" }));
+    const chat: Conversation = { id: "c-1", title: "Active", createdAt: "2026-01-01T00:00:00Z",
+      projectId: "p-1", folderId: null, messages: [], run: undefined };
+    renderPage(null, vi.fn(), { conversations: [chat] });
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("checkbox"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete Project" }));
+    expect(await within(dialog).findByText(/cannot be deleted while a response is active/i)).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
 

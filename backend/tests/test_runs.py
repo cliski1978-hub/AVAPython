@@ -454,8 +454,10 @@ def test_openapi_exposes_run_endpoints_with_ava_schemas() -> None:
     assert "/runs/{run_id}/cancel" in paths
     assert "/runs/{run_id}" in paths
     assert "/runs/{run_id}/events" in paths
+    assert "/runs/{run_id}/inspection" in paths
     assert "get" in spec["paths"]["/runs/{run_id}"]
     assert "get" in spec["paths"]["/runs/{run_id}/events"]
+    assert "get" in spec["paths"]["/runs/{run_id}/inspection"]
     assert spec["paths"]["/runs"]["post"]["responses"]["202"]["content"][
         "application/json"
     ]["schema"]["$ref"].endswith("RunResponse")
@@ -469,6 +471,27 @@ def test_openapi_exposes_run_endpoints_with_ava_schemas() -> None:
     assert {"run_id", "status", "contract_version"} <= set(
         schemas["RunResponse"]["properties"]
     )
+
+
+def test_inspection_endpoint_and_conversation_run_list_share_backend_run_identity() -> None:
+    with make_client() as client:
+        conversation = client.post("/conversations", json={}).json()
+        started = client.post("/runs", json={
+            "prompt": "inspect this run",
+            "conversation_id": conversation["conversation_id"],
+        })
+        assert started.status_code == 202
+        run_id = started.json()["run_id"]
+        listed = client.get(f"/runs?conversation_id={conversation['conversation_id']}")
+        inspected = client.get(f"/runs/{run_id}/inspection")
+
+    assert listed.status_code == 200
+    assert [item["run_id"] for item in listed.json()] == [run_id]
+    assert inspected.status_code == 200
+    body = inspected.json()
+    assert body["run_id"] == run_id
+    assert body["conversation_id"] == conversation["conversation_id"]
+    assert isinstance(body["events"], list)
 
 
 # ============================================================

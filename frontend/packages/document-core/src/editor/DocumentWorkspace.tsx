@@ -1,6 +1,6 @@
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Button, Divider, Input, defaultTheme } from "@ava/ui-core";
+import { Button, Input, Redo2Icon, Undo2Icon, defaultTheme, shadcn } from "@ava/ui-core";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useDocuments } from "../state/DocumentProvider";
@@ -41,13 +41,13 @@ const EMPTY_TOOLBAR: ToolbarState = {
 const t = defaultTheme;
 
 const surfaceVars = {
-  "--ava-bg": t.colors.background,
-  "--ava-surface": t.colors.surface,
-  "--ava-border": t.colors.border,
-  "--ava-foreground": t.colors.foreground,
-  "--ava-muted": t.colors.mutedText,
-  "--ava-focus": t.colors.focusRing,
-  "--ava-primary": t.colors.primary,
+  "--ava-bg": "hsl(var(--background))",
+  "--ava-surface": "hsl(var(--muted))",
+  "--ava-border": "hsl(var(--border))",
+  "--ava-foreground": "hsl(var(--foreground))",
+  "--ava-muted": "hsl(var(--muted-foreground))",
+  "--ava-focus": "hsl(var(--ring))",
+  "--ava-primary": "hsl(var(--primary))",
   "--ava-font": t.font.family,
 } as unknown as CSSProperties;
 
@@ -57,8 +57,8 @@ const surfaceStyle: CSSProperties = {
   flexDirection: "column",
   overflow: "hidden",
   minWidth: 0,
-  background: t.colors.background,
-  color: t.colors.foreground,
+  background: "hsl(var(--background))",
+  color: "hsl(var(--foreground))",
   ...surfaceVars,
 };
 
@@ -214,9 +214,9 @@ export function DocumentWorkspace() {
         ) : <strong>{activeDocument.title}</strong>}
         {activeDocument.isDirty && <span>Unsaved changes</span>}
         <div className="ava-doc-actions">
-          <Button ariaLabel="Rename document" disabled={renaming} onClick={beginRename}>Rename</Button>
-          <Button variant="primary" ariaLabel="Save document" disabled={!activeDocument.isDirty} onClick={() => saveDocument(activeDocument.id)}>Save</Button>
-          <Button variant="danger" ariaLabel="Close document" onClick={closeActiveDocument}>Close</Button>
+          <Button variant="secondary" ariaLabel="Rename document" disabled={renaming} onClick={beginRename}>Rename</Button>
+          <Button variant="secondary" ariaLabel="Save document" disabled={!activeDocument.isDirty} onClick={() => saveDocument(activeDocument.id)}>Save</Button>
+          <Button variant="secondary" ariaLabel="Close document" onClick={closeActiveDocument}>Close</Button>
         </div>
       </div>
       <div
@@ -245,7 +245,6 @@ export function DocumentWorkspace() {
         >
           I
         </Button>
-        <Divider orientation="vertical" spacing={4} />
         <Button
           variant={toolbar.heading1 ? "secondary" : "ghost"}
           ariaPressed={toolbar.heading1}
@@ -268,7 +267,6 @@ export function DocumentWorkspace() {
         >
           H2
         </Button>
-        <Divider orientation="vertical" spacing={4} />
         <Button
           variant={toolbar.bulletList ? "secondary" : "ghost"}
           ariaPressed={toolbar.bulletList}
@@ -291,25 +289,28 @@ export function DocumentWorkspace() {
         >
           1.
         </Button>
-        <Divider orientation="vertical" spacing={4} />
-        <Button
-          variant="default"
-          ariaLabel="Undo"
-          title="Undo"
+        <shadcn.IconButton
+          icon={Undo2Icon}
+          label="Undo"
+          tooltip="Undo"
+          variant="ghost"
+          appearance="row-action"
+          size="compact"
+          className="ava-doc-history-action"
           disabled={!toolbar.canUndo}
           onClick={() => run(() => editor.chain().focus().undo().run())}
-        >
-          Undo
-        </Button>
-        <Button
-          variant="default"
-          ariaLabel="Redo"
-          title="Redo"
+        />
+        <shadcn.IconButton
+          icon={Redo2Icon}
+          label="Redo"
+          tooltip="Redo"
+          variant="ghost"
+          appearance="row-action"
+          size="compact"
+          className="ava-doc-history-action"
           disabled={!toolbar.canRedo}
           onClick={() => run(() => editor.chain().focus().redo().run())}
-        >
-          Redo
-        </Button>
+        />
       </div>
       <div className="ava-doc-scroll">
         <div className="ava-doc-page">

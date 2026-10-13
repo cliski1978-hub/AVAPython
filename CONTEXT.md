@@ -11,16 +11,16 @@ A flat, AVA-owned organizational grouping that conversations may reference by ID
 A durable AVA workspace and context boundary that may own conversations and related context. A conversation belongs to at most one Project and may belong to none. Unlike a Conversation Folder, a Project defines a workspace boundary rather than only organizing conversations.
 
 **CORE System Prompt**:
-An AVA-owned reusable prompt definition identified by an opaque ID. Its category organizes the definition and does not determine where it applies. Definitions are distinct from scoped assignments and execution injection; Project instructions remain separate Project-specific customization.
+An AVA-owned reusable prompt definition identified by an opaque ID. Its category organizes the definition and does not determine where it applies. Every enabled definition is included in the global prompt baseline for plain, Folder, Project, and Conversation runs. Scoped assignments override that baseline where they apply; an explicit disable can suppress a definition at a scope, and a nearer explicit enable can re-enable it. Project instructions remain separate Project-specific customization.
 
 **CORE Prompt Assignment**:
-An explicit enable/disable override for one reusable CORE prompt at one supported scope. It stores only prompt identity, scope identity, mode, and timestamps. No assignment row means INHERIT. Assignment storage does not itself resolve inherited prompt stacks.
+An explicit enable/disable override for one reusable CORE prompt at one supported scope. It stores only prompt identity, scope identity, mode, and timestamps. No assignment row means INHERIT from the globally included enabled-definition baseline. Assignment storage does not itself resolve inherited prompt stacks.
 
 **Project Execution Defaults**:
 Independent Project preferences for a supported runtime key and a stable AVA model ID. Each may be unset independently. They reference resources owned by AVA configuration and do not make a Project the owner of a runtime or model.
 
 **Project File**:
-An AVA-owned data resource with exactly one Project owner. A Project File exists independently of any one conversation and is distinct from a Conversation Attachment. Its identity is separate from its filename, and its metadata is separate from its binary content.
+An AVA-owned data resource with exactly one Project owner. A Project File exists independently of any one conversation and is distinct from a Conversation Attachment. Its identity is separate from its filename, and its metadata is separate from its binary content. Filenames are unique within one Project after trimming surrounding whitespace and Unicode case-folding; separate Projects may use the same filename. The backend checks this before writing content, and relational persistence enforces the same Project-scoped normalized key.
 
 **Conversation Attachment**:
 An AVA-owned attachment associated with a conversation or message context under the attachment ownership model. It is distinct from a Project File, which belongs to a Project and survives independently of any one conversation.
@@ -89,8 +89,10 @@ Conversation History
 User Message
 ```
 
-Phase 5.70 resolves CORE prompt definitions and scoped assignments into a
-structured, provenance-bearing set. Phase 5.71 injects the effective CORE
+Phase 5.70 resolves enabled CORE prompt definitions and scoped overrides into a
+structured, provenance-bearing set. Unassigned definitions inherit the global
+baseline and therefore apply at plain, Folder, Project, and Conversation
+scopes; nearer explicit assignments may override that baseline. Phase 5.71 injects the effective CORE
 prompts and non-empty Project instructions as subordinate system messages
 after AVA's immutable application-owned root prompt. No product root prompt
 construction path existed before Phase 5.71; the root is now defined in
@@ -99,18 +101,24 @@ separate from editable CORE definitions. Project instruction persistence still
 distinguishes `null` from `""`; execution omits both null and empty/whitespace-only
 instruction content. Prompt configuration resolves once at each execution
 start, so retries and later runs use current configuration while an active
-request keeps its original context. No durable prompt snapshot is added.
+request keeps its original context. Run-owned inspection snapshots persist the
+resolved prompt layers and normalized request used by that run; historical
+prompt configuration is never re-resolved for inspection.
 
 Folder and Conversation scopes may affect resolved CORE prompts, but there are
-no separate free-form Folder or Conversation instruction fields. Conversation
-Folder membership and Project membership remain independent.
+no separate free-form Folder or Conversation instruction fields. The Move
+workflow places a conversation in one destination at a time: moving to a Folder
+clears Project membership, moving to a Project clears Folder membership, and
+Ungrouped clears both. Backend relocation writes both fields atomically.
 
-Conversation Folder membership and Project membership are independent: a conversation may have either, both, or neither.
+Canonical data may retain independent Folder and Project fields for existing
+assignment and ownership operations; the user-facing Move workflow replaces
+both fields atomically and leaves at most one destination set.
 
 Phase 5.79 uses dnd-kit as AVA's shared drag/drop infrastructure. Conversations
 can move into a Folder or to Ungrouped, and Folder actions can create a new
-conversation directly in that Folder. These operations preserve Project
-membership and do not add Folder nesting or manual conversation ordering.
+conversation directly in that Folder. Relocation clears any previous Project
+destination and does not add Folder nesting or manual conversation ordering.
 
 Cross-feature deletion ownership is explicit: Conversation hard delete removes
 its owned durable graph and conversation-scoped CORE assignments while its
@@ -130,10 +138,10 @@ lists exclude archived conversations; global search retains its existing
 all-conversations behavior and marks archived results. Archive and Restore
 change only the canonical archive flag, preserving Conversation identity,
 transcript, run state, pin state, Folder membership, and Project membership.
-Restoring returns a conversation to its preserved Folder or Ungrouped section.
-An opened archived conversation remains selected and keeps the existing
-composer/run behavior; archiving the selected conversation switches the sidebar
-to Archived so it remains reachable.
+Restoring returns a conversation to its preserved active location. Archiving
+the selected active conversation leaves the sidebar in Active and selects the
+next valid active conversation, then the previous one, or no conversation when
+none remain. Archived is a separate destination opened intentionally.
 
 Phase 5.83A hardens shared startup recovery. Conversation, Folder, and Document
 collection loads distinguish loading, loaded-empty, and failed states; transient
@@ -152,8 +160,73 @@ reconstructed after development and release-app restarts. A running Tauri
 process alone is still not evidence of native acceptance; verify a real window
 and interaction when repeating this check on another host.
 
-The current certified SQLite schema is version 18, registered as a contiguous,
-forward-only migration history. The final Phase 5 certification confirms the
+The certified Phase 5 SQLite schema is version 18, registered as a contiguous,
+forward-only migration history at Phase 5 completion. A post-Phase-5 title
+ownership migration adds a durable `is_title_custom` marker; automatic title
+derivation applies only before the first user message when this marker is false.
+Manual rename sets it, and message append persists an untouched conversation's
+first-message title without changing that marker. The current SQLite schema is
+version 21. Migration 0020 adds nullable run-owned inspection snapshots so
+historical execution facts remain stable. Migration 0021 stores an optional
+positive context-window token setting per configured model. At execution, AVA
+uses that setting, constrained by a provider-reported hard maximum when one is
+available. A backend preview uses the same model selector and context policy;
+run inspection retains the resulting estimate, input budget, output reserve,
+and omitted-history counts. Context estimates are explicitly approximate. The final Phase 5 certification confirms the
 durable ownership boundaries and restart/loading behavior above; no schema
 migration belongs to Phase 5.85. The complete validation record is
 [`docs/AVA_Phase_5_85_Final_Canonical_Validation.md`](docs/AVA_Phase_5_85_Final_Canonical_Validation.md).
+
+`@ava/ui-core` owns AVA's shared design system and the AppearanceProvider used
+by both Web and Tauri Desktop. Appearance separates Template, Theme, and Theme
+Mode; template and theme identity only affect presentation, never business
+behavior. ThemeRegistry and TemplateRegistry allow independent extension, and
+templates compose shared feature components rather than duplicate applications.
+See [`docs/AVA_UI_1_Design_System_Appearance_Foundation.md`](docs/AVA_UI_1_Design_System_Appearance_Foundation.md).
+
+AVA's shared Button geometry is rounded by default and owned by `@ava/ui-core`.
+Lucide React is the canonical icon library for new shared UI. Familiar
+contextual actions use the shared icon-first IconButton with a required
+accessible name and shared Tooltip behavior. Feature packages consume shared
+Button/IconButton primitives rather than defining default geometry or another
+icon system; circular controls are intentional exceptions.
+
+AVA dense-list contextual actions use transparent Lucide icon controls at rest,
+with rounded invisible hit targets and semantic hover/focus states rather than
+persistent filled button chrome.
+
+UI-1 AVA Design System and Appearance Foundation is complete.
+
+AVA uses shared @ava/ui-core semantic themes, Template/Theme/Mode separation, rounded shared buttons, and Lucide icon-first actions across Web/Desktop infrastructure.
+
+Native Tauri Light/Dark/System and appearance persistence are certified.
+
+The `ava-default` template owns the refreshed shared application shell.
+Primary navigation is shared between Web and Desktop, and shell actions use
+AVA semantic tokens, rounded shared controls, and Lucide icons. Feature
+internals remain separate from shell presentation. See
+[`docs/AVA_UI_2_Application_Shell_Navigation_Facelift.md`](docs/AVA_UI_2_Application_Shell_Navigation_Facelift.md).
+
+Shell-owned surfaces consume semantic AVA theme tokens across Light, Dark, and
+System modes. Primary Dark-mode text uses semantic foreground and renders
+light/near-white for readability. Shell controls use shared rounded shadcn/ui
+primitives and Lucide icons; execution selectors retain native select behavior
+with semantic surface, foreground, border, and focus styling. Legacy feature
+internals remain subject to later incremental facelift phases. UI-2A's Web
+acceptance passed; native visual acceptance requires an available Tauri window
+inspection surface. See
+[`docs/AVA_UI_2A_Shell_Theme_Control_Completion.md`](docs/AVA_UI_2A_Shell_Theme_Control_Completion.md).
+
+AVA uses a wide unified rounded Prompt Composer spanning most of the Chat
+content width with responsive side margins. Profile, Runtime, Model, and
+Workspace remain independent execution settings but are exposed through compact
+contextual configuration rather than a permanent four-dropdown grid. The same
+shared composer is used by Web and Tauri Desktop. Documents, Projects, Settings
+inventory/default cards, and selected sidebar view controls consume active
+appearance tokens or their explicit Dark-mode treatment. See
+[`docs/AVA_UI_2C_Wide_Unified_Prompt_Composer.md`](docs/AVA_UI_2C_Wide_Unified_Prompt_Composer.md).
+
+In Dark mode, both Active/Archived view controls are black with white labels.
+Documents editor actions use gray semantic pills, formatting Undo/Redo use
+Lucide icons, toolbar labels use the light foreground, and model capability
+checkbox labels resolve through the appearance foreground token.

@@ -8,11 +8,13 @@ Behavioral parity with the in-memory ``RunStore``: duplicates raise
 import sqlite3
 from datetime import UTC, datetime
 
-from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.responses import ACTIVE_RUN_STATUSES, RunStatus
+from ava.contracts.run_inspection import RunInspectionSnapshot
 from ava.infrastructure.persistence.database import SqliteDatabase, translate_database_error
 from ava.infrastructure.persistence.serialization import (
     dump_execution_selection,
+    dump_run_inspection_snapshot,
     row_to_run_record,
     to_utc_iso,
 )
@@ -20,7 +22,7 @@ from ava.repositories.run_repository import ActiveConversationRunError, RunRecor
 
 _RUN_COLUMNS = (
     "run_id, status, created_at, updated_at, execution_selection, conversation_id, "
-    "source_user_message_id, assistant_message_id, cancellation_requested_at"
+    "source_user_message_id, assistant_message_id, cancellation_requested_at, inspection_snapshot, execution_mode"
 )
 
 #: The statuses a run may still hold when a cancellation request arrives. A
@@ -45,6 +47,7 @@ class RelationalRunRepository(RunRepository):
         *,
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.CHAT,
     ) -> RunRecord:
         now = datetime.now(UTC)
         try:
@@ -59,7 +62,7 @@ class RelationalRunRepository(RunRepository):
                         raise ActiveConversationRunError(conversation_id)
                 connection.execute(
                     "INSERT INTO runs (run_id, status, created_at, updated_at, conversation_id, "
-                    "source_user_message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    "source_user_message_id, execution_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         RunStatus.PENDING.value,
@@ -67,6 +70,7 @@ class RelationalRunRepository(RunRepository):
                         to_utc_iso(now),
                         conversation_id,
                         source_user_message_id,
+                        execution_mode.value,
                     ),
                 )
         except sqlite3.Error as exc:
@@ -78,6 +82,7 @@ class RelationalRunRepository(RunRepository):
             updated_at=now,
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
+            execution_mode=execution_mode,
         )
 
     def get(self, run_id: str) -> RunRecord | None:
@@ -105,6 +110,14 @@ class RelationalRunRepository(RunRepository):
             rows = connection.execute(
                 f"SELECT {_RUN_COLUMNS} FROM runs WHERE status IN ({placeholders}) ORDER BY created_at ASC, run_id ASC",
                 _ACTIVE_STATUS_VALUES,
+            ).fetchall()
+        return [row_to_run_record(row) for row in rows]
+
+    def list_for_conversation(self, conversation_id: str) -> list[RunRecord]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE conversation_id = ? ORDER BY created_at ASC, run_id ASC",
+                (conversation_id,),
             ).fetchall()
         return [row_to_run_record(row) for row in rows]
 
@@ -193,6 +206,18 @@ class RelationalRunRepository(RunRepository):
                 f"SELECT {_RUN_COLUMNS} FROM runs WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
+        return row_to_run_record(row) if row is not None else None
+
+    def set_inspection_snapshot(self, run_id: str, snapshot: RunInspectionSnapshot) -> RunRecord | None:
+        now = datetime.now(UTC)
+        with self._database.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE runs SET inspection_snapshot = ?, updated_at = ? WHERE run_id = ?",
+                (dump_run_inspection_snapshot(snapshot), to_utc_iso(now), run_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(f"SELECT {_RUN_COLUMNS} FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return row_to_run_record(row) if row is not None else None
 
     def set_assistant_message_id(self, run_id: str, assistant_message_id: str) -> RunRecord | None:

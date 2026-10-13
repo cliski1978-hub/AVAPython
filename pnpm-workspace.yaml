@@ -1,6 +1,9 @@
 packages:
   - "frontend/packages/*"
   - "frontend/apps/*"
+  - "tests/*"
 allowBuilds:
   esbuild: true
   "@tauri-apps/cli": true
+  edgedriver: false
+  geckodriver: false

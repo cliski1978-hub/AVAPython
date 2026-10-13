@@ -23,8 +23,8 @@ export function LoadingIndicator({
         display: "inline-flex",
         alignItems: "center",
         gap: t.spacing.sm,
-        color: t.colors.mutedText,
       }}
+      className="text-muted-foreground"
     >
       <style>{SPIN_KEYFRAMES}</style>
       <span
@@ -35,8 +35,8 @@ export function LoadingIndicator({
           height: dimension,
           borderWidth: 2,
           borderStyle: "solid",
-          borderColor: t.colors.border,
-          borderTopColor: t.colors.primary,
+          borderColor: "hsl(var(--border))",
+          borderTopColor: "hsl(var(--primary))",
           borderRadius: "50%",
           boxSizing: "border-box",
           animation: "ava-spin 0.8s linear infinite",

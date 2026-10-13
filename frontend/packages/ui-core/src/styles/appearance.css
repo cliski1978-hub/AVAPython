@@ -1,0 +1,123 @@
+@layer theme, base, components, utilities;
+
+/* Tailwind utilities are available to shared packages without applying its
+   preflight reset to AVA's existing inline-styled application surfaces. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../templates/ava-default.css" layer(base);
+
+@source "../../../**/*.{ts,tsx}";
+@source "../../../../apps/**/*.{ts,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+  :root,
+  [data-theme="ava"] {
+    --ava-font-scale: 1;
+    --text-xs: calc(0.75rem * var(--ava-font-scale));
+    --text-sm: calc(0.875rem * var(--ava-font-scale));
+    --text-base: calc(1rem * var(--ava-font-scale));
+    --text-lg: calc(1.125rem * var(--ava-font-scale));
+    --text-xl: calc(1.25rem * var(--ava-font-scale));
+    --text-2xl: calc(1.5rem * var(--ava-font-scale));
+    --text-3xl: calc(1.875rem * var(--ava-font-scale));
+    --text-4xl: calc(2.25rem * var(--ava-font-scale));
+    --text-5xl: calc(3rem * var(--ava-font-scale));
+    --text-6xl: calc(3.75rem * var(--ava-font-scale));
+    --text-7xl: calc(4.5rem * var(--ava-font-scale));
+    --text-8xl: calc(6rem * var(--ava-font-scale));
+    --text-9xl: calc(8rem * var(--ava-font-scale));
+    --background: 0 0% 100%;
+    --foreground: 210 12% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 12% 16%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 12% 16%;
+    --primary: 212 92% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 14% 95%;
+    --secondary-foreground: 212 92% 45%;
+    --muted: 210 14% 93%;
+    --muted-foreground: 210 12% 43%;
+    --accent: 150 60% 54%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 14% 89%;
+    --input: 210 14% 89%;
+    --ring: 212 92% 45%;
+    --chart-1: 212 92% 45%;
+    --chart-2: 150 60% 54%;
+    --chart-3: 200 65% 57%;
+    --chart-4: 340 82% 56%;
+    --chart-5: 25 85% 57%;
+    --radius: 0.625rem;
+    color-scheme: light;
+  }
+
+  :root[data-font-family="lato"] body *,
+  :root[data-font-family="noto-serif"] body * {
+    font-family: var(--ava-font-family) !important;
+  }
+
+  :root.dark,
+  [data-theme="ava"].dark {
+    --background: 210 12% 8%;
+    --foreground: 210 14% 93%;
+    --card: 210 12% 10%;
+    --card-foreground: 210 14% 93%;
+    --popover: 210 12% 10%;
+    --popover-foreground: 210 14% 93%;
+    --primary: 212 92% 55%;
+    --primary-foreground: 210 12% 8%;
+    --secondary: 210 12% 18%;
+    --secondary-foreground: 212 92% 55%;
+    --muted: 210 12% 15%;
+    --muted-foreground: 210 14% 65%;
+    --accent: 150 60% 54%;
+    --accent-foreground: 210 12% 8%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 12% 18%;
+    --input: 210 12% 18%;
+    --ring: 212 92% 55%;
+    --chart-1: 212 92% 55%;
+    --chart-2: 150 60% 54%;
+    --chart-3: 200 65% 57%;
+    --chart-4: 340 82% 56%;
+    --chart-5: 25 85% 57%;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}

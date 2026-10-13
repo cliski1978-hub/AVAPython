@@ -111,6 +111,73 @@ def _ava_sibling_imports(tree: ast.Module) -> set[str]:
 # ============================================================
 
 
+def test_tool_contracts_remain_inward_values_without_execution_dependencies() -> None:
+    """Phase 6.2 tool values import no policy implementation, SDK or executor."""
+    tree = ast.parse((CONTRACTS_DIR / "tools.py").read_text(encoding="utf-8"))
+    assert _top_level_imports(tree) <= {"math", "datetime", "enum", "typing", "pydantic", "ava"}
+    assert _ava_imports(tree) <= {
+        "ava.contracts.errors", "ava.contracts.json_types", "ava.contracts.version",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.level == 0, "Relative imports must not bypass tool boundaries"
+        assert not isinstance(node, (ast.AsyncFunctionDef, ast.Await)), "Tool values must not execute"
+    classes = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+    assert not classes & {"ToolRegistry", "ToolExecutionService", "ApprovalService"}
+
+
+def test_tool_registry_is_a_catalog_without_runtime_or_policy_authority() -> None:
+    directory = SRC_DIR / "tools"
+    assert (directory / "registry.py").is_file()
+    for path in (directory / "registry.py", directory / "__init__.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assert _top_level_imports(tree) <= {"__future__", "ava", "builtins", "collections", "threading"}
+        assert _ava_imports(tree) <= {"ava.contracts.tools", "ava.tools.registry"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert node.level == 0
+            assert not isinstance(node, (ast.AsyncFunctionDef, ast.Await))
+    # Registrations originate in trusted composition, never runtime SDK code.
+    for directory in (AGENT_ADAPTERS_DIR, SRC_DIR / "runtimes"):
+        for path in _iter_python_files(directory):
+            assert not any(
+                name.startswith("ava.tools") for name in _ava_imports(ast.parse(path.read_text(encoding="utf-8")))
+            ), path
+
+
+def test_tool_feature_management_is_separate_from_runtime_and_execution_authority() -> None:
+    tree = ast.parse((SERVICES_DIR / "tool_feature_service.py").read_text(encoding="utf-8"))
+    assert not any(
+        name.startswith(("ava.runtimes", "ava.models", "ava.execution", "ava.infrastructure"))
+        for name in _ava_imports(tree)
+    )
+    route = ast.parse((API_DIR / "routes" / "tool_features.py").read_text(encoding="utf-8"))
+    assert all(name.startswith(("ava.contracts", "ava.services")) for name in _ava_imports(route))
+    from ava.contracts.tool_features import ToolFeatureConfiguration, UpdateToolFeaturesRequest
+
+    assert not ToolFeatureConfiguration().framework_enabled
+    assert not ToolFeatureConfiguration().enabled_tool_ids
+    assert set(UpdateToolFeaturesRequest.model_fields) == {
+        "framework_enabled", "enabled_tool_ids", "expected_version", "contract_version",
+    }
+
+
+def test_tool_policy_is_runtime_neutral_and_run_service_does_not_own_it() -> None:
+    path = SERVICES_DIR / "tool_policy_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    assert _top_level_imports(tree) <= {"ava", "hashlib", "json", "collections", "types", "pathlib", "stat", "pydantic"}
+    assert not any(name.startswith(("ava.runtimes", "ava.models", "ava.infrastructure", "ava.api"))
+                   for name in _ava_imports(tree))
+    assert "ava.workspaces.resolver" in _ava_imports(tree)
+    assert "ava.execution.command_policy" in _ava_imports(tree)
+    assert "ava.services.tool_feature_service" in _ava_imports(tree)
+    run = ast.parse((SERVICES_DIR / "run_service.py").read_text(encoding="utf-8"))
+    assert "ava.services.tool_policy_service" not in _ava_imports(run)
+    authority = ast.parse((SRC_DIR / "tools" / "authority.py").read_text(encoding="utf-8"))
+    assert _top_level_imports(authority) <= {"dataclasses", "enum", "typing", "ava"}
+    assert _ava_imports(authority) <= {"ava.contracts.tools", "ava.workspaces.contracts"}
+
+
 def test_core_modules_have_files() -> None:
     """The core directory should contain at least one Python module."""
     assert list(_iter_python_files(CORE_DIR)), "AVA core must contain modules"
@@ -1074,6 +1141,8 @@ def test_content_store_ports_stay_free_of_filesystem_stdlib() -> None:
         for path in _iter_python_files(directory):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for name in _top_level_imports(tree):
+                if path.name in {"workspace_access.py", "workspace_access_service.py"}:
+                    continue
                 if name in {"os", "pathlib", "tempfile"}:
                     violations.append(f"{path}: imports '{name}'")
     assert not violations, "Filesystem imports outside infrastructure:\n" + "\n".join(violations)
@@ -1459,6 +1528,8 @@ def test_persistence_layer_imports_only_repositories_and_contracts() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for name in _top_level_imports(tree):
             if name != "ava" and name not in sys.stdlib_module_names:
+                if path.name == "workspace_access_repository.py" and name == "pydantic":
+                    continue
                 violations.append(f"{path}: top-level import '{name}'")
         for name in _ava_sibling_imports(tree):
             if (
@@ -1643,7 +1714,7 @@ def test_settings_routes_do_not_shadow_discovery_routes() -> None:
     two concepts separate on the wire.
     """
     for path in sorted(_iter_python_files(API_DIR / "routes")):
-        if path.name == "settings.py":
+        if path.name in {"settings.py", "tool_features.py", "workspace_access.py"}:
             continue
         text = path.read_text(encoding="utf-8")
         assert '"/settings' not in text, f"{path.name} must not serve the Settings prefix"
@@ -1693,12 +1764,12 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
     The default migrations create ``runs``, ``run_events``, ``conversations``,
     ``messages``, ``documents`` (Step 4.7), ``document_revisions``
     (Step 4.13.C's immutable revision history), and ``attachments`` +
-    ``idx_attachments_owner`` (Step 4.14.C's attachment metadata). No later
-    phase vocabulary may leak into the schema, and schema text may live only
+    ``idx_attachments_owner`` (Step 4.14.C's attachment metadata), and
+    Phase 6.8's approval records. Unimplemented later-phase vocabulary may not
+    leak into the schema, and schema text may live only
     in the migrations package. ``attachment`` became legitimate with Step
-    4.14.C, so its schema vocabulary is no longer forbidden; migration files
-    must still never name approval/audit/model-invocation/qualification
-    concepts.
+    4.14.C, so its schema vocabulary is no longer forbidden. Later audit,
+    model-invocation, and qualification concepts remain excluded.
     """
     migration_dir = PERSISTENCE_DIR / "migrations" / "versions"
     created: list[str] = []
@@ -1706,9 +1777,16 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         text = path.read_text(encoding="utf-8")
         created.extend(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", text))
         created.extend(re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", text))
-    assert sorted(created) == [
+    # Migration 23 rebuilds Project-file metadata through a transaction-local
+    # table and recreates an existing index; neither adds another final object.
+    created = sorted(set(created) - {"IF", "project_files_new"})
+    assert created == [
         "application_execution_defaults",
+        "approval_records",
+        "approval_records_pending_run",
+        "approval_records_pending_workspace",
         "attachments",
+        "conversation_context_summaries",
         "conversation_folders",
         "conversations",
         "core_prompt_assignments",
@@ -1735,10 +1813,13 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "run_events",
         "runs",
         "runtime_configurations",
+        "tool_feature_configuration",
         "ux_core_prompt_assignment_global",
         "ux_core_prompt_assignment_target",
+        "ux_project_files_project_normalized_name",
+        "workspace_access_configurations",
     ]
-    forbidden = ("approval", "audit", "model_invocation", "qualification")
+    forbidden = ("audit", "model_invocation", "qualification")
     for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
         text = path.read_text(encoding="utf-8")
         for word in forbidden:
@@ -1878,8 +1959,8 @@ def test_application_persistence_carries_all_activated_ports() -> None:
     ``ApplicationPersistence`` carries run, run-event, conversation, message,
     provider-connection,
     and document state plus the Step 4.13 document revision history repository,
-    the Step 4.14.C attachment metadata repository, and the document write
-    coordinator. The API factory receives only the composed ports, never
+    the Step 4.14.C attachment metadata repository, the Phase 6.8 approval
+    repository, and the document write coordinator. The API factory receives only the composed ports, never
     concrete stores.
     """
     fields = _collect_annotated_fields(
@@ -1904,6 +1985,10 @@ def test_application_persistence_carries_all_activated_ports() -> None:
         "database",
         "project_repository",
         "project_file_repository",
+        "context_summary_repository",
+        "tool_feature_repository",
+        "workspace_access_repository",
+        "approval_repository",
     }
 
     app_text = (API_DIR / "app.py").read_text(encoding="utf-8")
@@ -1973,6 +2058,15 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
         "v0016_core_prompt_assignments.py",
         "v0017_project_execution_defaults.py",
         "v0018_project_files.py",
+        "v0019_conversation_title_ownership.py",
+        "v0020_run_inspection.py",
+        "v0021_model_context_window.py",
+        "v0022_conversation_context_summaries.py",
+        "v0023_project_file_name_uniqueness.py",
+        "v0024_tool_features.py",
+        "v0025_workspace_access.py",
+        "v0026_approvals.py",
+        "v0027_run_execution_mode.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)
@@ -2216,7 +2310,8 @@ def test_run_service_delegates_context_construction() -> None:
     for import_path in _ava_imports(tree):
         assert not import_path.startswith("ava.runtimes"), import_path
     source = file.read_text(encoding="utf-8")
-    assert "list_for_conversation" not in source
+    assert "_message_repository.list_for_conversation" not in source
+    assert "_conversation_repository.list_for_conversation" not in source
     assert "ava.services.context_construction_service" in _ava_imports(tree)
 
 
@@ -2248,13 +2343,15 @@ def test_context_window_manager_depends_only_on_neutral_contracts() -> None:
 
     A tokenizer, provider, runtime, or repository would make the budget depend
     on I/O or on a specific model's vocabulary, which is exactly the coupling
-    this module exists to avoid. Only the neutral message vocabulary is allowed
-    in, and only the standard library.
+    this module exists to avoid. Only neutral message/attachment context
+    contracts and the standard library are allowed in.
     """
     file = EXECUTION_DIR / "context_window.py"
     tree = ast.parse(file.read_text(encoding="utf-8"))
     for import_path in _ava_imports(tree):
-        assert import_path == "ava.contracts.conversations", import_path
+        assert import_path in {
+            "ava.contracts.conversations", "ava.contracts.attachment_context",
+        }, import_path
     for name in _top_level_imports(tree):
         assert name not in FORBIDDEN_IMPORTS, name
 

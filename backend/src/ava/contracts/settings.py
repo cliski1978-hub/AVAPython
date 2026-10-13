@@ -121,8 +121,8 @@ class ModelConfigurationResponse(BaseModel):
     """One configured model as persisted.
 
     Declared static configuration only. Provider endpoint data stays on the
-    connection, and provider-reported discovery metadata (health, context
-    limits, qualifications) is not configuration and is not exposed here.
+    connection. ``context_window_tokens`` is AVA's optional configured model
+    window; provider-reported maximums and qualifications remain discovery data.
     """
 
     model_id: str
@@ -132,6 +132,7 @@ class ModelConfigurationResponse(BaseModel):
     hosting_mode: ModelHostingMode
     capabilities: ModelCapabilities
     enabled: bool
+    context_window_tokens: int | None = None
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 
@@ -162,6 +163,7 @@ class CreateModelConfigurationRequest(BaseModel):
     hosting_mode: ModelHostingMode
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     enabled: bool = True
+    context_window_tokens: int | None = Field(default=None, gt=0)
 
 
 class UpdateModelConfigurationRequest(BaseModel):
@@ -186,6 +188,7 @@ class UpdateModelConfigurationRequest(BaseModel):
     capabilities: ModelCapabilities
     enabled: bool
     provider_connection_id: str | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
 
 
 # ============================================================

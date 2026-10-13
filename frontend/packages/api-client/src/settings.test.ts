@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ApiClient,
   createProviderConnection,
+  createModelConfiguration,
   getExecutionDefaults,
+  getModelConfiguration,
   getProviderConnection,
   listModelConfigurations,
   listProviderConnections,
@@ -36,6 +38,50 @@ const connection = {
 } as const;
 
 describe("settings transport wrappers", () => {
+  it("round-trips the configured model context window through the settings API", async () => {
+    const model = {
+      model_id: "model-1",
+      provider_connection_id: "conn-1",
+      provider_model_name: "upstream-model",
+      display_name: "Model One",
+      hosting_mode: "external",
+      capabilities: {
+        chat: true,
+        streaming: true,
+        tool_calling: false,
+        structured_output: false,
+        vision: false,
+        embeddings: false,
+        reasoning: false,
+        code_specialization: false,
+        contract_version: "v1",
+      },
+      enabled: true,
+      context_window_tokens: 131072,
+      contract_version: "v1",
+    } as const;
+    const { fetchMock, client } = clientReturning(model, 201);
+
+    const created = await createModelConfiguration(client, {
+      model_id: model.model_id,
+      provider_connection_id: model.provider_connection_id,
+      provider_model_name: model.provider_model_name,
+      display_name: model.display_name,
+      hosting_mode: model.hosting_mode,
+      context_window_tokens: model.context_window_tokens,
+    });
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+
+    expect(path).toBe("http://localhost:8000/settings/models");
+    expect(JSON.parse(init?.body as string)).toMatchObject({ context_window_tokens: 131072 });
+    expect(created.context_window_tokens).toBe(131072);
+
+    const nullable = clientReturning({ ...model, context_window_tokens: null });
+    await expect(getModelConfiguration(nullable.client, "model-1")).resolves.toMatchObject({
+      context_window_tokens: null,
+    });
+  });
+
   it("lists provider connections from the settings boundary", async () => {
     const { fetchMock, client } = clientReturning({
       provider_connections: [connection],

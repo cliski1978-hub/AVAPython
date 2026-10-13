@@ -93,11 +93,26 @@ describe("DocumentWorkspace", () => {
   it("renders AVA document metadata, editor surface, and formatting controls", async () => {
     render(<DocumentProvider client={client}><DocumentWorkspace /></DocumentProvider>);
     await screen.findByRole("textbox", { name: "Document content" });
+    const documentSurface = screen.getByRole("navigation", { name: "Documents" }).parentElement;
+    expect(documentSurface?.style.background).toBe("hsl(var(--background))");
+    expect(documentSurface?.style.color).toBe("hsl(var(--foreground))");
+    expect(documentSurface?.style.getPropertyValue("--ava-bg")).toBe("hsl(var(--background))");
     expect(screen.getAllByText("Untitled Document")).toHaveLength(2);
     expect(screen.getByRole("textbox", { name: "Document content" })).toBeTruthy();
     for (const name of ["Bold", "Italic", "Heading 1", "Heading 2", "Bullet list", "Ordered list", "Undo", "Redo"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
+    const formattingToolbar = screen.getByRole("toolbar", { name: "Document formatting" });
+    expect(formattingToolbar.querySelectorAll('[role="separator"]')).toHaveLength(0);
+    for (const name of ["Undo", "Redo"]) {
+      const action = screen.getByRole("button", { name });
+      expect(action.querySelector("svg")).toBeTruthy();
+      expect(action.textContent).toBe("");
+    }
+    for (const name of ["Rename document", "Save document", "Close document"]) {
+      expect(screen.getByRole("button", { name }).getAttribute("data-variant")).toBe("secondary");
+    }
+    expect(screen.getByRole("button", { name: "Rename document" }).parentElement?.className).toBe("ava-doc-actions");
   });
 
   it("reconstructs the editor from AVA state after unmounting", async () => {
@@ -174,7 +189,7 @@ describe("DocumentWorkspace", () => {
     expect(createRequestCalls(fetchMock)).toBe(1);
   });
 
-  it("keeps a rename dirty white-on-blue while its persistence is pending, then reconciles clean", async () => {
+  it("keeps document actions as grey pills while rename persistence is pending, then reconciles clean", async () => {
     let resolveRename: ((response: Response) => void) | undefined;
     const pendingRename = new Promise<Response>((resolve) => { resolveRename = resolve; });
     const fetchMock = vi.fn()
@@ -192,8 +207,8 @@ describe("DocumentWorkspace", () => {
 
     const saveButton = () => screen.getByRole("button", { name: "Save document" });
     expect(isDisabled(saveButton())).toBe(false);
-    expect(saveButton().style.color).toBe("rgb(255, 255, 255)");
-    expect(screen.getByRole("button", { name: "Close document" }).style.color).toBe("rgb(255, 255, 255)");
+    expect(saveButton().getAttribute("data-variant")).toBe("secondary");
+    expect(screen.getByRole("button", { name: "Close document" }).getAttribute("data-variant")).toBe("secondary");
 
     resolveRename?.(new Response(JSON.stringify({
       document_id: "document-1", title: "Dirty Title", content: "<p>Document</p>", content_format: "html",

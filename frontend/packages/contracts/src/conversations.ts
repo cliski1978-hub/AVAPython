@@ -24,6 +24,8 @@ export interface ConversationResponse {
   folder_id: string | null;
   /** Project relationship, independent from folder membership. */
   project_id: string | null;
+  /** Persisted distinction used to protect manual titles from first-message auto-title. */
+  is_title_custom?: boolean;
   contract_version: ContractVersion;
 }
 export interface ConversationListResponse { conversations: ConversationResponse[]; contract_version: ContractVersion; }
@@ -43,3 +45,4 @@ export interface SetConversationArchivedRequest { is_archived: boolean; contract
 
 export interface SetConversationFolderRequest { folder_id: string | null; contract_version?: ContractVersion; }
 export interface SetConversationProjectRequest { project_id: string | null; contract_version?: ContractVersion; }
+export interface RelocateConversationRequest { destination_type: "folder" | "project" | "ungrouped"; destination_id?: string | null; contract_version?: ContractVersion; }

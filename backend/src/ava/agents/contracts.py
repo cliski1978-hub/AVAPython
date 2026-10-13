@@ -7,9 +7,11 @@ AVA Core depends on this abstraction. Framework types must never escape
 adapters; inputs and outputs use AVA contracts.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel
 
@@ -18,6 +20,10 @@ from ava.contracts.conversations import RunContext
 from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.contracts.run_inspection import ContextWindowAccounting, RunInspectionSnapshot
+
+if TYPE_CHECKING:
+    from ava.execution.selector import ResolvedExecution
 
 # ============================================================
 # BEGIN: Agent Port
@@ -87,6 +93,7 @@ class AgentRunResult(BaseModel):
     #: the runtime, so a known provider failure is not widened into
     #: ``agent_failed`` on its way to the durable record.
     failure_code: str | None = None
+    inspection_snapshot: RunInspectionSnapshot | None = None
 
 
 class AgentPort(ABC):
@@ -108,6 +115,7 @@ class AgentPort(ABC):
         request: RunRequest,
         *,
         context: RunContext | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
         """Start an agent run under an AVA-generated run identifier.
 
@@ -123,6 +131,7 @@ class AgentPort(ABC):
             An AVA-owned AgentRunResult describing the run outcome and any
             generic assistant content produced for the lifecycle.
         """
+        del resolved_execution
         raise NotImplementedError
 
     async def start_run_streaming(
@@ -132,6 +141,8 @@ class AgentPort(ABC):
         *,
         context: RunContext | None = None,
         on_content: Callable[[str], None],
+        on_inspection: Callable[[RunInspectionSnapshot], None] | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
         """Execute with optional AVA snapshot notifications.
 
@@ -140,7 +151,8 @@ class AgentPort(ABC):
         The run service reconciles that final result through the same durable
         content path.
         """
-        return await self.start_run(run_id, request, context=context)
+        del on_inspection
+        return await self.start_run(run_id, request, context=context, resolved_execution=resolved_execution)
 
     @abstractmethod
     async def cancel_run(self, run_id: str) -> RunResponse:
@@ -160,6 +172,13 @@ class AgentPort(ABC):
     def get_capabilities(self) -> set[CapabilityName]:
         """Return the capabilities the adapter actually supports."""
         raise NotImplementedError
+
+    def preview_context_window(
+        self, request: RunRequest, *, context: RunContext | None = None
+    ) -> ContextWindowAccounting | None:
+        """Estimate the prepared request without starting a run, when supported."""
+        del request, context
+        return None
 
 
 # ============================================================

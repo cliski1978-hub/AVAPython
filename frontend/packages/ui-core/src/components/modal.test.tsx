@@ -14,6 +14,18 @@ afterEach(() => {
 });
 
 describe("Modal", () => {
+  it("uses semantic foreground and surface tokens for Dark mode", () => {
+    const { getByRole } = render(
+      <Modal open title="Theme check" onClose={() => {}}>
+        <p>Dialog content</p>
+      </Modal>,
+    );
+    const dialog = getByRole("dialog");
+    expect(dialog.style.background).toBe("hsl(var(--background))");
+    expect(dialog.style.color).toBe("hsl(var(--foreground))");
+    expect(dialog.querySelector("h2")?.getAttribute("style")).toContain("foreground");
+  });
+
   it("renders nothing when closed and its dialog when open", () => {
     const { rerender } = render(
       <Modal open={false} title="Add Provider" onClose={() => {}}>

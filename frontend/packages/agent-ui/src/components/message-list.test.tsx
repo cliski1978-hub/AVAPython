@@ -42,20 +42,29 @@ describe("MessageList", () => {
     expect(html).toContain("System note");
   });
 
-  it("does not exceed narrow viewport widths for message bubbles", () => {
+  it("keeps user bubbles naturally sized and rectangular for short and long prompts", () => {
     const long = "A".repeat(500);
+    const markdown = "# Heading\n\n- first bullet\n- second bullet\n\nA second paragraph.";
     const html = renderToStaticMarkup(
       <MessageList
         messages={[
-          { id: "u", role: "user", content: long },
+          { id: "short", role: "user", content: "Hello" },
+          { id: "medium", role: "user", content: "A few sentences make a medium length prompt." },
+          { id: "long", role: "user", content: `${long}\n\n${long}` },
+          { id: "markdown", role: "user", content: markdown },
           { id: "a", role: "assistant", status: "complete", content: long },
         ]}
       />,
     );
     expect(html).toContain("overflow-wrap:break-word");
+    expect(html).toContain("width:fit-content");
     expect(html).toContain("max-width:68%");
     expect(html).toContain("max-width:85%");
-    expect(html).toContain("border-radius:999px");
+    expect(html).toContain("border-radius:8px");
+    expect(html).not.toContain("border-radius:999px");
+    expect(html).toContain("white-space:pre-wrap");
+    expect(html).toContain("# Heading");
+    expect(html).toContain("second paragraph.");
   });
 
   it("hides retry/regenerate actions when phase is active", () => {

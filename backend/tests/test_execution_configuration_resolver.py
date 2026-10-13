@@ -403,7 +403,7 @@ def test_repository_failure_is_not_absence(setup, monkeypatch):
 # ============================================================
 
 
-def _add_model(setup, model_id, *, provider_model_name, enabled=True):
+def _add_model(setup, model_id, *, provider_model_name, enabled=True, context_window_tokens=None):
     """Persist a second configured model on the same provider connection."""
     configuration = ModelConfiguration(
         model_id,
@@ -413,6 +413,7 @@ def _add_model(setup, model_id, *, provider_model_name, enabled=True):
         ModelHostingMode.LOCAL,
         ModelCapabilities(chat=True),
         enabled,
+        context_window_tokens,
     )
     setup["persistence"].model_configuration_repository.create(configuration)
     return configuration
@@ -432,6 +433,20 @@ def test_an_explicitly_chosen_configured_model_runs_that_exact_record(setup):
     assert result.model_binding.provider_model_name == "vendor/second"
     assert result.model_profile.display_name == "Display second-model"
     assert result.provider_connection_id == setup["connection"].provider_connection_id
+
+
+def test_configured_context_window_is_carried_into_the_resolved_profile(setup):
+    save_defaults(setup)
+    configured = _add_model(
+        setup,
+        "windowed-model",
+        provider_model_name="vendor/windowed",
+        context_window_tokens=32768,
+    )
+
+    result = setup["selector"].resolve(RunExecutionOverride(model_id=configured.model_id))
+
+    assert result.model_profile.context_window_tokens == 32768
 
 
 def test_configured_models_are_chosen_independently_of_the_application_default(setup):

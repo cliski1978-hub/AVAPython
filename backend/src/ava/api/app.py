@@ -35,9 +35,13 @@ from ava.api.routes.projects import router as projects_router
 from ava.api.routes.runs import router as runs_router
 from ava.api.routes.runtimes import router as runtimes_router
 from ava.api.routes.settings import router as settings_router
+from ava.api.routes.tool_features import router as tool_features_router
+from ava.api.routes.workspace_access import router as workspace_access_router
 from ava.api.routes.workspaces import router as workspaces_router
 from ava.configuration.settings import Settings, get_settings
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.tool_features import ToolFeatureAdministrationPort
+from ava.contracts.workspace_access import WorkspaceAdministrationPort
 from ava.core.application import Application, ApplicationConfig
 from ava.execution.hosting import ModelHostingRequirement
 from ava.infrastructure.composition import (
@@ -52,6 +56,7 @@ from ava.infrastructure.composition import (
     create_conversation_hard_delete_coordinator,
     create_credential_resolver,
     create_execution_configuration_resolver,
+    create_execution_selector,
     create_model_orchestrator,
     create_model_provider_registry,
     create_model_qualification_store,
@@ -60,14 +65,20 @@ from ava.infrastructure.composition import (
     create_project_file_content_store,
     create_runtime_registry,
     create_sandboxed_command_runner,
+    create_tool_registry,
+    create_workspace_access_lookup,
     create_workspace_registry,
     create_workspace_resolver,
 )
 from ava.models import ModelBindingResolver, ModelProviderResolver
 from ava.runtimes import RuntimeResolver
+from ava.services.approval_service import ApprovalService
+from ava.services.attachment_extraction_service import AttachmentExtractionService
 from ava.services.attachment_service import AttachmentService
 from ava.services.capability_service import CapabilityService
+from ava.services.context_compaction_service import ContextCompactionService
 from ava.services.context_construction_service import ContextConstructionService
+from ava.services.conversation_attachment_context_service import ConversationAttachmentContextService
 from ava.services.conversation_folder_service import ConversationFolderService
 from ava.services.conversation_service import ConversationService
 from ava.services.core_prompt_assignment_service import CorePromptAssignmentService
@@ -82,12 +93,18 @@ from ava.services.project_execution_defaults_resolver import ProjectExecutionDef
 from ava.services.project_execution_defaults_service import ProjectExecutionDefaultsService
 from ava.services.project_file_service import ProjectFileService
 from ava.services.project_service import ProjectService
+from ava.services.run_context_preparation_service import RunContextPreparationService
 from ava.services.run_lifecycle_service import RunLifecycleService
 from ava.services.run_recovery_service import RunRecoveryService
 from ava.services.run_service import RunService
 from ava.services.runtime_discovery_service import RuntimeDiscoveryService
 from ava.services.settings_service import SettingsService
+from ava.services.tool_execution_service import ToolExecutionService
+from ava.services.tool_feature_service import ToolFeatureService
+from ava.services.tool_policy_service import ToolPolicyService
+from ava.services.workspace_access_service import WorkspaceAccessService
 from ava.services.workspace_discovery_service import WorkspaceDiscoveryService
+from ava.tools.initial_tools import INITIAL_WORKSPACE_OPERATIONS
 
 # ============================================================
 # BEGIN: Application Factory
@@ -118,6 +135,8 @@ def create_app(
     cors_origins: Sequence[str] | None = None,
     hosting_requirement: ModelHostingRequirement | None = None,
     settings: Settings | None = None,
+    feature_administration: ToolFeatureAdministrationPort | None = None,
+    workspace_administration: WorkspaceAdministrationPort | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -142,6 +161,11 @@ def create_app(
             default) resolves settings from the environment; tests inject
             settings directly to select persistence mode without mutating the
             environment.
+        feature_administration: Trusted deployment-provided authority for
+            feature Settings mutations. Default denies all mutations. An
+            integration must authenticate the current caller or restrict the
+            deployment against untrusted network access; client role flags,
+            headers, UI visibility and mere loopback access are not authority.
 
     Returns:
         A configured FastAPI application instance.
@@ -159,8 +183,12 @@ def create_app(
     )
 
     app = FastAPI(title="AVA", version="0.1.0", lifespan=_app_lifespan)
+    app.state.default_runtime_key = settings.agent_runtime
+    app.state.attachment_max_size_bytes = settings.attachment_max_size_bytes
 
     app.state.application = core_application
+    # Descriptive catalog only. No production handlers or tool API exist yet.
+    app.state.tool_registry = create_tool_registry()
 
     # The runner and policy are composition-owned infrastructure. They launch
     # nothing at startup, and are passed only to the controlled OpenHands tool.
@@ -266,12 +294,28 @@ def create_app(
     # Discovery shares the exact same registry instance so clients see exactly
     # the registrations resolution honors.
     workspace_registry = create_workspace_registry()
-    workspace_resolver = create_workspace_resolver(workspace_registry)
+    workspace_resolver = create_workspace_resolver(
+        workspace_registry,
+        create_workspace_access_lookup(application_persistence.workspace_access_repository),
+    )
     app.state.workspace_registry = workspace_registry
     app.state.workspace_resolver = workspace_resolver
 
     # The configured agent adapter is composed once at startup. The API layer
     # consumes it only through services, never directly.
+    execution_selector = create_execution_selector(
+        runtime_resolver=app.state.runtime_resolver,
+        runtime_id=settings.agent_runtime,
+        model_provider_resolver=app.state.model_provider_resolver,
+        model_provider_id=settings.model_provider,
+        model_binding_resolver=model_binding_resolver,
+        runtime_registry=runtime_registry,
+        model_provider_registry=model_provider_registry,
+        model_orchestrator=model_orchestrator,
+        hosting_requirement=hosting_requirement,
+        persisted_configuration_resolver=execution_configuration_resolver,
+        project_execution_defaults_resolver=project_execution_defaults_resolver,
+    )
     agent_port = create_agent_adapter(
         settings.agent_provider,
         runtime_resolver=app.state.runtime_resolver,
@@ -287,7 +331,7 @@ def create_app(
         hosting_requirement=hosting_requirement,
         persisted_configuration_resolver=execution_configuration_resolver,
         project_execution_defaults_resolver=project_execution_defaults_resolver,
-        prompt_context_builder=app.state.execution_prompt_context_service,
+        execution_selector=execution_selector,
     )
     app.state.agent_port = agent_port
     # Physical attachment content (Step 4.14.D) is selected independently of
@@ -304,6 +348,11 @@ def create_app(
         attachment_repository=application_persistence.attachment_repository,
         attachment_content_store=app.state.attachment_content_store,
     )
+    app.state.attachment_extraction_service = AttachmentExtractionService(
+        attachment_service=app.state.attachment_service,
+        conversation_repository=application_persistence.conversation_repository,
+        max_size_bytes=settings.attachment_max_size_bytes,
+    )
     # Execution context is assembled by one AVA-owned service over the same
     # durable persistence the run service writes to, so a conversation-linked
     # run's history is read from exactly the rows that produced it. The run
@@ -312,6 +361,15 @@ def create_app(
         run_repository=application_persistence.run_repository,
         message_repository=application_persistence.message_repository,
         conversation_repository=application_persistence.conversation_repository,
+        attachment_context=ConversationAttachmentContextService(
+            app.state.attachment_service,
+            app.state.attachment_extraction_service,
+        ),
+    )
+    app.state.run_context_preparation_service = RunContextPreparationService(
+        selector=execution_selector,
+        prompt_context_builder=app.state.execution_prompt_context_service,
+        compaction=ContextCompactionService(application_persistence.context_summary_repository),
     )
     app.state.run_lifecycle_service = RunLifecycleService(
         run_repository=application_persistence.run_repository,
@@ -324,7 +382,9 @@ def create_app(
         conversation_repository=application_persistence.conversation_repository,
         message_repository=application_persistence.message_repository,
         context_service=app.state.context_construction_service,
+        context_preparation_service=app.state.run_context_preparation_service,
         lifecycle=app.state.run_lifecycle_service,
+        approval_cancellation=lambda run_id: app.state.approval_service.cancel_for_run(run_id),
     )
     app.state.run_recovery_service = RunRecoveryService(
         run_repository=application_persistence.run_repository,
@@ -353,6 +413,7 @@ def create_app(
     app.state.project_service = ProjectService(
         project_repository=application_persistence.project_repository,
         project_file_service=app.state.project_file_service,
+        delete_project_conversations=app.state.conversation_service.delete_project_conversations,
     )
     app.state.project_execution_defaults_service = ProjectExecutionDefaultsService(
         projects=application_persistence.project_repository,
@@ -400,6 +461,11 @@ def create_app(
         registry=runtime_registry, default_runtime_id=settings.agent_runtime
     )
     app.state.workspace_discovery_service = WorkspaceDiscoveryService(registry=workspace_registry)
+    app.state.workspace_access_service = WorkspaceAccessService(
+        application_persistence.workspace_access_repository,
+        workspace_administration,
+        on_workspace_changed=lambda workspace_id: app.state.approval_service.invalidate_workspace(workspace_id),
+    )
     app.state.execution_profile_service = ExecutionProfileService(
         runtime_id=settings.agent_runtime, provider_id=settings.model_provider
     )
@@ -414,9 +480,49 @@ def create_app(
         execution_defaults=application_persistence.execution_defaults_repository,
     )
     app.include_router(execution_profiles_router)
+    app.state.tool_feature_service = ToolFeatureService(
+        app.state.tool_registry,
+        application_persistence.tool_feature_repository,
+        feature_administration,
+        on_configuration_changed=lambda: app.state.approval_service.invalidate_all_pending(),
+    )
+    app.state.tool_policy_service = ToolPolicyService(
+        app.state.tool_registry,
+        app.state.tool_feature_service,
+        workspace_resolver,
+        operations=INITIAL_WORKSPACE_OPERATIONS,
+        command_policy=command_execution_policy,
+    )
+    # Durable approval state is composed for internal future integration only.
+    # Human mutation/read endpoints stay absent until a trusted identity and
+    # approval-scope adapter exists; execution authority also defaults to none.
+    app.state.approval_service = ApprovalService(
+        repository=application_persistence.approval_repository,
+        runs=application_persistence.run_repository,
+        policy=app.state.tool_policy_service,
+        features=app.state.tool_feature_service,
+        workspaces=workspace_resolver,
+        execution_authority=None,
+        registry=app.state.tool_registry,
+    )
+    # The core boundary is present for dependency composition and testing, but
+    # production has no trusted authority issuer, executor, or durable
+    # invocation reservation adapter, so dispatch remains disabled.
+    app.state.tool_execution_service = ToolExecutionService(
+        runs=application_persistence.run_repository,
+        registry=app.state.tool_registry,
+        features=app.state.tool_feature_service,
+        policy=app.state.tool_policy_service,
+        authority=None,
+        approvals=app.state.approval_service,
+        executors={},
+        reservations=None,
+    )
+    app.include_router(tool_features_router)
     app.include_router(settings_router)
     app.include_router(runtimes_router)
     app.include_router(workspaces_router)
+    app.include_router(workspace_access_router)
 
     app.add_middleware(
         CORSMiddleware,

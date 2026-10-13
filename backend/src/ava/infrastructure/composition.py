@@ -15,6 +15,7 @@ registered into the AVA ``ModelProviderRegistry``.
 """
 
 import logging
+import platform
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,7 @@ from ava.infrastructure.persistence import (
 )
 from ava.infrastructure.project_file_content_store import LocalProjectFileContentStore
 from ava.infrastructure.sandbox import BubblewrapSandboxedCommandRunner
+from ava.infrastructure.workspace_access_lookup import PersistentWorkspaceAccessLookup
 from ava.models.bindings import ModelBindingResolver
 from ava.models.credentials import CredentialResolver
 from ava.models.model_registry import ModelProfile, ModelRegistry
@@ -64,8 +66,10 @@ from ava.models.qualifications import ModelQualification, ModelQualificationStor
 from ava.models.registry import ModelProviderRegistry
 from ava.models.resolver import ModelProviderResolver
 from ava.repositories import (
+    ApprovalRepository,
     AttachmentContentStore,
     AttachmentRepository,
+    ContextSummaryRepository,
     ConversationFolderRepository,
     ConversationRepository,
     CorePromptAssignmentRepository,
@@ -84,12 +88,16 @@ from ava.repositories import (
     RuntimeConfigurationRepository,
 )
 from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoordinator
+from ava.repositories.tool_feature_repository import ToolFeatureRepository
+from ava.repositories.workspace_access_repository import WorkspaceAccessRepository
 from ava.runtimes import RuntimeRegistry
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.adapters.openhands.openhands_runtime import OpenHandsRuntime
 from ava.runtimes.resolver import RuntimeResolver
+from ava.services.approval_store import ApprovalStore
 from ava.services.attachment_content_store import InMemoryAttachmentContentStore
 from ava.services.attachment_store import InMemoryAttachmentRepository
+from ava.services.context_summary_store import ContextSummaryStore
 from ava.services.conversation_folder_store import ConversationFolderStore
 from ava.services.conversation_hard_delete_coordinator import InMemoryConversationHardDeleteCoordinator
 from ava.services.conversation_store import ConversationStore
@@ -111,7 +119,14 @@ from ava.services.provider_connection_store import ProviderConnectionStore
 from ava.services.run_event_store import RunEventStore
 from ava.services.run_store import RunStore
 from ava.services.runtime_configuration_store import RuntimeConfigurationStore
+from ava.services.tool_feature_store import ToolFeatureStore
+from ava.services.workspace_access_store import WorkspaceAccessStore
+from ava.tools import ToolRegistry
+from ava.tools.initial_tools import initial_workspace_tools
+from ava.tools.workspace_filesystem import WorkspaceFilesystemSecurityPort
+from ava.tools.workspace_read import WorkspaceReadExecutor
 from ava.workspaces import WorkspaceRegistry, WorkspaceResolver
+from ava.workspaces.contracts import WorkspaceAccessLookupPort
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +153,7 @@ def create_agent_adapter(
     persisted_configuration_resolver: ExecutionConfigurationResolver | None = None,
     project_execution_defaults_resolver: ProjectExecutionDefaultsResolverPort | None = None,
     prompt_context_builder: ExecutionPromptContextBuilderPort | None = None,
+    execution_selector: ExecutionSelector | None = None,
 ) -> AgentPort:
     """Construct the agent adapter for the configured provider name.
 
@@ -168,15 +184,15 @@ def create_agent_adapter(
         if runtime_resolver is None or model_provider_resolver is None or model_binding_resolver is None:
             raise ValueError("Native agent requires runtime, model, and binding resolvers")
         return NativeAgentAdapter(
-            execution_selector=ExecutionSelector(
+            execution_selector=execution_selector
+            or create_execution_selector(
                 runtime_resolver=runtime_resolver,
+                runtime_id=runtime_id,
                 model_provider_resolver=model_provider_resolver,
+                model_provider_id=model_provider_id,
                 model_binding_resolver=model_binding_resolver,
-                default_runtime_id=runtime_id,
-                default_model_provider_id=model_provider_id,
                 runtime_registry=runtime_registry,
                 model_provider_registry=model_provider_registry,
-                eligible_runtime_ids=frozenset({"native"}),
                 model_orchestrator=model_orchestrator,
                 hosting_requirement=hosting_requirement,
                 persisted_configuration_resolver=persisted_configuration_resolver,
@@ -192,6 +208,37 @@ def create_agent_adapter(
         raise ValueError(f"Unknown agent provider: {provider!r}")
     logger.debug("Selecting agent adapter for provider %r", provider)
     return factory()
+
+
+def create_execution_selector(
+    *,
+    runtime_resolver: RuntimeResolver,
+    runtime_id: str,
+    model_provider_resolver: ModelProviderResolver,
+    model_provider_id: str,
+    model_binding_resolver: ModelBindingResolver,
+    runtime_registry: RuntimeRegistry | None = None,
+    model_provider_registry: ModelProviderRegistry | None = None,
+    model_orchestrator: ModelOrchestrator | None = None,
+    hosting_requirement: ModelHostingRequirement | None = None,
+    persisted_configuration_resolver: ExecutionConfigurationResolver | None = None,
+    project_execution_defaults_resolver: ProjectExecutionDefaultsResolverPort | None = None,
+) -> ExecutionSelector:
+    """Compose the one execution selector shared by preparation and dispatch."""
+    return ExecutionSelector(
+        runtime_resolver=runtime_resolver,
+        model_provider_resolver=model_provider_resolver,
+        model_binding_resolver=model_binding_resolver,
+        default_runtime_id=runtime_id,
+        default_model_provider_id=model_provider_id,
+        runtime_registry=runtime_registry,
+        model_provider_registry=model_provider_registry,
+        eligible_runtime_ids=frozenset({"native"}),
+        model_orchestrator=model_orchestrator,
+        hosting_requirement=hosting_requirement,
+        persisted_configuration_resolver=persisted_configuration_resolver,
+        project_execution_defaults_resolver=project_execution_defaults_resolver,
+    )
 
 
 def create_model_provider_registry(settings: Settings) -> ModelProviderRegistry:
@@ -357,6 +404,36 @@ def create_runtime_registry(
     return registry
 
 
+def create_tool_registry() -> ToolRegistry:
+    """Construct AVA's explicit descriptive catalog; no handlers exist.
+
+    Trusted future bootstrap code can register existing ToolDefinition values.
+    No user configuration, SDK tool discovery or fake production tool is loaded.
+    """
+    registry = ToolRegistry()
+    for definition in initial_workspace_tools():
+        registry.register(definition)
+    return registry
+
+
+def create_workspace_read_executor() -> WorkspaceReadExecutor:
+    """Select a secure host adapter from the backend execution host only."""
+    filesystem: WorkspaceFilesystemSecurityPort
+    if platform.system() == "Linux":
+        from ava.infrastructure.workspace_filesystem.linux import LinuxWorkspaceFilesystemAdapter
+
+        filesystem = LinuxWorkspaceFilesystemAdapter()
+    elif platform.system() == "Windows":
+        from ava.infrastructure.workspace_filesystem.windows import WindowsWorkspaceFilesystemAdapter
+
+        filesystem = WindowsWorkspaceFilesystemAdapter()
+    else:
+        from ava.infrastructure.workspace_filesystem.unavailable import UnavailableWorkspaceFilesystemAdapter
+
+        filesystem = UnavailableWorkspaceFilesystemAdapter()
+    return WorkspaceReadExecutor(filesystem)
+
+
 def create_workspace_registry() -> WorkspaceRegistry:
     """Construct the application-owned workspace registry.
 
@@ -368,18 +445,25 @@ def create_workspace_registry() -> WorkspaceRegistry:
     return WorkspaceRegistry()
 
 
-def create_workspace_resolver(registry: WorkspaceRegistry | None = None) -> WorkspaceResolver:
+def create_workspace_resolver(
+    registry: WorkspaceRegistry | None = None,
+    access_lookup: WorkspaceAccessLookupPort | None = None,
+) -> WorkspaceResolver:
     """Construct an application-owned workspace resolver.
 
-    The registry starts empty: no workspace is provisioned or implicitly
+    The legacy registry starts empty: no workspace is provisioned or implicitly
     granted at startup, and constructing the resolver performs no filesystem,
-    shell, or network activity. Workspaces are registered by provisioning
-    lifecycle code before any run references them; an unregistered id fails
-    cleanly during execution with ``UnknownWorkspaceError``. When an explicit
-    registry is supplied it is shared (so discovery sees the same
-    registrations); otherwise a fresh empty one is created.
+    shell, or network activity. A separate durable configuration lookup may be
+    injected for normalized-tool preflight; it does not issue caller authority
+    or widen legacy runtime selection. Unknown ids fail cleanly with
+    ``UnknownWorkspaceError``. An explicit registry is shared with discovery.
     """
-    return WorkspaceResolver(registry or WorkspaceRegistry())
+    return WorkspaceResolver(registry or WorkspaceRegistry(), access_lookup)
+
+
+def create_workspace_access_lookup(repository: WorkspaceAccessRepository) -> WorkspaceAccessLookupPort:
+    """Compose current Workspace configuration behind its core lookup port."""
+    return PersistentWorkspaceAccessLookup(repository)
 
 
 def create_sandboxed_command_runner() -> BubblewrapSandboxedCommandRunner:
@@ -449,7 +533,8 @@ class ApplicationPersistence:
     concrete implementation. Relational mode shares one owned
     ``SqliteDatabase`` across all relational adapters (run, run-event,
     conversation, message, document, document revision, attachment, Project,
-    CORE prompt, and Project-file metadata); binary Project-file content stays
+    CORE prompt, Project-file metadata, tool features, Workspace access, and
+    approvals); binary Project-file content stays
     behind its independent content port. In both
     modes the ``document_write_coordinator`` and the document adapters share
     the same store/repository instances so a write is never observed through a
@@ -462,6 +547,7 @@ class ApplicationPersistence:
     conversation_repository: ConversationRepository
     conversation_folder_repository: ConversationFolderRepository
     message_repository: MessageRepository
+    context_summary_repository: ContextSummaryRepository
     model_configuration_repository: ModelConfigurationRepository
     provider_connection_repository: ProviderConnectionRepository
     runtime_configuration_repository: RuntimeConfigurationRepository
@@ -470,6 +556,9 @@ class ApplicationPersistence:
     attachment_repository: AttachmentRepository
     document_write_coordinator: DocumentWriteCoordinator
     execution_defaults_repository: ExecutionDefaultsRepository
+    tool_feature_repository: ToolFeatureRepository
+    workspace_access_repository: WorkspaceAccessRepository
+    approval_repository: ApprovalRepository
     project_repository: ProjectRepository
     core_prompt_repository: CorePromptRepository
     core_prompt_assignment_repository: CorePromptAssignmentRepository
@@ -500,6 +589,7 @@ def create_conversation_hard_delete_coordinator(
         run_events=cast(RunEventStore, persistence.run_event_repository),
         attachments=cast(InMemoryAttachmentRepository, persistence.attachment_repository),
         assignments=persistence.core_prompt_assignment_repository,
+        context_summaries=cast(ContextSummaryStore, persistence.context_summary_repository),
     )
 
 
@@ -534,11 +624,15 @@ def create_application_persistence(
         core_prompt_assignments = CorePromptAssignmentStore()
         project_files = ProjectFileStore()
         return ApplicationPersistence(
+            approval_repository=ApprovalStore(),
+            tool_feature_repository=ToolFeatureStore(),
+            workspace_access_repository=WorkspaceAccessStore(),
             run_repository=RunStore(),
             run_event_repository=RunEventStore(),
             conversation_repository=conversations,
             conversation_folder_repository=ConversationFolderStore(conversations, core_prompt_assignments),
             message_repository=MessageStore(),
+            context_summary_repository=ContextSummaryStore(),
             provider_connection_repository=provider_connections,
             model_configuration_repository=model_configurations,
             runtime_configuration_repository=runtime_configurations,
@@ -565,11 +659,15 @@ def create_application_persistence(
             run_migrations=run_migrations,
         )
         return ApplicationPersistence(
+            approval_repository=bundle.approval_repository,
+            tool_feature_repository=bundle.tool_feature_repository,
+            workspace_access_repository=bundle.workspace_access_repository,
             run_repository=bundle.run_repository,
             run_event_repository=bundle.run_event_repository,
             conversation_repository=bundle.conversation_repository,
             conversation_folder_repository=bundle.conversation_folder_repository,
             message_repository=bundle.message_repository,
+            context_summary_repository=bundle.context_summary_repository,
             provider_connection_repository=bundle.provider_connection_repository,
             model_configuration_repository=bundle.model_configuration_repository,
             runtime_configuration_repository=bundle.runtime_configuration_repository,

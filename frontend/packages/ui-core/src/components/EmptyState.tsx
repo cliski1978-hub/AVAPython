@@ -34,8 +34,8 @@ export function EmptyState({
           margin: 0,
           fontSize: t.font.sizeMd,
           fontWeight: t.font.weightSemibold,
-          color: t.colors.foreground,
         }}
+        className="text-foreground"
       >
         {title}
       </h3>
@@ -43,11 +43,11 @@ export function EmptyState({
         <p
           style={{
             margin: 0,
-            color: t.colors.mutedText,
             fontSize: t.font.sizeSm,
             lineHeight: 1.6,
             maxWidth: 400,
           }}
+          className="text-muted-foreground"
         >
           {description}
         </p>

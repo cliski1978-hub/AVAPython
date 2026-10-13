@@ -253,24 +253,25 @@ describe("submitPrompt", () => {
     });
   });
 
-  it("removes the optimistic assistant shell when run creation rejects", async () => {
+  it("removes the optimistic assistant shell and rejects the submission when run creation fails", async () => {
     const agent = makeAgent({
       startRun: vi.fn(async () => {
-        throw new ApiError("Backend broke", 500, {
-          category: "internal",
-          message: "An internal error occurred.",
+        throw new ApiError("Configuration missing", 422, {
+          error_code: "configuration_missing",
+          category: "validation",
+          message: "The selected execution configuration is incomplete.",
         });
       }),
     });
     const { commands, log } = makeCommands();
 
-    await submitPrompt("boom", "conv-a", agent, commands);
+    await expect(submitPrompt("boom", "conv-a", agent, commands)).rejects.toBeInstanceOf(ApiError);
 
     expect(agent.getRunEvents).not.toHaveBeenCalled();
     expect(lastSetRunState(log)).toMatchObject({
       backendStatus: null,
       uiPhase: "idle",
-      runError: "Connection to AVA was interrupted.",
+      runError: "Unable to start this run. The selected execution configuration is incomplete. Choose a valid runtime, model, and provider, then try again.",
     });
 
     expect(entries(log, "updateMessage").some((e) => e.patch?.status === "failed")).toBe(false);

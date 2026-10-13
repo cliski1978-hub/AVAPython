@@ -92,7 +92,7 @@ export function Checkbox({
           style={{
             fontSize: t.font.sizeSm,
             fontWeight: t.font.weightSemibold,
-            color: t.colors.foreground,
+            color: "hsl(var(--foreground))",
             lineHeight: 1.4,
           }}
         >
@@ -101,7 +101,7 @@ export function Checkbox({
         {helpText != null && (
           <span
             id={helpId}
-            style={{ fontSize: t.font.sizeXs, color: t.colors.mutedText, lineHeight: 1.5 }}
+            style={{ fontSize: t.font.sizeXs, color: "hsl(var(--muted-foreground))", lineHeight: 1.5 }}
           >
             {helpText}
           </span>

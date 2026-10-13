@@ -14,10 +14,9 @@ metadata only.
 Inputs and outputs use the AVA-owned ``AttachmentRecord`` snapshot and
 primitive values only. Attachment identifiers and storage keys are
 caller-supplied; a repository never mints ids and never interprets
-``storage_key`` as a filesystem path. The only mutation the port exposes is
-``update_state`` — advancing the lifecycle-controlled ``size_bytes``/``status``
-pair — which the ``AttachmentService`` (Step 4.14.E) drives; orchestration
-logic lives in the service, never in the port.
+``storage_key`` as a filesystem path. Metadata lifecycle mutations are limited
+to ``update_state`` and ``delete``; the ``AttachmentService`` coordinates both
+with the physical content store.
 """
 
 from abc import ABC, abstractmethod
@@ -26,6 +25,20 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ava.contracts.attachments import AttachmentOwnerType, AttachmentStatus
+
+
+def normalize_conversation_attachment_name(file_name: str) -> str:
+    """Return a comparison key for a conversation attachment filename."""
+    return file_name.strip().casefold()
+
+
+class DuplicateConversationAttachmentNameError(Exception):
+    """Raised when a Conversation already owns this normalized filename."""
+
+    def __init__(self, file_name: str) -> None:
+        super().__init__(file_name)
+        self.file_name = file_name
+
 
 # ============================================================
 # BEGIN: Attachment Record
@@ -83,12 +96,16 @@ class AttachmentRepository(ABC):
     Responsibilities:
 
     * ``create`` — persist a new attachment metadata record; a duplicate
-      ``attachment_id`` or duplicate ``storage_key`` is an error.
+      ``attachment_id`` or duplicate ``storage_key`` is an error. Conversation
+      attachments also require a unique filename within that Conversation,
+      compared after trimming and Unicode case-folding.
     * ``get`` — read one attachment's metadata by id, or ``None``.
     * ``list_for_owner`` — enumerate an owner's attachments in stable
       insertion order.
     * ``update_state`` — advance the lifecycle-controlled ``size_bytes`` and
-      ``status`` pair by id (the port's only mutation).
+      ``status`` pair by id.
+    * ``delete`` — remove metadata by AVA-owned identifier and return the
+      removed record so the service can clean up its stored content.
 
     ``create`` is the create-time validation boundary this foundation slice
     guarantees: the owner pair must be both-set or both-``None``, and
@@ -98,8 +115,7 @@ class AttachmentRepository(ABC):
 
     Deliberately not part of this port: attachment identity generation,
     physical-content read/write (content store), orchestration of lifecycle
-    transitions, delete semantics, query language, and observability helpers
-    (``clear``).
+    transitions, query language, and observability helpers (``clear``).
     """
 
     @abstractmethod
@@ -174,6 +190,11 @@ class AttachmentRepository(ABC):
         Raises:
             ValueError: If ``size_bytes`` is negative.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, attachment_id: str) -> AttachmentRecord | None:
+        """Delete metadata by id and return the removed record, or ``None``."""
         raise NotImplementedError
 
 

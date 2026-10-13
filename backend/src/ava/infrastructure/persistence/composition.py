@@ -3,7 +3,7 @@
 Application composition (``ava.infrastructure.composition``) selects this
 relational composition for every durable domain — **run, run-event,
 conversation, message, document, document revision, attachment, Project,
-and CORE prompts** — when
+CORE prompts, tool features, Workspace access, and durable approvals** — when
 ``AVA_PERSISTENCE=relational``. Those ports feed their services over one
 shared ``SqliteDatabase``; the configured default stays the in-memory stores.
 
@@ -16,7 +16,9 @@ from dataclasses import dataclass
 
 from ava.infrastructure.persistence.database import SqliteDatabase
 from ava.infrastructure.persistence.repositories import (
+    RelationalApprovalRepository,
     RelationalAttachmentRepository,
+    RelationalContextSummaryRepository,
     RelationalConversationFolderRepository,
     RelationalConversationRepository,
     RelationalCorePromptAssignmentRepository,
@@ -37,8 +39,12 @@ from ava.infrastructure.persistence.repositories import (
 from ava.infrastructure.persistence.repositories.conversation_hard_delete_coordinator import (
     RelationalConversationHardDeleteCoordinator,
 )
+from ava.infrastructure.persistence.repositories.tool_feature_repository import RelationalToolFeatureRepository
+from ava.infrastructure.persistence.repositories.workspace_access_repository import RelationalWorkspaceAccessRepository
 from ava.repositories import (
+    ApprovalRepository,
     AttachmentRepository,
+    ContextSummaryRepository,
     ConversationFolderRepository,
     ConversationRepository,
     CorePromptAssignmentRepository,
@@ -56,6 +62,8 @@ from ava.repositories import (
     RuntimeConfigurationRepository,
 )
 from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoordinator
+from ava.repositories.tool_feature_repository import ToolFeatureRepository
+from ava.repositories.workspace_access_repository import WorkspaceAccessRepository
 
 # ============================================================
 # BEGIN: Persistence Repositories
@@ -82,6 +90,7 @@ class PersistenceRepositories:
     conversation_repository: ConversationRepository
     conversation_folder_repository: ConversationFolderRepository
     message_repository: MessageRepository
+    context_summary_repository: ContextSummaryRepository
     model_configuration_repository: ModelConfigurationRepository
     provider_connection_repository: ProviderConnectionRepository
     runtime_configuration_repository: RuntimeConfigurationRepository
@@ -90,6 +99,9 @@ class PersistenceRepositories:
     attachment_repository: AttachmentRepository
     document_write_coordinator: RelationalDocumentWriteCoordinator
     execution_defaults_repository: ExecutionDefaultsRepository
+    tool_feature_repository: ToolFeatureRepository
+    workspace_access_repository: WorkspaceAccessRepository
+    approval_repository: ApprovalRepository
     project_repository: ProjectRepository
     project_file_repository: ProjectFileRepository
     core_prompt_repository: CorePromptRepository
@@ -127,12 +139,16 @@ def create_relational_repositories(
     model_configuration_repository = RelationalModelConfigurationRepository(database=database)
     runtime_configuration_repository = RelationalRuntimeConfigurationRepository(database=database)
     return PersistenceRepositories(
+        approval_repository=RelationalApprovalRepository(database),
+        tool_feature_repository=RelationalToolFeatureRepository(database),
+        workspace_access_repository=RelationalWorkspaceAccessRepository(database),
         database=database,
         run_repository=RelationalRunRepository(database=database),
         run_event_repository=RelationalRunEventRepository(database=database),
         conversation_repository=RelationalConversationRepository(database=database),
         conversation_folder_repository=RelationalConversationFolderRepository(database=database),
         message_repository=RelationalMessageRepository(database=database),
+        context_summary_repository=RelationalContextSummaryRepository(database=database),
         model_configuration_repository=model_configuration_repository,
         provider_connection_repository=provider_connection_repository,
         runtime_configuration_repository=runtime_configuration_repository,

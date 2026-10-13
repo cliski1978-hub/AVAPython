@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { ApiClient, createConversation, deleteConversation, listConversations, setConversationArchived, setConversationPinned, setConversationProject, updateConversation } from "./index";
+import { ApiClient, createConversation, deleteConversation, listConversations, relocateConversation, setConversationArchived, setConversationPinned, setConversationProject, updateConversation } from "./index";
 
 it("creates a conversation directly in a Folder when requested", async () => {
   const created = {
@@ -96,6 +96,15 @@ it.each(["project-1", null])("assigns or clears conversation Project membership 
   await expect(setConversationProject(client, "c1", { project_id })).resolves.toEqual(response);
   expect(fetchMock).toHaveBeenCalledWith("http://localhost:8000/conversations/c1/project",
     expect.objectContaining({ method: "PATCH", body: JSON.stringify({ project_id }) }));
+});
+
+it("sends a single authoritative conversation relocation request", async () => {
+  const response = { conversation_id: "c1", folder_id: null, project_id: "project-b" };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response)));
+  const client = new ApiClient({ baseUrl: "http://localhost:8000", fetchImpl: fetchMock });
+  await expect(relocateConversation(client, "c1", { destination_type: "project", destination_id: "project-b" })).resolves.toEqual(response);
+  expect(fetchMock).toHaveBeenCalledWith("http://localhost:8000/conversations/c1/move",
+    expect.objectContaining({ method: "PATCH", body: JSON.stringify({ destination_type: "project", destination_id: "project-b" }) }));
 });
 
 it("deletes a conversation with no body and handles an empty 204 response", async () => {

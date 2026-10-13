@@ -16,7 +16,7 @@ export interface InputProps {
   readOnly?: boolean;
   label?: string;
   ariaLabel?: string;
-  type?: "text" | "search" | "email" | "password";
+  type?: "text" | "search" | "email" | "password" | "number";
   /** Guidance shown below the control and associated via aria-describedby. */
   helpText?: string;
   /** Validation message. Replaces the help text and sets aria-invalid. */

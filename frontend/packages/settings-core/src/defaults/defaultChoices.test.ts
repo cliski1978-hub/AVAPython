@@ -37,6 +37,7 @@ function provider(
     display_name: "Acme Primary",
     endpoint: "https://api.acme.test",
     enabled: true,
+    context_window_tokens: null,
     credential_reference: "env:ACME_API_KEY",
     contract_version: contractVersion,
     ...overrides,
@@ -54,6 +55,7 @@ function model(
     hosting_mode: "remote" as ModelConfigurationResponse["hosting_mode"],
     capabilities: {} as ModelConfigurationResponse["capabilities"],
     enabled: true,
+    context_window_tokens: null,
     contract_version: contractVersion,
     ...overrides,
   };

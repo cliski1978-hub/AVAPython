@@ -25,9 +25,10 @@ from ava.contracts.attachments import AttachmentOwnerType, AttachmentStatus
 from ava.contracts.conversations import MessageRole, MessageStatus
 from ava.contracts.documents import ContentFormat
 from ava.contracts.events import EventType, RunEvent
-from ava.contracts.execution import RunExecutionSelection
+from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.json_types import JsonValue
 from ava.contracts.responses import RunStatus
+from ava.contracts.run_inspection import RunInspectionSnapshot
 from ava.repositories.attachment_repository import AttachmentRecord
 from ava.repositories.conversation_folder import ConversationFolderRecord
 from ava.repositories.conversation_repository import ConversationRecord
@@ -94,6 +95,10 @@ def load_execution_selection(raw: str | None) -> RunExecutionSelection | None:
     return RunExecutionSelection.model_validate_json(raw)
 
 
+def dump_run_inspection_snapshot(snapshot: RunInspectionSnapshot) -> str:
+    return json.dumps(snapshot.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+
 # ============================================================
 # END: JSON serialization
 # ============================================================
@@ -145,17 +150,26 @@ def row_to_core_prompt_record(row: sqlite3.Row) -> CorePromptRecord:
 
 def row_to_run_record(row: sqlite3.Row) -> RunRecord:
     """Map a ``runs`` row back to an AVA run record."""
+    columns = row.keys()
     return RunRecord(
         run_id=row["run_id"],
         status=RunStatus(row["status"]),
         created_at=parse_utc(row["created_at"]),
         updated_at=parse_utc(row["updated_at"]),
         execution_selection=load_execution_selection(row["execution_selection"]),
+        execution_mode=ExecutionMode(row["execution_mode"])
+        if "execution_mode" in columns
+        else ExecutionMode.CHAT,
         conversation_id=row["conversation_id"],
         source_user_message_id=row["source_user_message_id"],
         assistant_message_id=row["assistant_message_id"],
         cancellation_requested_at=(
             parse_utc(row["cancellation_requested_at"]) if row["cancellation_requested_at"] is not None else None
+        ),
+        inspection_snapshot=(
+            RunInspectionSnapshot.model_validate_json(row["inspection_snapshot"])
+            if row["inspection_snapshot"] is not None
+            else None
         ),
     )
 
@@ -185,6 +199,7 @@ def row_to_conversation_record(row: sqlite3.Row) -> ConversationRecord:
         is_archived=bool(row["is_archived"]) if "is_archived" in columns else False,
         folder_id=row["folder_id"] if "folder_id" in columns else None,
         project_id=row["project_id"] if "project_id" in columns else None,
+        is_title_custom=bool(row["is_title_custom"]) if "is_title_custom" in columns else False,
     )
 
 

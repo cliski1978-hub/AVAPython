@@ -24,6 +24,7 @@ from ava.contracts.capabilities import CapabilityName
 from ava.contracts.conversations import RunContext
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.contracts.run_inspection import RunInspectionSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ class MockAgentAdapter(AgentPort):
         request: RunRequest,
         *,
         context: RunContext | None = None,
+        resolved_execution: object | None = None,
     ) -> AgentRunResult:
         """Run a deterministic mock "agent" pass for ``request``.
 
@@ -102,7 +104,7 @@ class MockAgentAdapter(AgentPort):
         the real Native/OpenHands context paths the only ones that translate
         history.
         """
-        del context
+        del context, resolved_execution
         self._active_runs.add(run_id)
         logger.debug("Mock agent starting run %s", run_id)
         await asyncio.sleep(self._run_delay)
@@ -131,8 +133,11 @@ class MockAgentAdapter(AgentPort):
         *,
         context: RunContext | None = None,
         on_content: Callable[[str], None],
+        on_inspection: Callable[[RunInspectionSnapshot], None] | None = None,
+        resolved_execution: object | None = None,
     ) -> AgentRunResult:
         """Emit configured full-content snapshots, then return the normal result."""
+        del on_inspection, resolved_execution
         if not self._content_snapshots:
             return await self.start_run(run_id, request, context=context)
         self._active_runs.add(run_id)

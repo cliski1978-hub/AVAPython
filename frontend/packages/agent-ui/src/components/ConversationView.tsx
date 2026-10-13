@@ -1,4 +1,4 @@
-import { Button, defaultTheme } from "@ava/ui-core";
+import { defaultTheme, shadcn } from "@ava/ui-core";
 import type { SettingsSectionId } from "@ava/ui-core";
 import type { Conversation, ConversationMessage } from "../types";
 import { selectTranscriptMessages } from "../lib/transcript";
@@ -47,6 +47,7 @@ export function ConversationView({
 
   return (
     <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background text-foreground"
       style={{
         flex: 1,
         display: "flex",
@@ -61,6 +62,7 @@ export function ConversationView({
         <div
           role="alert"
           data-conversation-error=""
+          className="min-h-0 flex-1 overflow-auto bg-background text-foreground"
           style={{
             display: "flex",
             alignItems: "center",
@@ -68,14 +70,14 @@ export function ConversationView({
             gap: t.spacing.sm,
             margin: `${t.spacing.sm}px ${t.spacing.md}px 0`,
             padding: `${t.spacing.sm}px ${t.spacing.md}px`,
-            border: `${t.border.width}px solid ${t.colors.danger}`,
+            border: `${t.border.width}px solid hsl(var(--destructive))`,
             borderRadius: t.radius.md,
-            color: t.colors.dangerText,
+            color: "hsl(var(--destructive))",
             fontSize: t.font.sizeSm,
           }}
         >
           <span>{error}</span>
-          {onReload != null && <Button variant="secondary" onClick={onReload}>Retry</Button>}
+          {onReload != null && <shadcn.Button variant="secondary" onClick={onReload}>Retry</shadcn.Button>}
         </div>
       )}
       {list.length === 0 ? (
@@ -84,7 +86,6 @@ export function ConversationView({
             flex: 1,
             overflow: "auto",
             display: "flex",
-            background: `linear-gradient(180deg, ${t.colors.surface} 0%, ${t.colors.background} 55%)`,
           }}
         >
           <div style={{ margin: "auto" }}>

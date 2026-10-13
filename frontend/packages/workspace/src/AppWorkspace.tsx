@@ -13,17 +13,21 @@ import {
   type ExecutionProfile,
   type WorkspaceInfo,
 } from "@ava/agent-ui";
-import { ApiError, type ApiClient } from "@ava/api-client";
-import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getWorkspaces, listProjects, listProjectConversations, subscribeConnectivity } from "@ava/api-client";
+import { ApiError, deleteConversationAttachment, listConversationAttachments, uploadConversationAttachment, type ApiClient } from "@ava/api-client";
+import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getProjectExecutionDefaults, getWorkspaces, listProjects, listProjectConversations, subscribeConnectivity } from "@ava/api-client";
 import { DocumentProvider, DocumentWorkspace } from "@ava/document-core";
+import { ApprovalsWorkspace, type ApprovalDataSource } from "@ava/approvals-core";
 import { CorePromptScopeAssignments, SettingsWorkspace, type AssignablePromptScope } from "@ava/settings-core";
 import { ProjectsWorkspace } from "./ProjectsWorkspace";
+import { RunInspector, type RunInspectorTab } from "./RunInspector";
+import { useContextWindowPreview } from "./useContextWindowPreview";
+import { attachmentContextSummary } from "@ava/agent-ui";
 import type { SettingsSectionId } from "@ava/ui-core";
 import {
   AppShell,
+  DesignSystemPreview,
   Modal,
   StatusIndicator,
-  defaultTheme,
   type StatusState,
 } from "@ava/ui-core";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -40,6 +44,10 @@ import { WorkspaceTabs, type WorkspaceId } from "./WorkspaceTabs";
 
 export interface AppWorkspaceProps {
   client: ApiClient;
+  /** Optional future authorized adapter. No production adapter is wired yet. */
+  approvalDataSource?: ApprovalDataSource;
+  /** Enables isolated developer-only UI previews in Vite hosts. */
+  enableDesignSystemPreview?: boolean;
 }
 
 type AppStatus = "checking" | "healthy" | "unhealthy" | "unavailable";
@@ -52,6 +60,24 @@ function browserPath(): string {
 
 function isProjectsPath(path: string): boolean {
   return path === "/projects" || path.startsWith("/projects/");
+}
+
+function workspaceFromPath(path: string): WorkspaceId {
+  if (isProjectsPath(path)) return "projects";
+  if (path === "/documents" || path.startsWith("/documents/")) return "document";
+  if (path === "/settings" || path.startsWith("/settings/")) return "settings";
+  if (path === "/approvals" || path.startsWith("/approvals/")) return "approvals";
+  return "chat";
+}
+
+function pathForWorkspace(workspace: WorkspaceId): string {
+  switch (workspace) {
+    case "chat": return "/";
+    case "projects": return "/projects";
+    case "document": return "/documents";
+    case "settings": return "/settings";
+    case "approvals": return "/approvals";
+  }
 }
 
 function projectIdFromPath(path: string): string | null {
@@ -68,8 +94,6 @@ function isApiErrorCode(error: ApiError, errorCode: string): boolean {
   return typeof error.body === "object" && error.body !== null && "error_code" in error.body &&
     error.body.error_code === errorCode;
 }
-
-const t = defaultTheme;
 
 function indicatorState(status: AppStatus): StatusState {
   switch (status) {
@@ -120,7 +144,7 @@ function WorkspacePane({
   );
 }
 
-function WorkspaceContent({ client }: { client: ApiClient }) {
+function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; approvalDataSource?: ApprovalDataSource }) {
   const {
     conversationList,
     activeConversations,
@@ -143,9 +167,9 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
     renameFolder,
     deleteFolder,
     moveConversation,
+    relocateConversation,
     createConversationInFolder,
     createConversationInProject,
-    setConversationProject,
     setConversationPinned,
     setConversationArchived,
     reconcileDeletedProject,
@@ -163,9 +187,72 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   } = useAgentRun();
 
   const [routePath, setRoutePath] = useState(browserPath);
-  const [workspace, setWorkspace] = useState<WorkspaceId>(() => isProjectsPath(browserPath()) ? "projects" : "chat");
-  const [documentOpened, setDocumentOpened] = useState(false);
-  const [settingsOpened, setSettingsOpened] = useState(false);
+  const [workspace, setWorkspace] = useState<WorkspaceId>(() => workspaceFromPath(browserPath()));
+  const [inspectorOpen, setInspectorOpen] = useState(() => {
+    try { return window.localStorage.getItem("ava.ui.run-inspector-open") === "true"; } catch { return false; }
+  });
+  const [inspectorWidth, setInspectorWidth] = useState(() => {
+    try { const stored = Number(window.localStorage.getItem("ava.ui.run-inspector-width")); return Number.isFinite(stored) && stored >= 280 ? Math.min(stored, 700) : 380; } catch { return 380; }
+  });
+  const [inspectorTab, setInspectorTab] = useState<RunInspectorTab>("Prompts");
+  const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+  const [conversationAttachments, setConversationAttachments] = useState<Awaited<ReturnType<typeof listConversationAttachments>>["attachments"]>([]);
+  const [attachmentsOwnerId, setAttachmentsOwnerId] = useState<string | null>(null);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [attachmentsLoadError, setAttachmentsLoadError] = useState<string | null>(null);
+  const activeConversationId = activeConversation?.id ?? null;
+  const promptDraft = promptDrafts[activeConversationId ?? "__new__"] ?? "";
+  const setPromptDraft = (value: string) => {
+    const draftKey = activeConversationId ?? "__new__";
+    setPromptDrafts((current) => ({ ...current, [draftKey]: value }));
+  };
+  const activeConversationIdRef = useRef(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      setConversationAttachments([]);
+      setAttachmentsOwnerId(null);
+      setAttachmentsLoading(false);
+      setAttachmentsLoadError(null);
+      return;
+    }
+    let cancelled = false;
+    setConversationAttachments([]);
+    setAttachmentsOwnerId(activeConversationId);
+    setAttachmentsLoading(true);
+    setAttachmentsLoadError(null);
+    void listConversationAttachments(client, activeConversationId).then((result) => {
+      if (!cancelled) setConversationAttachments(result.attachments);
+    }).catch(() => {
+      if (!cancelled) setAttachmentsLoadError("Unable to load this conversation's attachments.");
+    }).finally(() => {
+      if (!cancelled) setAttachmentsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [client, activeConversationId]);
+
+  const uploadActiveConversationAttachment = async (file: File, conversationId: string | null) => {
+    if (!conversationId) return;
+    const result = await uploadConversationAttachment(client, conversationId, file);
+    if (activeConversationIdRef.current === conversationId) {
+      setAttachmentsOwnerId(conversationId);
+      setConversationAttachments((current) => current.some((item) => item.attachment_id === result.attachment_id)
+        ? current
+        : [...current, result]);
+    }
+  };
+
+  const removeActiveConversationAttachment = async (attachmentId: string, conversationId: string | null) => {
+    if (!conversationId) return;
+    await deleteConversationAttachment(client, conversationId, attachmentId);
+    if (activeConversationIdRef.current === conversationId) {
+      setConversationAttachments((current) => current.filter((item) => item.attachment_id !== attachmentId));
+    }
+  };
+  const [documentOpened, setDocumentOpened] = useState(() => workspaceFromPath(browserPath()) === "document");
+  const [settingsOpened, setSettingsOpened] = useState(() => workspaceFromPath(browserPath()) === "settings");
+  const [approvalsOpened, setApprovalsOpened] = useState(() => workspaceFromPath(browserPath()) === "approvals");
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("providers");
   const [promptScopeDialog, setPromptScopeDialog] = useState<PromptScopeDialog | null>(null);
   const [status, setStatus] = useState<AppStatus>("checking");
@@ -177,6 +264,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   // model added in Settings is selectable without a restart.
   const [configuredModels, setConfiguredModels] = useState<ModelInfo[]>([]);
   const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
+  const [projectDefaultModelId, setProjectDefaultModelId] = useState<string | null>(null);
   const [runtimeId, setRuntimeId] = useState<string>();
   const [providerId, setProviderId] = useState<string>();
   const [profileId, setProfileId] = useState("application-default");
@@ -285,7 +373,9 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   const handleProjectConversationMove = async (conversationId: string, projectId: string | null) => {
     const current = state.conversations.find((conversation) => conversation.id === conversationId);
     try {
-      await setConversationProject(conversationId, projectId);
+      await relocateConversation(conversationId, projectId == null
+        ? { destination_type: "ungrouped" }
+        : { destination_type: "project", destination_id: projectId });
     } catch (error) {
       if (error instanceof ApiError && error.status === 404 && isApiErrorCode(error, "project_not_found")) {
         await refreshSidebarProjects();
@@ -311,11 +401,11 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
     setProjectConversationRevision((revision) => revision + 1);
   };
 
-  const handleProjectDeleted = (projectId: string) => {
+  const handleProjectDeleted = (projectId: string, deletedConversationIds: string[] = []) => {
     deletedProjectIds.current.add(projectId);
     setSidebarProjects((current) => current.filter((project) => project.id !== projectId));
     deleteProjectConversationCache(projectId);
-    reconcileDeletedProject(projectId);
+    reconcileDeletedProject(projectId, deletedConversationIds);
     setProjectConversationRevision((revision) => revision + 1);
   };
 
@@ -332,8 +422,12 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   useEffect(() => {
     const onPopState = () => {
       const nextPath = browserPath();
+      const nextWorkspace = workspaceFromPath(nextPath);
       setRoutePath(nextPath);
-      setWorkspace(isProjectsPath(nextPath) ? "projects" : "chat");
+      setWorkspace(nextWorkspace);
+      if (nextWorkspace === "document") setDocumentOpened(true);
+      if (nextWorkspace === "settings") setSettingsOpened(true);
+      if (nextWorkspace === "approvals") setApprovalsOpened(true);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -424,23 +518,63 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
 
   const handleWorkspaceSelect = (next: WorkspaceId) => {
     setWorkspace(next);
-    if (next === "projects") {
-      navigatePath("/projects");
-    } else if (isProjectsPath(routePath)) {
-      navigatePath("/");
-    }
+    navigatePath(pathForWorkspace(next));
     if (next === "document") {
       setDocumentOpened(true);
     }
     if (next === "settings") {
       setSettingsOpened(true);
     }
+    if (next === "approvals") setApprovalsOpened(true);
   };
   const openSettings = (section: SettingsSectionId) => {
     setSettingsSection(section);
     setSettingsOpened(true);
     setWorkspace("settings");
+    navigatePath("/settings");
   };
+
+  // An inherited Project model is shown in chat controls for clarity, but is
+  // never converted into a RunExecutionOverride. The backend resolves the
+  // current Project preference from the conversation on every run.
+  useEffect(() => {
+    const projectId = activeConversation?.projectId;
+    if (projectId == null) {
+      setProjectDefaultModelId(null);
+      return;
+    }
+    let cancelled = false;
+    setProjectDefaultModelId(null);
+    void getProjectExecutionDefaults(client, projectId)
+      .then((defaults) => {
+        if (!cancelled) setProjectDefaultModelId(defaults.model_id);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectDefaultModelId(null);
+      });
+    return () => { cancelled = true; };
+  }, [client, activeConversation?.projectId, routePath]);
+
+  // The inherited Project model is context for display only. The run request
+  // stays unset so the backend resolves the Project's current preference for
+  // each new run instead of receiving a stale model as an explicit override.
+  useEffect(() => {
+    const projectId = activeConversation?.projectId;
+    if (projectId == null) {
+      setProjectDefaultModelId(null);
+      return;
+    }
+    let cancelled = false;
+    setProjectDefaultModelId(null);
+    void getProjectExecutionDefaults(client, projectId)
+      .then((defaults) => {
+        if (!cancelled) setProjectDefaultModelId(defaults.model_id);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectDefaultModelId(null);
+      });
+    return () => { cancelled = true; };
+  }, [client, activeConversation?.projectId, routePath]);
 
   // The session's current execution selection, resolved once and shared by a
   // first submission and by retry/regenerate. A new attempt resolves its own
@@ -449,9 +583,25 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   // prior run's resolved runtime and credentials are never copied.
   // "Application default" resolves to one concrete configured model, so the
   // option can name it instead of hiding what will actually run.
-  const defaultModelDisplayName = defaultModelId == null
+  const applicationDefaultModelDisplayName = defaultModelId == null
     ? undefined
     : (configuredModels.find(m => m.model_id === defaultModelId)?.display_name ?? defaultModelId);
+  const projectDefaultModelDisplayName = projectDefaultModelId == null
+    ? undefined
+    : (configuredModels.find(m => m.model_id === projectDefaultModelId)?.display_name ?? projectDefaultModelId);
+  const inheritsProjectModel = profileId === "application-default"
+    && activeConversation?.projectId != null
+    && projectDefaultModelDisplayName != null;
+  const defaultModelDisplayName = inheritsProjectModel
+    ? projectDefaultModelDisplayName
+    : applicationDefaultModelDisplayName;
+  const composerExecutionSummary = profileId === "application-default"
+    ? (inheritsProjectModel ? `Project default · ${projectDefaultModelDisplayName}` : applicationDefaultModelDisplayName ?? "Application default")
+    : profileId === "auto"
+      ? "Auto"
+      : profiles.find(profile => profile.id === profileId)?.name
+        ?? configuredModels.find(model => model.model_id === providerId)?.display_name
+        ?? "Custom execution";
   // A configured model is addressed by its stable AVA `model_id`; the backend
   // resolves it to the exact ModelConfiguration and its provider connection. An
   // execution profile pins a provider instead, so that value belongs on the
@@ -462,6 +612,28 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
     ? {}
     : providerIdIsModel ? { model_id: providerId } : { model_provider_id: providerId };
   const currentExecution = profileId === "application-default" ? undefined : profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...modelAxis } : undefined);
+  const currentExecutionKey = JSON.stringify(currentExecution ?? null);
+
+  const { preview: contextWindowPreview, loading: contextWindowPreviewLoading, error: contextWindowPreviewError } = useContextWindowPreview(client, {
+    prompt: promptDraft,
+    conversation_id: activeConversationId,
+    execution: currentExecution,
+  }, JSON.stringify([currentExecutionKey, attachmentsOwnerId, conversationAttachments.map(item => item.attachment_id), activeConversation?.projectId, activeConversation?.folderId, projectDefaultModelId, routePath, promptScopeDialog != null]));
+
+  const contextWindowStatus = !promptDraft.trim()
+    ? <span>Context window estimate appears while you draft a message.</span>
+    : contextWindowPreviewLoading
+      ? <span>Estimating context window…</span>
+      : contextWindowPreviewError
+        ? <span className="text-destructive">Context window estimate unavailable.</span>
+        : contextWindowPreview
+          ? <span className={contextWindowPreview.can_fit ? undefined : "text-destructive"}>
+            {contextWindowPreview.estimated_input_tokens.toLocaleString()} estimated tokens
+            {contextWindowPreview.input_budget_tokens != null ? ` / ${contextWindowPreview.input_budget_tokens.toLocaleString()} available` : " · input budget unbounded"}
+            {contextWindowPreview.attachments?.length ? ` · Attachments: ${attachmentContextSummary(contextWindowPreview.attachments)} · ${contextWindowPreview.attachment_context_tokens?.toLocaleString() ?? "not captured"} context tokens (${contextWindowPreview.count_accuracy})` : ""}
+            {contextWindowPreview.compaction_recommended ? " · Older turns may be compacted when you send" : ""}
+          </span>
+          : <span>Context window estimate unavailable.</span>;
 
   const currentWorkspaceId =
     selectedWorkspaceId != null &&
@@ -470,8 +642,14 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       : null;
 
   const handleComposerSubmit = (prompt: string) => {
-    void submitPrompt(prompt, currentExecution, currentWorkspaceId);
+    return submitPrompt(prompt, currentExecution, currentWorkspaceId);
   };
+
+  const toggleInspector = () => setInspectorOpen((open) => {
+    const next = !open;
+    try { window.localStorage.setItem("ava.ui.run-inspector-open", String(next)); } catch { /* optional UI preference */ }
+    return next;
+  });
 
   // A retry or regenerate creates a new run for the same source user message,
   // so it carries the same explicit selection a fresh submit would.
@@ -488,6 +666,7 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       headerActions={
         <>
           <WorkspaceTabs active={workspace} onSelect={handleWorkspaceSelect} />
+          {workspace === "chat" && <button type="button" aria-label="Toggle Run Inspector" aria-expanded={inspectorOpen} onClick={toggleInspector} className="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2">{inspectorOpen ? "Hide Inspector" : "Run Inspector"}</button>}
           <StatusIndicator
             state={indicatorState(status)}
             label={statusText(status)}
@@ -560,29 +739,30 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       mainContent={
         <>
           <WorkspacePane visible={workspace === "chat"} id="chat-workspace">
-            {activeConversation != null ? (
-              <ConversationView
-                conversation={activeConversation}
-                error={state.error}
-                onReload={() => { void selectConversation(activeConversation.id); }}
-                onRetryMessage={handleRetryMessage}
-                onRegenerateMessage={handleRegenerateMessage}
-                onOpenSettings={openSettings}
-              />
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: t.colors.mutedText,
-                  fontSize: 14,
-                }}
-              >
-                No conversation selected.
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                {activeConversation != null ? (
+                  <ConversationView
+                    conversation={activeConversation}
+                    error={state.error}
+                    onReload={() => { void selectConversation(activeConversation.id); }}
+                    onRetryMessage={handleRetryMessage}
+                    onRegenerateMessage={handleRegenerateMessage}
+                    onOpenSettings={openSettings}
+                  />
+                ) : (
+                  <div className="flex flex-1 items-center justify-center bg-background text-muted-foreground" style={{ fontSize: "calc(14px * var(--ava-font-scale, 1))" }}>No conversation selected.</div>
+                )}
               </div>
-            )}
+              {inspectorOpen && <div
+                role="separator" aria-orientation="vertical" aria-label="Resize Run Inspector" aria-valuemin={280} aria-valuemax={700} aria-valuenow={inspectorWidth} tabIndex={0}
+                className="w-1 shrink-0 cursor-col-resize bg-border/60 hover:bg-primary focus-visible:bg-primary"
+                onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); }}
+                onPointerMove={(event) => { if (event.buttons !== 1) return; const next = Math.max(280, Math.min(700, window.innerWidth - event.clientX)); setInspectorWidth(next); try { window.localStorage.setItem("ava.ui.run-inspector-width", String(next)); } catch { /* optional UI preference */ } }}
+                onKeyDown={(event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); const direction = event.key === "ArrowLeft" ? 1 : -1; const next = Math.max(280, Math.min(700, inspectorWidth + direction * 16)); setInspectorWidth(next); try { window.localStorage.setItem("ava.ui.run-inspector-width", String(next)); } catch { /* optional UI preference */ } } }}
+              />}
+              {inspectorOpen && <div className="h-full min-h-0 shrink-0" style={{ width: `${inspectorWidth}px` }}><RunInspector client={client} conversationId={activeConversation?.id ?? null} activeRunId={activeConversation?.run?.runId} draftPrompt={promptDraft} contextWindowPreview={contextWindowPreview} contextWindowPreviewLoading={contextWindowPreviewLoading} contextWindowPreviewError={contextWindowPreviewError} onClose={toggleInspector} selectedTab={inspectorTab} onTabChange={setInspectorTab} /></div>}
+            </div>
           </WorkspacePane>
           {documentOpened && (
             <WorkspacePane
@@ -595,6 +775,11 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
           {settingsOpened && (
             <WorkspacePane visible={workspace === "settings"} id="settings-workspace">
               <SettingsWorkspace client={client} initialSection={settingsSection} key={settingsSection} />
+            </WorkspacePane>
+          )}
+          {approvalsOpened && (
+            <WorkspacePane visible={workspace === "approvals"} id="approvals-workspace">
+              <ApprovalsWorkspace dataSource={approvalDataSource} />
             </WorkspacePane>
           )}
           <WorkspacePane visible={workspace === "projects"} id="projects-workspace">
@@ -636,17 +821,24 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
       }
       prompt={
         <div
-          style={{
-            width: "100%",
-            maxWidth: 640,
-            margin: "0 auto",
-            display: workspace === "chat" ? undefined : "none",
-            paddingBottom: 16,
-          }}
+          className="mx-auto box-border w-full max-w-[90rem] px-3 pb-4 sm:px-4 lg:px-6"
+          style={{ display: workspace === "chat" ? undefined : "none" }}
         >
           <PromptComposer
-            controls={<ExecutionControls profiles={profiles} selectedProfileId={profileId} onDefaultChange={() => { setProfileId("application-default"); setRuntimeId(undefined); setProviderId(undefined); }} onAutoChange={() => { setProfileId("auto"); setRuntimeId(undefined); setProviderId(undefined); }} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} configuredModels={configuredModels} defaultModelDisplayName={defaultModelDisplayName} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId(id || providerId ? "custom" : "application-default"); setRuntimeId(id || undefined); }} onModelProviderChange={id => { setProfileId(id || runtimeId ? "custom" : "application-default"); setProviderId(id || undefined); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
+            value={promptDraft}
+            executionSummary={composerExecutionSummary}
+            contextWindowStatus={contextWindowStatus}
+            conversationId={activeConversationId}
+            attachments={attachmentsOwnerId === activeConversationId ? conversationAttachments : []}
+            attachmentContext={contextWindowPreview?.attachments}
+            attachmentContextLoading={contextWindowPreviewLoading}
+            attachmentsLoading={Boolean(activeConversationId) && (attachmentsOwnerId !== activeConversationId || attachmentsLoading)}
+            attachmentsLoadError={attachmentsOwnerId === activeConversationId ? attachmentsLoadError : null}
+            onUploadAttachment={activeConversationId ? (file, ownerId) => uploadActiveConversationAttachment(file, ownerId) : undefined}
+            onRemoveAttachment={activeConversationId ? (attachmentId, ownerId) => removeActiveConversationAttachment(attachmentId, ownerId) : undefined}
+            controls={<ExecutionControls layout="popover" profiles={profiles} selectedProfileId={profileId} onDefaultChange={() => { setProfileId("application-default"); setRuntimeId(undefined); setProviderId(undefined); }} onAutoChange={() => { setProfileId("auto"); setRuntimeId(undefined); setProviderId(undefined); }} onProfileChange={p => { setProfileId(p.id); setRuntimeId(p.runtime_id); setProviderId(p.model_provider_id); }} runtimes={runtimes} modelProviders={providers} configuredModels={configuredModels} defaultModelDisplayName={defaultModelDisplayName} defaultModelScopeLabel={inheritsProjectModel ? "Project default" : "Application default"} selectedRuntimeId={runtimeId} selectedModelProviderId={providerId} onRuntimeChange={id => { setProfileId(id || providerId ? "custom" : "application-default"); setRuntimeId(id || undefined); }} onModelProviderChange={id => { setProfileId(id || runtimeId ? "custom" : "application-default"); setProviderId(id || undefined); }} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={id => setSelectedWorkspaceId(id)} workspacesUnavailable={workspacesUnavailable} disabled={isRunning || isStarting || isStopping} />}
             placeholder="Ask AVA anything..."
+            onChange={setPromptDraft}
             onSubmit={handleComposerSubmit}
             onStop={stopRun}
             isRunning={isRunning}
@@ -659,12 +851,15 @@ function WorkspaceContent({ client }: { client: ApiClient }) {
   );
 }
 
-export function AppWorkspace({ client }: AppWorkspaceProps) {
+export function AppWorkspace({ client, approvalDataSource, enableDesignSystemPreview = false }: AppWorkspaceProps) {
+  if (enableDesignSystemPreview && browserPath() === "/dev/ui") {
+    return <DesignSystemPreview />;
+  }
   return (
     <ConversationProvider client={client}>
       <DocumentProvider client={client}>
         <AgentRunProvider client={client}>
-          <WorkspaceContent client={client} />
+        <WorkspaceContent client={client} approvalDataSource={approvalDataSource} />
         </AgentRunProvider>
       </DocumentProvider>
     </ConversationProvider>

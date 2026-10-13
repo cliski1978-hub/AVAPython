@@ -35,3 +35,6 @@ export type { RuntimeDiscoveryItem, ModelProviderDiscoveryItem, ModelInfo } from
 export type { ExecutionProfile } from "@ava/contracts";
 export type { WorkspaceInfo } from "@ava/contracts";
 export type { ConversationFolder } from "@ava/contracts";
+export { attachmentContextPresentation, attachmentContextSummary } from "./lib/attachmentContextPresentation";
+
+export type { AttachmentContextItem } from "@ava/contracts";

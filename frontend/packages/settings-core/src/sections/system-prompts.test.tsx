@@ -88,6 +88,29 @@ describe("System Prompts settings", () => {
     expect(listCorePrompts).toHaveBeenCalledWith(client);
   });
 
+  it("uses active semantic theme tokens for CORE Prompt cards and metadata", async () => {
+    const profiles = render(<SystemPromptsSection client={client} />);
+    await screen.findAllByText("Prompt one");
+    const profileCard = profiles.container.querySelector<HTMLElement>('[data-core-prompt="one"]');
+    expect(profileCard?.classList.contains("bg-card")).toBe(true);
+    expect(profileCard?.classList.contains("text-card-foreground")).toBe(true);
+    expect(profileCard?.classList.contains("border-border")).toBe(true);
+    expect(profileCard?.style.background).toBe("");
+    expect(profileCard?.querySelector(".text-muted-foreground")).toBeTruthy();
+
+    profiles.unmount();
+    const assignments = render(
+      <CorePromptScopeAssignments client={client} scopeType="global" scopeId={null} scopeLabel="Global" prompts={[prompt("one")]} />,
+    );
+    await screen.findByRole("combobox", { name: "Assignment for Prompt one at Global" });
+    const assignmentCard = assignments.container.querySelector<HTMLElement>('[data-prompt-assignment="one"]');
+    expect(assignmentCard?.classList.contains("bg-card")).toBe(true);
+    expect(assignmentCard?.classList.contains("text-card-foreground")).toBe(true);
+    expect(assignmentCard?.classList.contains("border-border")).toBe(true);
+    expect(assignmentCard?.style.background).toBe("");
+    expect(assignmentCard?.querySelector(".text-muted-foreground")).toBeTruthy();
+  });
+
   it("creates an exact prompt definition without adding scope data", async () => {
     render(<SystemPromptsSection client={client} />);
     await screen.findAllByText("Prompt one");

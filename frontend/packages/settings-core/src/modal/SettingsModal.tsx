@@ -69,13 +69,12 @@ export function SettingsModal({
         <p
           role="alert"
           data-testid="settings-modal-error"
+          className="bg-destructive text-destructive-foreground"
           style={{
             margin: 0,
             padding: `${t.spacing.sm}px ${t.spacing.md}px`,
             borderRadius: t.radius.md,
-            background: "#fef2f2",
-            color: "#dc2626",
-            fontSize: 13,
+            fontSize: "calc(13px * var(--ava-font-scale, 1))",
             lineHeight: 1.5,
           }}
         >

@@ -35,7 +35,7 @@ export interface ProjectsWorkspaceProps {
   onCreateConversation?: (projectId: string) => Promise<void>;
   conversationsRevision?: number;
   onProjectCreated?: (project: Project) => void;
-  onProjectDeleted?: (projectId: string) => void;
+  onProjectDeleted?: (projectId: string, deletedConversationIds?: string[]) => void;
   onProjectArchived?: (project: Project) => void;
   onProjectUpdated?: (project: Project) => void;
 }
@@ -60,6 +60,11 @@ function isProjectNotFound(error: unknown): boolean {
     error.body.error_code === "project_not_found";
 }
 
+function isActiveConversationRun(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && typeof error.body === "object" && error.body !== null &&
+    "error_code" in error.body && error.body.error_code === "conversation_run_active";
+}
+
 function safeError(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.status >= 500) return "AVA could not complete this request. Try again.";
   return fallback;
@@ -77,9 +82,7 @@ const rowStyle = {
   justifyContent: "space-between",
   gap: t.spacing.md,
   padding: t.spacing.md,
-  border: `${t.border.width}px solid ${t.colors.border}`,
   borderRadius: t.radius.md,
-  background: t.colors.surface,
 };
 
 export function ProjectsWorkspace({
@@ -113,6 +116,7 @@ export function ProjectsWorkspace({
   const [createError, setCreateError] = useState<string | null>(null);
   const [createPending, setCreatePending] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleteConversations, setDeleteConversations] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [archivePendingId, setArchivePendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -267,11 +271,16 @@ export function ProjectsWorkspace({
     setDeletePending(true);
     setActionError(null);
     try {
-      await deleteProject(client, target.id);
+      let deletedConversationIds: string[] = [];
+      if (deleteConversations) {
+        deletedConversationIds = await deleteProject(client, target.id, { deleteConversations: true }) ?? [];
+      } else {
+        await deleteProject(client, target.id);
+      }
       deletedProjectIdsRef.current.add(target.id);
       setProjects((current) => current.filter((project) => project.id !== target.id));
       setDetail((current) => current?.id === target.id ? null : current);
-      onProjectDeleted?.(target.id);
+      onProjectDeleted?.(target.id, deletedConversationIds);
       setDeleteTarget(null);
       if (projectId === target.id) onBackToProjects();
     } catch (error) {
@@ -279,11 +288,13 @@ export function ProjectsWorkspace({
         deletedProjectIdsRef.current.add(target.id);
         setProjects((current) => current.filter((project) => project.id !== target.id));
         setDetail((current) => current?.id === target.id ? null : current);
-        onProjectDeleted?.(target.id);
+        onProjectDeleted?.(target.id, []);
         setDeleteTarget(null);
         if (projectId === target.id) onBackToProjects();
       } else {
-        setActionError(safeError(error, "Project could not be deleted. It is still available."));
+        setActionError(isActiveConversationRun(error)
+          ? "Project conversations cannot be deleted while a response is active. Stop it and try again."
+          : safeError(error, "Project could not be deleted. It is still available."));
       }
     } finally {
       setDeletePending(false);
@@ -295,7 +306,7 @@ export function ProjectsWorkspace({
 
   if (projectId != null) {
     return (
-      <div style={{ flex: 1, overflow: "auto", padding: t.spacing.xl }}>
+      <div className="flex-1 overflow-auto text-foreground" style={{ padding: t.spacing.xl }}>
         <Button variant="ghost" onClick={onBackToProjects} ariaLabel="Back to Projects">← Projects</Button>
         {detailLoading && <LoadingIndicator label="Loading Project…" />}
         {detailError === "not-found" && (
@@ -313,7 +324,7 @@ export function ProjectsWorkspace({
           </div>
         )}
         {detail != null && !detailLoading && (
-          <main style={{ ...sectionStyle, marginTop: t.spacing.lg, maxWidth: 900 }}>
+            <main className="text-foreground" style={{ ...sectionStyle, marginTop: t.spacing.lg, maxWidth: 900 }}>
             <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: t.spacing.md }}>
               <div style={sectionStyle}>
                 <div style={{ display: "flex", alignItems: "center", gap: t.spacing.sm, flexWrap: "wrap" }}>
@@ -323,19 +334,18 @@ export function ProjectsWorkspace({
                     style={{
                       borderRadius: t.radius.sm,
                       padding: `${t.spacing.xs}px ${t.spacing.sm}px`,
-                      color: detail.is_archived ? t.colors.mutedText : t.colors.primary,
-                      background: t.colors.surface,
                       fontSize: t.font.sizeSm,
                     }}
+                    className="bg-muted text-muted-foreground"
                   >
                     {detail.is_archived ? "Archived" : "Active"}
                   </span>
                 </div>
                 {detail.description != null && detail.description !== "" && (
-                  <p style={{ margin: 0, color: t.colors.mutedText }}>{detail.description}</p>
+                  <p className="text-muted-foreground" style={{ margin: 0 }}>{detail.description}</p>
                 )}
               </div>
-              <Button variant="danger" onClick={() => setDeleteTarget(detail)}>Delete Project</Button>
+              <Button variant="danger" onClick={() => { setDeleteConversations(false); setDeleteTarget(detail); }}>Delete Project</Button>
             </header>
 
             <ProjectSectionNav active={activeSection} onSelect={setActiveSection} />
@@ -365,17 +375,20 @@ export function ProjectsWorkspace({
           error={actionError}
           onClose={() => setDeleteTarget(null)}
           onDelete={() => void confirmDelete()}
+          deleteConversations={deleteConversations}
+          conversationCount={deleteTarget == null ? 0 : conversations.filter((conversation) => conversation.projectId === deleteTarget.id).length}
+          onDeleteConversationsChange={setDeleteConversations}
         />
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: t.spacing.xl }}>
+    <div className="flex-1 overflow-auto text-foreground" style={{ padding: t.spacing.xl }}>
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: t.spacing.md }}>
         <div>
           <h1 style={{ margin: 0 }}>Projects</h1>
-          <p style={{ color: t.colors.mutedText }}>Durable workspace and context boundaries.</p>
+          <p className="text-muted-foreground">Durable workspace and context boundaries.</p>
         </div>
         <Button variant="primary" onClick={() => { setCreateError(null); setNameError(null); setCreateOpen(true); }}>
           New Project
@@ -404,7 +417,7 @@ export function ProjectsWorkspace({
                 onOpen={() => onOpenProject(project.id)}
                 onArchive={() => void changeArchived(project, true)}
                 onRestore={() => void changeArchived(project, false)}
-                onDelete={() => setDeleteTarget(project)}
+                onDelete={() => { setDeleteConversations(false); setDeleteTarget(project); }}
               />
             ))}
           </section>
@@ -419,7 +432,7 @@ export function ProjectsWorkspace({
                   onOpen={() => onOpenProject(project.id)}
                   onArchive={() => void changeArchived(project, true)}
                   onRestore={() => void changeArchived(project, false)}
-                  onDelete={() => setDeleteTarget(project)}
+                  onDelete={() => { setDeleteConversations(false); setDeleteTarget(project); }}
                 />
               ))}
             </section>
@@ -451,6 +464,9 @@ export function ProjectsWorkspace({
         error={actionError}
         onClose={() => setDeleteTarget(null)}
         onDelete={() => void confirmDelete()}
+        deleteConversations={deleteConversations}
+        conversationCount={deleteTarget == null ? 0 : conversations.filter((conversation) => conversation.projectId === deleteTarget.id).length}
+        onDeleteConversationsChange={setDeleteConversations}
       />
     </div>
   );
@@ -484,12 +500,11 @@ function ProjectSectionNav({
               border: `${t.border.width}px solid transparent`,
               borderRadius: t.radius.md,
               padding: `${t.spacing.sm}px ${t.spacing.md}px`,
-              background: selected ? t.colors.surface : "transparent",
-              color: selected ? t.colors.primary : t.colors.mutedText,
               font: `inherit`,
               fontWeight: selected ? t.font.weightSemibold : t.font.weightNormal,
               cursor: "pointer",
             }}
+            className={selected ? "bg-muted text-foreground" : "text-muted-foreground"}
           >
             {section.label}
           </button>
@@ -534,9 +549,7 @@ function ProjectSectionContent({
     ...sectionStyle,
     minHeight: 180,
     padding: t.spacing.lg,
-    border: `${t.border.width}px solid ${t.colors.border}`,
     borderRadius: t.radius.md,
-    background: t.colors.surface,
   };
 
   return (
@@ -570,7 +583,7 @@ function ProjectSectionContent({
               </div>
             )}
             {!conversationsLoading && conversationsError == null && conversations.length === 0 && (
-              <p style={{ margin: 0, color: t.colors.mutedText }}>No conversations in this Project yet.</p>
+              <p className="text-muted-foreground" style={{ margin: 0 }}>No conversations in this Project yet.</p>
             )}
             {!conversationsLoading && conversationsError == null && conversations.map((conversation) => (
               <button
@@ -582,13 +595,11 @@ function ProjectSectionContent({
                 style={{
                   textAlign: "left",
                   padding: t.spacing.md,
-                  border: `${t.border.width}px solid ${conversation.id === activeConversationId ? t.colors.primary : t.colors.border}`,
                   borderRadius: t.radius.md,
-                  background: t.colors.surface,
-                  color: t.colors.foreground,
                   font: "inherit",
                   cursor: "pointer",
                 }}
+                className={`w-full border bg-card text-left text-card-foreground dark:bg-black dark:text-white ${conversation.id === activeConversationId ? "border-primary" : "border-border"}`}
               >
                 {conversation.title}
               </button>
@@ -631,6 +642,7 @@ function ProjectSectionContent({
             aria-labelledby={`project-section-tab-${section.id}`}
             tabIndex={0}
             hidden={active !== section.id}
+            className="border border-border bg-card text-card-foreground dark:bg-black dark:text-white"
             style={{ ...panelStyle, display: active === section.id ? "flex" : "none" }}
           >
             {content}
@@ -718,7 +730,7 @@ function ProjectInstructionsEditor({
   return (
     <div style={{ ...sectionStyle, maxWidth: 760 }}>
       <h2 style={{ margin: 0 }}>Instructions</h2>
-      <p style={{ margin: 0, color: t.colors.mutedText }}>
+      <p className="text-muted-foreground" style={{ margin: 0 }}>
         These Project-specific instructions are saved for future use. They will affect conversations only after execution integration is added.
       </p>
       <Textarea
@@ -760,12 +772,12 @@ function ProjectRow({
   onDelete: () => void;
 }) {
   return (
-    <article style={rowStyle}>
+    <article className="border border-border bg-card text-card-foreground dark:bg-black dark:text-white" style={rowStyle}>
       <div style={{ minWidth: 0 }}>
-        <button type="button" onClick={onOpen} style={{ border: 0, padding: 0, background: "transparent", color: t.colors.primary, font: "inherit", fontWeight: t.font.weightSemibold, cursor: "pointer" }}>
+        <button type="button" onClick={onOpen} className="text-foreground dark:text-white" style={{ border: 0, padding: 0, background: "transparent", font: "inherit", fontWeight: t.font.weightSemibold, cursor: "pointer" }}>
           {project.name}
         </button>
-        {project.description != null && project.description !== "" && <p style={{ margin: `${t.spacing.xs}px 0 0`, color: t.colors.mutedText }}>{project.description}</p>}
+        {project.description != null && project.description !== "" && <p className="text-muted-foreground dark:text-white/80" style={{ margin: `${t.spacing.xs}px 0 0` }}>{project.description}</p>}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: t.spacing.sm }}>
         <Button size="sm" onClick={onOpen}>Open</Button>
@@ -784,12 +796,18 @@ function DeleteProjectDialog({
   error,
   onClose,
   onDelete,
+  deleteConversations,
+  conversationCount,
+  onDeleteConversationsChange,
 }: {
   target: Project | null;
   pending: boolean;
   error: string | null;
   onClose: () => void;
   onDelete: () => void;
+  deleteConversations: boolean;
+  conversationCount: number;
+  onDeleteConversationsChange: (checked: boolean) => void;
 }) {
   return (
     <Modal
@@ -807,6 +825,13 @@ function DeleteProjectDialog({
     >
       <div style={{ padding: t.spacing.lg }}>
         <p>This permanently removes the Project metadata. This cannot be undone.</p>
+        <label style={{ display: "flex", gap: t.spacing.sm, alignItems: "flex-start" }}>
+          <input type="checkbox" checked={deleteConversations} disabled={pending}
+            onChange={(event) => onDeleteConversationsChange(event.currentTarget.checked)} />
+          <span>{conversationCount > 0
+            ? `Also permanently delete all ${conversationCount} conversations in this Project`
+            : "Also permanently delete all conversations in this Project"}</span>
+        </label>
         {error != null && <p role="alert">{error}</p>}
       </div>
     </Modal>

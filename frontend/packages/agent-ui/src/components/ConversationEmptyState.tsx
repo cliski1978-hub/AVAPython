@@ -1,4 +1,4 @@
-import { defaultTheme, EmptyState } from "@ava/ui-core";
+import { defaultTheme, EmptyState, shadcn } from "@ava/ui-core";
 
 const STARTER_PROMPTS = [
   "Explain a technical concept",
@@ -7,11 +7,13 @@ const STARTER_PROMPTS = [
 ];
 
 const t = defaultTheme;
+const avaHeroImage = new URL("../assets/ava-hero.png", import.meta.url).href;
 
 /** Visual starter prompts only — never wired to submission or state. */
 export function ConversationEmptyState() {
   return (
     <div
+      className="text-foreground"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -21,7 +23,23 @@ export function ConversationEmptyState() {
         boxSizing: "border-box",
       }}
     >
-      <EmptyState title="AVA" description="How can I help?" />
+      <EmptyState
+        title="How can I help?"
+        visual={(
+          <img
+            data-ava-hero=""
+            src={avaHeroImage}
+            alt="AVA"
+            style={{
+              display: "block",
+              width: "clamp(180px, 28vw, 280px)",
+              maxWidth: "100%",
+              height: "auto",
+              borderRadius: t.radius.md,
+            }}
+          />
+        )}
+      />
       <ul
         style={{
           listStyle: "none",
@@ -35,16 +53,7 @@ export function ConversationEmptyState() {
       >
         {STARTER_PROMPTS.map((prompt) => (
           <li key={prompt}>
-            <span
-              style={{
-                display: "inline-block",
-                padding: `${t.spacing.xs + 2}px ${t.spacing.md}px`,
-                border: `${t.border.width}px solid ${t.colors.borderStrong}`,
-                borderRadius: "999px",
-                fontSize: t.font.sizeSm,
-                color: t.colors.mutedText,
-              }}
-            >
+            <span className={`${shadcn.buttonVariants({ variant: "outline", size: "sm" })} pointer-events-none cursor-default`}>
               {prompt}
             </span>
           </li>

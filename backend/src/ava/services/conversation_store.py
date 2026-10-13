@@ -41,6 +41,7 @@ class ConversationStore(ConversationRepository):
         title: str,
         project_id: str | None = None,
         folder_id: str | None = None,
+        is_title_custom: bool = False,
     ) -> ConversationRecord:
         """Create a new conversation record.
 
@@ -64,6 +65,7 @@ class ConversationStore(ConversationRepository):
             updated_at=now,
             project_id=project_id,
             folder_id=folder_id,
+            is_title_custom=is_title_custom,
         )
         self._conversations[conversation_id] = record
         return record
@@ -101,7 +103,15 @@ class ConversationStore(ConversationRepository):
         record = self._conversations.get(conversation_id)
         if record is None:
             return None
-        updated = replace(record, title=title, updated_at=datetime.now(UTC))
+        updated = replace(record, title=title, updated_at=datetime.now(UTC), is_title_custom=True)
+        self._conversations[conversation_id] = updated
+        return updated
+
+    def update_auto_title(self, conversation_id: str, title: str) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None or record.is_title_custom:
+            return record
+        updated = replace(record, title=title)
         self._conversations[conversation_id] = updated
         return updated
 
@@ -136,6 +146,16 @@ class ConversationStore(ConversationRepository):
         if current is None:
             return None
         updated = replace(current, project_id=project_id)
+        self._conversations[conversation_id] = updated
+        return updated
+
+    def relocate(
+        self, conversation_id: str, *, folder_id: str | None, project_id: str | None
+    ) -> ConversationRecord | None:
+        record = self._conversations.get(conversation_id)
+        if record is None:
+            return None
+        updated = replace(record, folder_id=folder_id, project_id=project_id)
         self._conversations[conversation_id] = updated
         return updated
 

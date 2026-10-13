@@ -99,12 +99,39 @@ def test_nearest_scope_wins_with_project_folder_and_conversation(world) -> None:
 
     result = world[2].resolve(PromptResolutionContext(conversation_id="conversation-a"))
     assert result.context.project_id == "project-a" and result.context.folder_id == "folder-a"
-    assert [p.core_prompt_id for p in result.enabled_prompts] == [reenabled.id]
+    assert [p.core_prompt_id for p in result.enabled_prompts] == [no_assignment.id, reenabled.id]
     excluded = {p.core_prompt_id: p for p in result.excluded_prompts}
     assert excluded[global_prompt.id].reason == "explicit_disable"
     assert excluded[global_prompt.id].winning_scope_type == CorePromptScopeType.FOLDER
-    assert excluded[no_assignment.id].reason == "no_matching_assignment"
-    assert result.enabled_prompts[0].winning_scope_type == CorePromptScopeType.CONVERSATION
+    inherited = next(item for item in result.enabled_prompts if item.core_prompt_id == no_assignment.id)
+    assert inherited.reason == "inherited_global"
+    assert inherited.winning_assignment_id is None
+    reenabled_result = next(item for item in result.enabled_prompts if item.core_prompt_id == reenabled.id)
+    assert reenabled_result.winning_scope_type == CorePromptScopeType.CONVERSATION
+
+
+def test_unassigned_enabled_core_prompts_are_inherited_by_plain_project_and_folder_conversations(world) -> None:
+    first = _create(world, "AVA PRIME DIRECTIVES")
+    second = _create(world, "Always Include")
+    now = datetime.now(UTC)
+    world[4].create(ProjectRecord("project-a", "Project", now, now))
+    world[5].create(ConversationFolderRecord("folder-a", "Folder", now, now))
+    world[3].create("plain", title="Plain")
+    world[3].create("project", title="Project", project_id="project-a")
+    world[3].create("folder", title="Folder", folder_id="folder-a")
+
+    expected_ids = {first.id, second.id}
+    results = [
+        world[2].resolve(PromptResolutionContext(conversation_id=conversation_id))
+        for conversation_id in ("plain", "project", "folder")
+    ]
+    assert results[0].context.project_id is None and results[0].context.folder_id is None
+    assert results[1].context.project_id == "project-a" and results[1].context.folder_id is None
+    assert results[2].context.project_id is None and results[2].context.folder_id == "folder-a"
+    for result in results:
+        assert {item.core_prompt_id for item in result.enabled_prompts} == expected_ids
+        assert all(item.winning_scope_type == CorePromptScopeType.GLOBAL for item in result.enabled_prompts)
+        assert all(item.winning_assignment_id is None for item in result.enabled_prompts)
 
 
 def test_folder_assignment_move_changes_only_folder_prompt_scope(world) -> None:
@@ -114,6 +141,7 @@ def test_folder_assignment_move_changes_only_folder_prompt_scope(world) -> None:
     world[5].create(ConversationFolderRecord("folder-a", "Folder A", now, now))
     world[5].create(ConversationFolderRecord("folder-b", "Folder B", now, now))
     world[3].create("conversation-a", title="Chat", project_id="project-a")
+    _assign(world, folder_prompt.id, CorePromptScopeType.GLOBAL, None, "disable")
     _assign(world, folder_prompt.id, CorePromptScopeType.FOLDER, "folder-a", "enable")
 
     world[3].set_folder("conversation-a", "folder-a")
@@ -170,6 +198,8 @@ def test_runtime_capability_conflicts_disabled_definition_and_absent_targets(wor
 def test_no_conversation_membership_and_invalid_context_errors(world) -> None:
     capability_only = _create(world, "Capability only")
     runtime_only = _create(world, "Runtime only")
+    _assign(world, capability_only.id, CorePromptScopeType.GLOBAL, None, "disable")
+    _assign(world, runtime_only.id, CorePromptScopeType.GLOBAL, None, "disable")
     _assign(world, capability_only.id, CorePromptScopeType.CAPABILITY, "runs", "enable")
     _assign(world, runtime_only.id, CorePromptScopeType.RUNTIME, "native", "enable")
     no_context = world[2].resolve(PromptResolutionContext())

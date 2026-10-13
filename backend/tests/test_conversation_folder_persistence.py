@@ -222,7 +222,7 @@ def test_legacy_v10_database_migrates_without_reset(tmp_path: Path) -> None:
             version = connection.execute(
                 "SELECT version FROM ava_schema_migrations ORDER BY version DESC LIMIT 1"
             ).fetchone()[0]
-            assert folder_id is None and project_id is None and version == 18
+            assert folder_id is None and project_id is None and version == 25
             assert connection.execute("SELECT 1 FROM conversation_folders").fetchone() is None
     finally:
         migrated.dispose()
@@ -278,5 +278,62 @@ async def test_folder_crud_and_assignment_api(provider: str, tmp_path: Path) -> 
             assert (await client.delete("/conversation-folders/missing")).json()[
                 "error_code"
             ] == "conversation_folder_not_found"
+    finally:
+        app.state.persistence.dispose()
+
+
+@pytest.mark.parametrize("provider", ["memory", "relational"])
+@pytest.mark.asyncio
+async def test_move_api_atomically_replaces_folder_and_project_membership(provider: str, tmp_path: Path) -> None:
+    app = create_app(settings=Settings(
+        persistence_provider=provider,
+        persistence_database_url=str(tmp_path / f"move-{provider}.sqlite3"),
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            folder_a = (await client.post("/conversation-folders", json={"name": "Folder A"})).json()["id"]
+            folder_b = (await client.post("/conversation-folders", json={"name": "Folder B"})).json()["id"]
+            project_a = (await client.post("/projects", json={"name": "Project A"})).json()["id"]
+            project_b = (await client.post("/projects", json={"name": "Project B"})).json()["id"]
+            conversation = (
+                await client.post("/conversations", json={"title": "Move test", "folder_id": folder_a})
+            ).json()
+            conversation_id = conversation["conversation_id"]
+            # Seed the prior Project relationship to prove the move clears stale dual membership.
+            app.state.conversation_service.set_project(conversation_id, project_a)
+
+            async def move(destination_type: str, destination_id: str | None = None) -> dict[str, object]:
+                response = await client.patch(f"/conversations/{conversation_id}/move", json={
+                    "destination_type": destination_type,
+                    "destination_id": destination_id,
+                })
+                assert response.status_code == 200
+                result = response.json()
+                persisted = app.state.persistence.conversation_repository.get(conversation_id)
+                assert persisted is not None
+                assert (persisted.folder_id, persisted.project_id) == (result["folder_id"], result["project_id"])
+                return result
+
+            moved = await move("folder", folder_b)
+            assert (moved["folder_id"], moved["project_id"]) == (folder_b, None)
+            moved = await move("project", project_b)
+            assert (moved["folder_id"], moved["project_id"]) == (None, project_b)
+            moved = await move("project", project_a)
+            assert (moved["folder_id"], moved["project_id"]) == (None, project_a)
+            moved = await move("ungrouped")
+            assert (moved["folder_id"], moved["project_id"]) == (None, None)
+            moved = await move("project", project_b)
+            assert (moved["folder_id"], moved["project_id"]) == (None, project_b)
+            moved = await move("folder", folder_a)
+            assert (moved["folder_id"], moved["project_id"]) == (folder_a, None)
+            moved = await move("ungrouped")
+            assert (moved["folder_id"], moved["project_id"]) == (None, None)
+            active = (await client.get("/conversations")).json()["conversations"]
+            active_item = next(item for item in active if item["conversation_id"] == conversation_id)
+            assert (active_item["folder_id"], active_item["project_id"]) == (None, None)
+            project_a_items = (await client.get(f"/projects/{project_a}/conversations")).json()["conversations"]
+            project_b_items = (await client.get(f"/projects/{project_b}/conversations")).json()["conversations"]
+            assert conversation_id not in {item["conversation_id"] for item in project_a_items}
+            assert conversation_id not in {item["conversation_id"] for item in project_b_items}
     finally:
         app.state.persistence.dispose()

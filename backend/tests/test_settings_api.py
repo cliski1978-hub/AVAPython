@@ -314,9 +314,25 @@ def test_model_create_returns_201_and_the_configured_fields(client: TestClient) 
         "hosting_mode",
         "capabilities",
         "enabled",
+        "context_window_tokens",
         "contract_version",
     }
     assert body["hosting_mode"] == "company_hosted"
+    assert body["context_window_tokens"] is None
+
+
+def test_model_context_window_is_positive_and_persists_on_create_and_update(client: TestClient) -> None:
+    _create_connection(client)
+    created = _create_model(client, context_window_tokens=32768)
+    assert created["context_window_tokens"] == 32768
+    legacy_update = _update_model(client, "model-1")
+    assert legacy_update.status_code == 200, legacy_update.text
+    assert legacy_update.json()["context_window_tokens"] == 32768
+    updated = _update_model(client, "model-1", context_window_tokens=16384)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["context_window_tokens"] == 16384
+    invalid = _update_model(client, "model-1", context_window_tokens=0)
+    assert invalid.status_code == 422
 
 
 def test_model_create_rejects_an_unknown_provider_connection(client: TestClient) -> None:

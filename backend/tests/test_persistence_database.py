@@ -76,7 +76,7 @@ def test_schema_bootstrap_is_idempotent() -> None:
         "projects",
     } <= tables
     with database.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 18
+        assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 21
     database.dispose()
 
 

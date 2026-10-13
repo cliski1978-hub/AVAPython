@@ -1,5 +1,6 @@
 export { AppShell, type AppShellProps } from "./AppShell";
 export { Header, type HeaderProps } from "./Header";
+export { PrimaryNav, type PrimaryNavProps, type PrimaryDestination } from "./PrimaryNav";
 export { Sidebar, type SidebarProps } from "./Sidebar";
 export { MainContent, type MainContentProps } from "./MainContent";
 export { Button, type ButtonProps, type ButtonVariant } from "./Button";

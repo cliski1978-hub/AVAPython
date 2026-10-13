@@ -27,6 +27,8 @@ export interface SettingsSectionDefinition {
 }
 
 export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
+  { id: "features-tools", label: "Features & Tools", summary: "Backend-managed tool feature availability." },
+  { id: "workspace-access", label: "Workspace Access", summary: "Administrator-configured execution Workspace access." },
   {
     id: "providers",
     label: "Providers",
@@ -52,6 +54,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     label: "System Prompts",
     summary: "Reusable CORE prompt definitions and explicit scope assignments.",
   },
+  {
+    id: "appearance",
+    label: "Appearance",
+    summary: "Choose the appearance mode, font family, and text size.",
+  },
 ];
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "providers";
@@ -60,6 +67,7 @@ export const settingsSectionPanelId = (id: SettingsSectionId) =>
   `settings-section-${id}`;
 
 const t = defaultTheme;
+const semantic = (token: string) => `hsl(var(--${token}))`;
 
 export interface SettingsSectionNavProps {
   active: SettingsSectionId;
@@ -86,9 +94,9 @@ function SectionTab({
     borderRadius: t.radius.md,
     borderWidth: t.border.width,
     borderStyle: "solid",
-    borderColor: "transparent",
-    background: selected ? t.colors.surface : "transparent",
-    color: selected ? t.colors.primary : t.colors.mutedText,
+    borderColor: selected ? semantic("border") : "transparent",
+    background: selected ? semantic("secondary") : "transparent",
+    color: "hsl(var(--foreground))",
     fontWeight: selected ? t.font.weightSemibold : t.font.weightNormal,
     fontSize: t.font.sizeSm,
     fontFamily: t.font.family,
@@ -97,10 +105,10 @@ function SectionTab({
     boxSizing: "border-box",
     transition: "background 120ms ease, color 120ms ease, box-shadow 120ms ease",
     ...(interaction.hovered && !selected
-      ? { background: t.colors.ghostHover, color: t.colors.foreground }
+      ? { background: semantic("accent"), color: semantic("accent-foreground") }
       : {}),
     ...(interaction.focused
-      ? { boxShadow: `0 0 0 2px ${t.colors.focusRing}33` }
+      ? { boxShadow: "0 0 0 2px hsl(var(--ring) / 0.25)" }
       : {}),
   };
 

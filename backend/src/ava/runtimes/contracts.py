@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pydantic import BaseModel
 
 from ava.contracts.conversations import RunContext
+from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeInfo
@@ -36,6 +37,8 @@ class RuntimeRunResult(BaseModel):
     status: RunStatus
     content: str | None = None
     failure_code: str | None = None
+    runtime_request: JsonValue | None = None
+    runtime_response: JsonValue | None = None
 
 
 class AgentRuntimePort(ABC):

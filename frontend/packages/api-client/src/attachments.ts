@@ -59,6 +59,32 @@ export async function createAttachment(
   return (await client.request("/attachments", { method: "POST", body: formData })).json();
 }
 
+/** Upload a file directly into a conversation's attachment collection. */
+export async function uploadConversationAttachment(
+  client: ApiClient,
+  conversationId: string,
+  file: File,
+): Promise<AttachmentResponse> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+  return (await client.request(`/conversations/${encodeURIComponent(conversationId)}/attachments`, {
+    method: "POST",
+    body: formData,
+  })).json();
+}
+
+/** Remove one attachment, scoped to the conversation that owns it. */
+export async function deleteConversationAttachment(
+  client: ApiClient,
+  conversationId: string,
+  attachmentId: string,
+): Promise<void> {
+  await client.request(
+    `/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: "DELETE" },
+  );
+}
+
 /** Return one attachment's metadata (GET /attachments/{attachment_id}). */
 export async function getAttachment(
   client: ApiClient,
@@ -82,6 +108,14 @@ export async function listAttachments(
 ): Promise<AttachmentListResponse> {
   const query = new URLSearchParams({ owner_type: ownerType, owner_id: ownerId });
   return (await client.request(`/attachments?${query.toString()}`)).json();
+}
+
+/** List attachments belonging to a conversation (never its Project). */
+export async function listConversationAttachments(
+  client: ApiClient,
+  conversationId: string,
+): Promise<AttachmentListResponse> {
+  return (await client.request(`/conversations/${encodeURIComponent(conversationId)}/attachments`)).json();
 }
 
 /**

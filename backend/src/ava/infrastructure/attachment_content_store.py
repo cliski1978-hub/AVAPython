@@ -21,6 +21,8 @@ Behavior:
   clean the temporary file best-effort;
 * ``open`` returns a real streaming binary reader; ``exists`` answers only
   for regular files (directories are never treated as stored content);
+* ``delete`` removes empty parent directories up to, but never including, the
+  configured root;
 * selection stays independent of the metadata persistence provider
   (``AVA_PERSISTENCE != AVA_ATTACHMENT_STORAGE``).
 """
@@ -105,13 +107,26 @@ class LocalAttachmentContentStore(AttachmentContentStore):
         return final.is_file()
 
     def delete(self, storage_key: str) -> bool:
-        """Delete stored bytes by validated logical key, returning false if absent."""
+        """Delete bytes and prune empty parent directories, returning if bytes existed."""
         final = self._resolve(storage_key)
         try:
             final.unlink()
         except FileNotFoundError:
-            return False
-        return True
+            deleted = False
+        else:
+            deleted = True
+        self._remove_empty_parent_directories(final.parent)
+        return deleted
+
+    def _remove_empty_parent_directories(self, directory: Path) -> None:
+        """Prune empty directories beneath the configured root, best-effort."""
+        while directory != self._root and self._root in directory.parents:
+            try:
+                directory.rmdir()
+            except OSError:
+                # Keep shared or otherwise non-empty directories in place.
+                break
+            directory = directory.parent
 
     def _resolve(self, storage_key: str) -> Path:
         """Validate a logical key and resolve it strictly inside the root.

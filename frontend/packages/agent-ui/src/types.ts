@@ -92,6 +92,8 @@ export interface Conversation {
   folderId?: string | null;
   /** Project workspace membership, independent from folder organization. */
   projectId?: string | null;
+  /** Durable signal that manual naming takes precedence over first-message auto-title. */
+  isTitleCustom?: boolean;
   /** Run lifecycle state for the most recent run started in this conversation. */
   run?: ConversationRunState;
   createdAt?: string;

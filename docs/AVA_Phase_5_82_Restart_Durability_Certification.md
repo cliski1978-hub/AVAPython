@@ -64,7 +64,7 @@ provider/model/runtime identities; Project defaults (including one null axis);
 null/non-empty/empty instruction values; enabled and disabled prompts plus a
 prompt with no explicit assignment (INHERIT); global,
 runtime, capability, Project, Folder, and Conversation assignments; and text,
-binary, Unicode, duplicate-name, and zero-byte Project Files.
+binary, Unicode, distinct-name, and zero-byte Project Files.
 
 ## Restart behavior and results
 
@@ -92,10 +92,11 @@ snapshot after reopening the configured attachment root. Project File metadata
 and byte hashes match the pre-restart snapshot. Downloads
 from the reopened local store match every original byte, including non-UTF-8
 binary bytes and a zero-byte object. Unicode filenames round-trip exactly;
-duplicate filenames remain separate opaque IDs. Public metadata omits
+Project filenames remain unique within their owner while separate Projects
+remain isolated. Public metadata omits
 `content_ref`. The deletion case confirms hard deletion removes conversation
 and message attachment associations and their local content. Project File
-sibling content remains intact when a duplicate filename sibling is deleted.
+sibling content remains intact when a different Project File is deleted.
 
 The partial-run scenario starts a run, persists partial assistant content, then
 closes app A while the run is still active. On B's normal startup, the current
