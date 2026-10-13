@@ -85,8 +85,6 @@ jobs:
           }
 
       - name: Run shared filesystem and authorization contracts
-        env:
-          AVA_PHASE_6_11_WINDOWS_DIAGNOSTICS: "1"
         run: >-
           python -m pytest -q
           tests/test_workspace_filesystem_contract.py
@@ -104,12 +102,11 @@ jobs:
 
       - name: Run Windows native filesystem security tests
         if: runner.os == 'Windows'
-        env:
-          AVA_PHASE_6_11_WINDOWS_DIAGNOSTICS: "1"
         run: python -m pytest -q tests/test_windows_workspace_filesystem.py
 
       - name: Run Ruff
         run: python -m ruff check src tests
 
-      - name: Run strict mypy
+      - name: Run strict mypy on Linux
+        if: runner.os == 'Linux'
         run: python -m mypy src/ava
