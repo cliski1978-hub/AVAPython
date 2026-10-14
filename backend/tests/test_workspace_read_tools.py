@@ -79,7 +79,13 @@ def _setup(
     policy = fixture.service()
     policy._operations = operations
     runs = RunStore()
-    runs.create("run-1", execution_mode=mode)
+    runs.create(
+        "run-1",
+        execution_mode=mode,
+        owner_principal_ref="caller-1",
+        owner_tenant_ref="tenant-1",
+        execution_workspace_id="workspace-1",
+    )
     executor = WorkspaceReadExecutor(filesystem or LinuxWorkspaceFilesystemAdapter())
     reservations = _Reservations()
     service = ToolExecutionService(
