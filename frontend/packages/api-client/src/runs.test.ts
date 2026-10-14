@@ -61,6 +61,25 @@ describe("startRun", () => {
     expect(result.contract_version).toBe("v1");
   });
 
+  it("serializes the explicitly selected execution mode without changing the Run endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...runResponse, execution_mode: "agent" }));
+    const result = await startRun(makeClient(fetchMock), {
+      prompt: "Inspect the workspace",
+      conversation_id: "conversation-1",
+      execution_mode: "agent",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://localhost:8000/runs");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({
+      prompt: "Inspect the workspace",
+      conversation_id: "conversation-1",
+      execution_mode: "agent",
+    }));
+    expect(result.execution_mode).toBe("agent");
+  });
+
   it("throws ApiError on a backend run failure", async () => {
     const body = {
       error_code: "internal_error",

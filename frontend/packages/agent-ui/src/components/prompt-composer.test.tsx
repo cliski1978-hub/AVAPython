@@ -101,7 +101,7 @@ describe("PromptComposer", () => {
     const html = renderToStaticMarkup(
       <PromptComposer onSubmit={noop} onStop={noop} disabled />,
     );
-    expect(countDisabled(html)).toBe(2);
+    expect(countDisabled(html)).toBe(3);
   });
 
   it("disables Stop as well when disabled while running", () => {
@@ -109,7 +109,7 @@ describe("PromptComposer", () => {
       <PromptComposer onSubmit={noop} onStop={noop} isRunning disabled />,
     );
     expect(html).toContain('aria-label="Stop"');
-    expect(countDisabled(html)).toBe(2);
+    expect(countDisabled(html)).toBe(3);
   });
 
   it("shows the attachment affordance only when a conversation upload action exists", () => {
@@ -149,7 +149,7 @@ describe("PromptComposer", () => {
     expect(html).toContain('aria-label="Remove notes.md"');
   });
 
-  it("keeps execution selectors out of the resting composer", () => {
+  it("keeps advanced execution settings in the popover while showing mode selection", () => {
     const controls = <div>
       <select aria-label="Select profile" />
       <select aria-label="Select runtime" />
@@ -163,7 +163,8 @@ describe("PromptComposer", () => {
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain("dark:bg-black");
     expect(html).toContain("dark:text-white");
-    expect(html).not.toContain("<select");
+    expect(html).toContain('<select id="prompt-execution-mode" aria-label="Execution mode"');
+    expect(html).not.toContain('aria-label="Select profile"');
     expect(html).not.toContain('data-execution-settings-popover');
   });
 

@@ -5,7 +5,7 @@
  * here.
  */
 
-import type { ContextWindowPreview, ExecutionMode, RunEvent, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
+import type { ContextWindowPreview, RunEvent, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
 
 import { ApiClient } from "./client";
 export type { ContextWindowPreview, ExecutionMode, RunEvent, RunExecutionOverride, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";

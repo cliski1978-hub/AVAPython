@@ -80,6 +80,8 @@ from ava.contracts.models import (
     ModelProviderHealthStatus,
     ModelRequest,
     ModelResponse,
+    ModelToolCall,
+    ModelToolDefinition,
 )
 from ava.contracts.project_files import (
     CreateProjectFileRequest,
@@ -161,6 +163,8 @@ __all__ = [
     "ModelHostingMode",
     "ModelInfo",
     "ModelMessage",
+    "ModelToolCall",
+    "ModelToolDefinition",
     "ModelProviderDiscoveryItem",
     "ModelProviderDiscoveryResponse",
     "ModelProviderHealth",

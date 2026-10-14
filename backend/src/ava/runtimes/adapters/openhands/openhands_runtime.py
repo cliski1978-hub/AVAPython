@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from ava.contracts.conversations import MessageRole, RunContext, execution_context_messages
 from ava.contracts.json_types import JsonValue
+from ava.contracts.models import ModelCapabilities
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
@@ -149,8 +150,10 @@ class OpenHandsRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
+        del model_capabilities
         tools: list[Any] = []
         tool_context = ToolRunContext(run_id, self.get_runtime_info().runtime_id, self._audit_sink)
         self._contexts[run_id] = tool_context
@@ -175,6 +178,7 @@ class OpenHandsRuntime(AgentRuntimePort):
                 context=tool_context,
                 command_policy=self._command_policy,
                 command_runner=self._command_runner,
+                execution_mode=request.execution_mode,
             )
             if tools:
                 try:

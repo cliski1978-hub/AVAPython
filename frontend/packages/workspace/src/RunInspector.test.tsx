@@ -18,6 +18,7 @@ const run = (id: string, conversationId: string) => ({
 });
 const inspection = (id: string, prompt: string, userText: string, compaction = false) => ({
   run_id: id, conversation_id: id.startsWith("run-conversation-") ? id.slice(4) : "conversation-a", status: "completed" as const,
+  execution_mode: "plan" as const,
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:02Z",
   snapshot: {
     execution_resolution: { runtime_source: "application_default" },
@@ -144,6 +145,14 @@ describe("RunInspector", () => {
     expect((await screen.findAllByText(/Question A/)).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Close Run Inspector" }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows the persisted execution mode in the Run Inspector", async () => {
+    vi.mocked(listConversationRuns).mockResolvedValue([run("run-a", "conversation-a")]);
+    vi.mocked(getRunInspection).mockResolvedValue(inspection("run-a", "System prompt A", "Question A"));
+    render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Run" onTabChange={() => undefined} />);
+    expect(await screen.findByText("Execution mode")).toBeTruthy();
+    expect(screen.getByText("plan")).toBeTruthy();
   });
 
   it("shows the exact rolling summary and coverage in the Run Inspector", async () => {

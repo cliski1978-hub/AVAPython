@@ -1,4 +1,4 @@
-"""Phase 5.30 cold-start stranded-run recovery.
+"""Cold-start stranded-run recovery.
 
 A restart cannot be silent about lost work. These tests pin what AVA does with
 a run that is still active in the database when a fresh process starts: it
@@ -19,6 +19,7 @@ from ava.api.app import create_app
 from ava.configuration.settings import Settings
 from ava.contracts.conversations import MessageRole, MessageStatus
 from ava.contracts.events import EventType, RunEvent
+from ava.contracts.execution import ExecutionMode
 from ava.contracts.responses import RunStatus
 from ava.infrastructure.persistence import SqliteDatabase
 from ava.infrastructure.persistence.repositories import (
@@ -157,7 +158,7 @@ def test_a_lost_status_write_is_not_repaired_by_a_synthesized_fact() -> None:
 
 
 class _MinimalRunRepository(RunRepository):
-    """A pre-5.30 lightweight double: every original port method, nothing new.
+    """A lightweight double with the current Run creation contract.
 
     It deliberately implements neither ``list_active`` nor ``list_run_ids``. It
     exists to prove the compatibility contract holds: adding active-run
@@ -167,11 +168,19 @@ class _MinimalRunRepository(RunRepository):
     def __init__(self) -> None:
         self.runs: dict[str, RunRecord] = {}
 
-    def create(self, run_id, *, conversation_id=None, source_user_message_id=None):
+    def create(
+        self,
+        run_id,
+        *,
+        conversation_id=None,
+        source_user_message_id=None,
+        execution_mode=ExecutionMode.CHAT,
+    ):
         now = datetime.now(UTC)
         self.runs[run_id] = RunRecord(
             run_id=run_id, status=RunStatus.PENDING, conversation_id=conversation_id,
             source_user_message_id=source_user_message_id, execution_selection=None,
+            execution_mode=execution_mode,
             cancellation_requested_at=None, created_at=now, updated_at=now,
         )
         return self.runs[run_id]

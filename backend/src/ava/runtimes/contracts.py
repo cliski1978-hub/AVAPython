@@ -7,14 +7,18 @@ by the runtime. No production execution uses this boundary yet.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from enum import StrEnum
+from typing import Protocol
 
 from pydantic import BaseModel
 
 from ava.contracts.conversations import RunContext
 from ava.contracts.json_types import JsonValue
+from ava.contracts.models import ModelCapabilities
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeInfo
+from ava.contracts.tools import ToolDefinition, ToolResult
 from ava.models.bindings import ConfiguredModelBinding
 from ava.models.contracts import ModelProviderPort
 from ava.workspaces.contracts import RuntimeWorkspaceBinding
@@ -41,6 +45,63 @@ class RuntimeRunResult(BaseModel):
     runtime_response: JsonValue | None = None
 
 
+class RuntimeToolDisposition(StrEnum):
+    """Safe normalized outcomes exposed to an agent runtime."""
+
+    EXECUTED = "executed"
+    AWAITING_APPROVAL = "awaiting_approval"
+    DENIED = "denied"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RuntimeToolOutcome(BaseModel):
+    """Runtime-facing projection of the central execution service outcome."""
+
+    invocation_id: str
+    tool_id: str
+    tool_version: str
+    disposition: RuntimeToolDisposition
+    result: ToolResult | None = None
+    reason_code: str | None = None
+
+
+class RuntimeToolBridgePort(Protocol):
+    """AVA-owned seam for runtime tool discovery and normalized invocation."""
+
+    def discover_tools(
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        context: RunContext | None,
+        workspace: RuntimeWorkspaceBinding | None,
+    ) -> list[ToolDefinition]: ...
+
+    async def execute_tool(
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        context: RunContext | None,
+        workspace: RuntimeWorkspaceBinding | None,
+        tool_id: str,
+        tool_version: str,
+        call_id: str,
+        arguments_json: str,
+    ) -> RuntimeToolOutcome: ...
+
+    def reject_unadvertised_tool(
+        self,
+        *,
+        run_id: str,
+        tool_id: str,
+        tool_version: str,
+        call_id: str,
+        reason_code: str,
+    ) -> RuntimeToolOutcome: ...
+
+
 class AgentRuntimePort(ABC):
     """Interchangeable execution framework using AVA contracts only.
 
@@ -64,6 +125,7 @@ class AgentRuntimePort(ABC):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
         """Execute with the selected provider under an AVA-generated run id.
@@ -89,6 +151,7 @@ class AgentRuntimePort(ABC):
         on_content: Callable[[str], None],
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
         """Execute with optional full-content snapshot notifications.
@@ -104,6 +167,7 @@ class AgentRuntimePort(ABC):
             model_provider=model_provider,
             workspace=workspace,
             model_binding=model_binding,
+            model_capabilities=model_capabilities,
             context=context,
         )
 

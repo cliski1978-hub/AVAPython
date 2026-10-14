@@ -209,8 +209,41 @@ def _to_chat_completion_payload(request: ModelRequest, model_name: str) -> dict[
     """
     payload: dict[str, object] = {
         "model": model_name,
-        "messages": [{"role": message.role, "content": message.content} for message in request.messages],
+        "messages": [
+            {
+                **{"role": message.role, "content": message.content},
+                **({"name": message.name} if message.name is not None else {}),
+                **({"tool_call_id": message.tool_call_id} if message.tool_call_id is not None else {}),
+                **(
+                    {
+                        "tool_calls": [
+                            {
+                                "id": call.id,
+                                "type": "function",
+                                "function": {"name": call.name, "arguments": call.arguments},
+                            }
+                            for call in message.tool_calls
+                        ]
+                    }
+                    if message.tool_calls
+                    else {}
+                ),
+            }
+            for message in request.messages
+        ],
     }
+    if request.tools:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for tool in request.tools
+        ]
     if request.temperature is not None:
         payload["temperature"] = request.temperature
     if request.max_output_tokens is not None:
@@ -238,15 +271,35 @@ def _from_chat_completion_response(payload: object, default_model_id: str) -> Mo
     message = choice.get("message")
     if not isinstance(message, dict):
         raise ModelProviderError("OpenAI-compatible response choice is missing a 'message'")
-    if "content" not in message or message.get("content") is None:
-        raise ModelProviderError("OpenAI-compatible response message is missing 'content'")
-    content = message["content"]
-    if not isinstance(content, str):
+    content_value = message.get("content", "")
+    if content_value is None:
+        content_value = ""
+    if not isinstance(content_value, str):
         raise ModelProviderError("OpenAI-compatible response message 'content' must be a string")
+    raw_calls = message.get("tool_calls", [])
+    if not isinstance(raw_calls, list):
+        raise ModelProviderError("OpenAI-compatible response message 'tool_calls' must be a list")
+    from ava.contracts.models import ModelToolCall
+
+    tool_calls: list[ModelToolCall] = []
+    for raw_call in raw_calls:
+        if not isinstance(raw_call, dict) or raw_call.get("type", "function") != "function":
+            raise ModelProviderError("OpenAI-compatible response contains an unsupported tool call")
+        function = raw_call.get("function")
+        if not isinstance(function, dict):
+            raise ModelProviderError("OpenAI-compatible response tool call is malformed")
+        call_id, name, arguments = raw_call.get("id"), function.get("name"), function.get("arguments")
+        if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name or not isinstance(
+            arguments, str
+        ):
+            raise ModelProviderError("OpenAI-compatible response tool call is malformed")
+        tool_calls.append(ModelToolCall(id=call_id, name=name, arguments=arguments))
+    if not content_value and not tool_calls:
+        raise ModelProviderError("OpenAI-compatible response message has no content or tool calls")
     model_id = payload.get("model")
     if not isinstance(model_id, str) or not model_id:
         model_id = default_model_id
-    return ModelResponse(content=content, model_id=model_id)
+    return ModelResponse(content=content_value, model_id=model_id, tool_calls=tool_calls)
 
 
 # ============================================================

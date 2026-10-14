@@ -107,9 +107,10 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del model_provider, model_binding, context
+        del model_provider, model_binding, model_capabilities, context
         self.calls += 1
         self.received.append(workspace)
         safe = "none"

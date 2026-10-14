@@ -7,6 +7,7 @@ never the authorization policy. Model/provider metadata is not an input.
 
 from typing import Any
 
+from ava.contracts.execution import ExecutionMode
 from ava.contracts.runtimes import RuntimeCapabilities
 from ava.execution.command_policy import CommandExecutionPolicy
 from ava.execution.sandbox import SandboxedCommandRunnerPort
@@ -25,6 +26,7 @@ def build_openhands_tools(
     context: ToolRunContext | None = None,
     command_policy: CommandExecutionPolicy | None = None,
     command_runner: SandboxedCommandRunnerPort | None = None,
+    execution_mode: ExecutionMode = ExecutionMode.AGENT,
 ) -> list[Any]:
     """Decide the exact OpenHands tool specs from an approved AVA workspace.
 
@@ -40,6 +42,8 @@ def build_openhands_tools(
     spec list; the concrete contained implementation is registered for the
     ``file_editor`` name by the ``file_tools`` module (adapter-local).
     """
+    if execution_mode == ExecutionMode.CHAT:
+        return []
     capabilities = capabilities or RuntimeCapabilities()
     decisions = {}
     for tool_id in (FILE_EDITOR_TOOL_NAME, "ava_terminal"):
@@ -50,6 +54,8 @@ def build_openhands_tools(
         )
         allowed = decision is not None and decision.allowed
         reason = decision.reason_code if decision else "tool_disabled"
+        if tool_id == "ava_terminal" and execution_mode != ExecutionMode.AGENT:
+            allowed, reason = False, "execution_mode_denied"
         if allowed and tool_id == "ava_terminal" and (command_policy is None or command_runner is None):
             allowed, reason = False, "tool_disabled"
         decisions[tool_id] = allowed
@@ -59,12 +65,12 @@ def build_openhands_tools(
         return []
     tools: list[Any] = []
     if decisions[FILE_EDITOR_TOOL_NAME]:
-        tools.extend(_tool_spec(read_only=not workspace.permissions.write))
+        tools.extend(_tool_spec(read_only=execution_mode == ExecutionMode.PLAN or not workspace.permissions.write))
         if context:
             from ava.runtimes.adapters.openhands.tool_context import register_context
 
             tools[-1].params["security_context_id"] = register_context(context)
-    if decisions["ava_terminal"]:
+    if decisions["ava_terminal"] and execution_mode == ExecutionMode.AGENT:
         assert command_policy is not None and command_runner is not None
         from openhands.sdk import Tool
 

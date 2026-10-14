@@ -143,9 +143,11 @@ class _SelectionAgent(AgentPort):
     def name(self) -> str:
         return "selection-test"
 
-    async def start_run(self, run_id: str, request: RunRequest, *, context=None) -> AgentRunResult:
+    async def start_run(
+        self, run_id: str, request: RunRequest, *, context=None, resolved_execution=None
+    ) -> AgentRunResult:
         del run_id, context
-        execution = self.selector.resolve(
+        execution = resolved_execution or self.selector.resolve(
             request.execution,
             conversation_id=request.conversation_id,
         )
