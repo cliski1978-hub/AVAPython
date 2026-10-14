@@ -7,6 +7,9 @@ on:
       - ".github/workflows/ava-phase-6-11-filesystem-security.yml"
       - "backend/pyproject.toml"
       - "backend/src/ava/infrastructure/workspace_filesystem/**"
+      - "backend/src/ava/infrastructure/persistence/migrations/versions/**"
+      - "backend/src/ava/infrastructure/persistence/repositories/invocation_reservation_repository.py"
+      - "backend/src/ava/repositories/invocation_reservation_repository.py"
       - "backend/src/ava/tools/**"
       - "backend/src/ava/services/tool_*.py"
       - "backend/src/ava/api/app.py"
@@ -15,12 +18,19 @@ on:
       - "backend/tests/test_workspace*"
       - "backend/tests/test_tool_*.py"
       - "backend/tests/test_approvals.py"
+      - "backend/tests/test_invocation_reservations.py"
+      - "backend/tests/test_persistence_migrations.py"
+      - "backend/tests/test_run*.py"
+      - "backend/tests/test_relational_run_event_repository.py"
       - "backend/tests/test_architecture.py"
   push:
     paths:
       - ".github/workflows/ava-phase-6-11-filesystem-security.yml"
       - "backend/pyproject.toml"
       - "backend/src/ava/infrastructure/workspace_filesystem/**"
+      - "backend/src/ava/infrastructure/persistence/migrations/versions/**"
+      - "backend/src/ava/infrastructure/persistence/repositories/invocation_reservation_repository.py"
+      - "backend/src/ava/repositories/invocation_reservation_repository.py"
       - "backend/src/ava/tools/**"
       - "backend/src/ava/services/tool_*.py"
       - "backend/src/ava/api/app.py"
@@ -29,6 +39,10 @@ on:
       - "backend/tests/test_workspace*"
       - "backend/tests/test_tool_*.py"
       - "backend/tests/test_approvals.py"
+      - "backend/tests/test_invocation_reservations.py"
+      - "backend/tests/test_persistence_migrations.py"
+      - "backend/tests/test_run*.py"
+      - "backend/tests/test_relational_run_event_repository.py"
       - "backend/tests/test_architecture.py"
   workflow_dispatch:
 
@@ -94,6 +108,14 @@ jobs:
           tests/test_tool_registry.py
           tests/test_tool_features.py
           tests/test_approvals.py
+          tests/test_invocation_reservations.py
+          tests/test_persistence_migrations.py
+          tests/test_run_lifecycle.py
+          tests/test_run_recovery.py
+          tests/test_run_events.py
+          tests/test_run_event_concurrency.py
+          tests/test_run_inspection.py
+          tests/test_relational_run_event_repository.py
           tests/test_architecture.py
 
       - name: Run Linux filesystem adversarial tests

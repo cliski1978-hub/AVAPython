@@ -293,7 +293,7 @@ def create_app(
         authority=None,
         approvals=app.state.approval_service,
         executors={},
-        reservations=None,
+        reservations=application_persistence.invocation_reservation_repository,
         run_events=application_persistence.run_event_repository,
     )
     tool_bridge = ToolExecutionRuntimeBridge(

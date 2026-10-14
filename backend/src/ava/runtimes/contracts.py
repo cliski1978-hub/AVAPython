@@ -53,6 +53,7 @@ class RuntimeToolDisposition(StrEnum):
     DENIED = "denied"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    INDETERMINATE = "indeterminate"
 
 
 class RuntimeToolOutcome(BaseModel):

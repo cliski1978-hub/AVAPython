@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from test_tool_policy import PolicyFixture
 
+from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.execution import ExecutionMode
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse
@@ -31,8 +32,9 @@ from ava.tools.authority import ToolOperationType
 
 
 class _Executor:
-    def __init__(self) -> None:
+    def __init__(self, status: ToolStatus = ToolStatus.COMPLETED) -> None:
         self.calls = 0
+        self.status = status
 
     async def execute(self, invocation):
         self.calls += 1
@@ -40,8 +42,13 @@ class _Executor:
             invocation_id=invocation.request.invocation_id,
             tool_id=invocation.request.tool_id,
             tool_version=invocation.request.tool_version,
-            status=ToolStatus.COMPLETED,
-            output={"text": "read"},
+            status=self.status,
+            error=(
+                ErrorResponse(error_code="executor_cancelled", category=ErrorCategory.UNAVAILABLE, message="Cancelled")
+                if self.status == ToolStatus.CANCELLED
+                else None
+            ),
+            output={"text": "read"} if self.status == ToolStatus.COMPLETED else None,
         )
 
 
@@ -50,15 +57,42 @@ class _Reservations:
 
     def __init__(self) -> None:
         self.states: dict[str, InvocationReservationState] = {}
+        self.fail_terminal_finalization = False
 
-    def reserve(self, invocation_id, binding):
-        if invocation_id in self.states:
-            return False
-        self.states[invocation_id] = InvocationReservationState.RESERVED
-        return True
+    def reserve(self, reservation):
+        if reservation.invocation_id in self.states:
+            from ava.repositories.invocation_reservation_repository import InvocationReservationConflict
 
-    def transition(self, invocation_id, state):
+            raise InvocationReservationConflict("duplicate")
+        self.records = getattr(self, "records", {})
+        self.records[reservation.invocation_id] = reservation
+        self.states[reservation.invocation_id] = reservation.state
+        return reservation
+
+    def get(self, invocation_id):
+        return getattr(self, "records", {}).get(invocation_id)
+
+    def transition(self, invocation_id, *, expected_revision, state, **metadata):
+        from dataclasses import replace
+
+        if self.fail_terminal_finalization and state in {
+            InvocationReservationState.COMPLETED,
+            InvocationReservationState.FAILED,
+        }:
+            raise RuntimeError("simulated finalization failure")
+        record = self.records[invocation_id]
+        updated = replace(
+            record, state=state, revision=expected_revision + 1, **{k: v for k, v in metadata.items() if v is not None}
+        )
+        self.records[invocation_id] = updated
         self.states[invocation_id] = state
+        return updated
+
+    def list_incomplete(self, *, limit=100):
+        return ()
+
+    def list_for_run(self, run_id):
+        return tuple(record for record in getattr(self, "records", {}).values() if record.run_id == run_id)
 
 
 def _setup(tmp_path: Path, mode: ExecutionMode):
@@ -192,12 +226,55 @@ async def test_plan_read_dispatch_requires_and_uses_atomic_reservation(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_executor_confirmed_cancellation_is_not_persisted_as_failure(tmp_path: Path) -> None:
+    service, request, _, reservations = _setup(tmp_path, ExecutionMode.PLAN)
+    executor = _Executor(ToolStatus.CANCELLED)
+    service._executors[request.tool_id] = executor
+
+    outcome = await service.execute(request)
+
+    assert outcome.disposition == ToolExecutionDisposition.CANCELLED
+    assert outcome.result is not None and outcome.result.status == ToolStatus.CANCELLED
+    assert reservations.states[request.invocation_id] == InvocationReservationState.CANCELLED
+    assert executor.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_duplicate_invocation_cannot_dispatch_twice(tmp_path: Path) -> None:
     service, request, executor, _ = _setup(tmp_path, ExecutionMode.PLAN)
     assert (await service.execute(request)).disposition == ToolExecutionDisposition.EXECUTED
     duplicate = await service.execute(request)
     assert duplicate.disposition == ToolExecutionDisposition.DENIED
     assert duplicate.policy_reason == "duplicate_invocation"
+    assert executor.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_finalization_is_returned_as_indeterminate(tmp_path: Path) -> None:
+    service, request, executor, reservations = _setup(tmp_path, ExecutionMode.PLAN)
+    reservations.fail_terminal_finalization = True
+    outcome = await service.execute(request)
+    assert outcome.result is not None
+    assert outcome.result.status == ToolStatus.INDETERMINATE
+    assert reservations.states[request.invocation_id] == InvocationReservationState.INDETERMINATE
+    assert executor.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_failure_with_failed_state_write_returns_indeterminate(tmp_path: Path) -> None:
+    service, request, executor, reservations = _setup(tmp_path, ExecutionMode.PLAN)
+
+    async def fail_execution(invocation):
+        del invocation
+        executor.calls += 1
+        raise RuntimeError("simulated executor failure")
+
+    executor.execute = fail_execution
+    reservations.fail_terminal_finalization = True
+    outcome = await service.execute(request)
+    assert outcome.result is not None
+    assert outcome.result.status == ToolStatus.INDETERMINATE
+    assert reservations.states[request.invocation_id] == InvocationReservationState.INDETERMINATE
     assert executor.calls == 1
 
 
@@ -246,4 +323,5 @@ def test_production_composition_has_no_dispatch_authority_or_adapters() -> None:
     execution = app.state.tool_execution_service
     assert execution._authority is None
     assert execution._executors == {}
-    assert execution._reservations is None
+    assert execution._reservations is not None
+    assert execution._reservations.durable is False

@@ -27,12 +27,33 @@ class _Reservations:
     def __init__(self) -> None:
         self.states: dict[str, InvocationReservationState] = {}
 
-    def reserve(self, invocation_id, binding):
-        self.states[invocation_id] = InvocationReservationState.RESERVED
-        return True
+    def reserve(self, reservation):
+        self.records = getattr(self, "records", {})
+        self.records[reservation.invocation_id] = reservation
+        self.states[reservation.invocation_id] = reservation.state
+        return reservation
 
-    def transition(self, invocation_id, state: InvocationReservationState):
+    def get(self, invocation_id):
+        return self.records.get(invocation_id)
+
+    def transition(self, invocation_id, *, expected_revision, state: InvocationReservationState, **metadata):
+        from dataclasses import replace
+
+        updated = replace(
+            self.records[invocation_id],
+            state=state,
+            revision=expected_revision + 1,
+            **{k: v for k, v in metadata.items() if v is not None},
+        )
+        self.records[invocation_id] = updated
         self.states[invocation_id] = state
+        return updated
+
+    def list_incomplete(self):
+        return ()
+
+    def list_for_run(self, run_id):
+        return tuple(r for r in self.records.values() if r.run_id == run_id)
 
 
 def _setup(
@@ -182,7 +203,7 @@ async def test_plan_mode_allows_only_the_normalized_read_tools(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_cancellation_at_adapter_boundary_releases_the_invocation(tmp_path: Path) -> None:
+async def test_cancellation_during_execution_preserves_unknown_outcome(tmp_path: Path) -> None:
     (tmp_path / "source.txt").write_text("content", encoding="utf-8")
     service = _setup(tmp_path)
     request = ToolRequest(
@@ -198,7 +219,7 @@ async def test_cancellation_at_adapter_boundary_releases_the_invocation(tmp_path
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert service._test_reservations.states["cancel-me"] == InvocationReservationState.CANCELLED
+    assert service._test_reservations.states["cancel-me"] == InvocationReservationState.INDETERMINATE
 
 
 @pytest.mark.asyncio

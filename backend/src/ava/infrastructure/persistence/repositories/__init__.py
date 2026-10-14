@@ -33,6 +33,9 @@ from ava.infrastructure.persistence.repositories.document_write_coordinator impo
 from ava.infrastructure.persistence.repositories.execution_defaults_repository import (
     RelationalExecutionDefaultsRepository,
 )
+from ava.infrastructure.persistence.repositories.invocation_reservation_repository import (
+    RelationalInvocationReservationRepository,
+)
 from ava.infrastructure.persistence.repositories.message_repository import (
     RelationalMessageRepository,
 )
@@ -76,4 +79,5 @@ __all__ = [
     "RelationalRunRepository",
     "RelationalRuntimeConfigurationRepository",
     "RelationalWorkspaceAccessRepository",
+    "RelationalInvocationReservationRepository",
 ]

@@ -1765,7 +1765,8 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
     ``messages``, ``documents`` (Step 4.7), ``document_revisions``
     (Step 4.13.C's immutable revision history), and ``attachments`` +
     ``idx_attachments_owner`` (Step 4.14.C's attachment metadata), and
-    Phase 6.8's approval records. Unimplemented later-phase vocabulary may not
+    Phase 6.8's approval records and Phase 6.13's durable tool invocation
+    lifecycle. Unimplemented later-phase vocabulary may not
     leak into the schema, and schema text may live only
     in the migrations package. ``attachment`` became legitimate with Step
     4.14.C, so its schema vocabulary is no longer forbidden. Later audit,
@@ -1805,6 +1806,8 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "idx_runs_source_user_message",
         "ix_core_prompt_assignments_prompt_order",
         "ix_core_prompt_assignments_scope_order",
+        "ix_tool_invocation_reservations_run_created",
+        "ix_tool_invocation_reservations_state",
         "messages",
         "model_configurations",
         "project_files",
@@ -1814,6 +1817,7 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "runs",
         "runtime_configurations",
         "tool_feature_configuration",
+        "tool_invocation_reservations",
         "ux_core_prompt_assignment_global",
         "ux_core_prompt_assignment_target",
         "ux_project_files_project_normalized_name",
@@ -1960,7 +1964,8 @@ def test_application_persistence_carries_all_activated_ports() -> None:
     provider-connection,
     and document state plus the Step 4.13 document revision history repository,
     the Step 4.14.C attachment metadata repository, the Phase 6.8 approval
-    repository, and the document write coordinator. The API factory receives only the composed ports, never
+    repository, the durable tool invocation lifecycle port, and the document write
+    coordinator. The API factory receives only the composed ports, never
     concrete stores.
     """
     fields = _collect_annotated_fields(
@@ -1989,6 +1994,7 @@ def test_application_persistence_carries_all_activated_ports() -> None:
         "tool_feature_repository",
         "workspace_access_repository",
         "approval_repository",
+        "invocation_reservation_repository",
     }
 
     app_text = (API_DIR / "app.py").read_text(encoding="utf-8")
@@ -2032,7 +2038,8 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
     table, v0003); Phase 5.3 adds provider connections (v0004), Phase 5.5
     adds model configurations (v0005), Phase 5.7 adds runtime
     configurations (v0006), and Phase 5.8 adds application execution
-    defaults (v0007), and Phase 5.19 adds durable run relationship ids (v0008).
+    defaults (v0007), Phase 5.19 adds durable run relationship ids (v0008),
+    and Phase 6.13 adds durable tool invocation reservations (v0028).
     """
     version_files = sorted(
         path.name
@@ -2067,6 +2074,7 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
         "v0025_workspace_access.py",
         "v0026_approvals.py",
         "v0027_run_execution_mode.py",
+        "v0028_tool_invocation_reservations.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)

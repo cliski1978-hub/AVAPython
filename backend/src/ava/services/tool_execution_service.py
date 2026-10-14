@@ -6,9 +6,10 @@ import asyncio
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,6 +25,12 @@ from ava.contracts.tools import (
     ToolRequest,
     ToolResult,
     ToolStatus,
+)
+from ava.repositories.invocation_reservation_repository import (
+    InvocationReservation,
+    InvocationReservationConflict,
+    InvocationReservationRepository,
+    InvocationReservationState,
 )
 from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import RunRepository
@@ -43,15 +50,7 @@ class ToolExecutionDisposition(StrEnum):
     EXECUTED = "executed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
-class InvocationReservationState(StrEnum):
-    NOT_STARTED = "not_started"
-    RESERVED = "reserved"
-    EXECUTING = "executing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    INDETERMINATE = "indeterminate"
 
 
 class ToolExecutionOutcome(BaseModel):
@@ -88,24 +87,6 @@ _AUTHORIZATION_PROOF = object()
 class ToolExecutorPort(Protocol):
     async def execute(self, invocation: AuthorizedToolInvocation) -> ToolResult:
         """Perform one constrained effect and return a normalized result."""
-        ...
-
-
-class InvocationReservationRepository(Protocol):
-    """Atomic per-invocation lifecycle guard.
-
-    ``durable`` must be true only for a production-grade reservation adapter.
-    An in-memory lock/status cannot claim exactly-once side effects.
-    """
-
-    durable: bool
-
-    def reserve(self, invocation_id: str, binding: ToolOperationBinding) -> bool:
-        """Atomically move NOT_STARTED to RESERVED; false means already claimed."""
-        ...
-
-    def transition(self, invocation_id: str, state: InvocationReservationState) -> None:
-        """Record the current dispatch lifecycle state."""
         ...
 
 
@@ -241,10 +222,7 @@ class ToolExecutionService:
             if (
                 definition.tool_id not in self._executors
                 or definition.tool_id not in authority.allowed_tool_ids
-                or (
-                    authority.narrowing_tool_ids is not None
-                    and definition.tool_id not in authority.narrowing_tool_ids
-                )
+                or (authority.narrowing_tool_ids is not None and definition.tool_id not in authority.narrowing_tool_ids)
             ):
                 continue
             try:
@@ -366,15 +344,42 @@ class ToolExecutionService:
         if reservations is None or not reservations.durable:
             return self._denied(invocation, "durable_invocation_reservation_unavailable", preflight.decision)
         binding = preflight.operation_binding
+        feature_state = self._features.state()
+        reservation = InvocationReservation(
+            invocation_id=invocation.invocation_id,
+            run_id=run_id,
+            tool_id=invocation.tool_id,
+            tool_version=invocation.tool_version,
+            operation_fingerprint=binding.operation_digest,
+            workspace_id=authority.context.workspace_id,
+            execution_context_ref=invocation.execution_context_ref,
+            authority_revision_ref=authority.revision_ref,
+            configuration_revision_ref=f"tool-features:{feature_state.configuration.configuration_version}",
+            execution_mode=mode.value,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         try:
-            reserved = reservations.reserve(invocation.invocation_id, binding)
+            reservation = reservations.reserve(reservation)
+        except InvocationReservationConflict:
+            return self._denied(invocation, "duplicate_invocation", preflight.decision)
         except Exception:
             return self._denied(invocation, "invocation_reservation_unavailable", preflight.decision)
-        if not reserved:
-            return self._denied(invocation, "duplicate_invocation", preflight.decision)
         try:
-            reservations.transition(invocation.invocation_id, InvocationReservationState.EXECUTING)
+            reservation = reservations.transition(
+                invocation.invocation_id,
+                expected_revision=reservation.revision,
+                state=InvocationReservationState.EXECUTING,
+            )
         except Exception:
+            with suppress(Exception):
+                reservations.transition(
+                    invocation.invocation_id,
+                    expected_revision=reservation.revision,
+                    state=InvocationReservationState.FAILED,
+                    error_code="execution_not_started",
+                    result_status=ToolStatus.FAILED.value,
+                )
             return self._denied(invocation, "invocation_reservation_unavailable", preflight.decision)
         authorized = AuthorizedToolInvocation(
             request=invocation,
@@ -386,21 +391,61 @@ class ToolExecutionService:
             _proof=_AUTHORIZATION_PROOF,
         )
         try:
-            self._record_event(
-                EventType.TOOL_STARTED, invocation, mode, status=ToolStatus.STARTED.value
-            )
+            self._record_event(EventType.TOOL_STARTED, invocation, mode, status=ToolStatus.STARTED.value)
             result = await executor.execute(authorized)
             normalized = self._normalize_executor_result(invocation, result)
         except asyncio.CancelledError:
             with suppress(Exception):
-                reservations.transition(invocation.invocation_id, InvocationReservationState.CANCELLED)
+                reservations.transition(
+                    invocation.invocation_id,
+                    expected_revision=reservation.revision,
+                    state=InvocationReservationState.INDETERMINATE,
+                    result_status=ToolStatus.INDETERMINATE.value,
+                    error_code="execution_cancelled_outcome_unknown",
+                    reconciliation_status="required",
+                )
             self._record_event(
-                EventType.TOOL_OUTCOME, invocation, mode, status=ToolStatus.CANCELLED.value
+                EventType.TOOL_OUTCOME,
+                invocation,
+                mode,
+                status=ToolStatus.INDETERMINATE.value,
+                reason_code="execution_cancelled_outcome_unknown",
             )
             raise
         except Exception:
-            with suppress(Exception):
-                reservations.transition(invocation.invocation_id, InvocationReservationState.FAILED)
+            finalized_failure = False
+            try:
+                reservations.transition(
+                    invocation.invocation_id,
+                    expected_revision=reservation.revision,
+                    state=InvocationReservationState.FAILED,
+                    result_status=ToolStatus.FAILED.value,
+                    error_code="tool_execution_failed",
+                )
+                finalized_failure = True
+            except Exception:
+                with suppress(Exception):
+                    latest = reservations.get(invocation.invocation_id)
+                    if latest is not None and latest.state == InvocationReservationState.EXECUTING:
+                        reservations.transition(
+                            invocation.invocation_id,
+                            expected_revision=latest.revision,
+                            state=InvocationReservationState.INDETERMINATE,
+                            result_status=ToolStatus.INDETERMINATE.value,
+                            error_code="failure_outcome_finalization_failed",
+                            reconciliation_status="required",
+                        )
+            if not finalized_failure:
+                self._record_event(
+                    EventType.TOOL_OUTCOME,
+                    invocation,
+                    mode,
+                    status=ToolStatus.INDETERMINATE.value,
+                    reason_code="failure_outcome_finalization_failed",
+                )
+                return self._indeterminate(
+                    invocation, "failure_outcome_finalization_failed", preflight.decision
+                )
             failed = self._failure(invocation, "tool_execution_failed")
             self._record_event(
                 EventType.TOOL_OUTCOME,
@@ -413,11 +458,27 @@ class ToolExecutionService:
         try:
             reservations.transition(
                 invocation.invocation_id,
-                InvocationReservationState.COMPLETED
-                if normalized.status == ToolStatus.COMPLETED
-                else InvocationReservationState.FAILED,
+                expected_revision=reservation.revision,
+                state={
+                    ToolStatus.COMPLETED: InvocationReservationState.COMPLETED,
+                    ToolStatus.CANCELLED: InvocationReservationState.CANCELLED,
+                    ToolStatus.INDETERMINATE: InvocationReservationState.INDETERMINATE,
+                }.get(normalized.status, InvocationReservationState.FAILED),
+                result_status=normalized.status.value,
+                error_code=normalized.error.error_code if normalized.error else None,
             )
         except Exception:
+            with suppress(Exception):
+                latest = reservations.get(invocation.invocation_id)
+                if latest is not None and latest.state == InvocationReservationState.EXECUTING:
+                    reservations.transition(
+                        invocation.invocation_id,
+                        expected_revision=latest.revision,
+                        state=InvocationReservationState.INDETERMINATE,
+                        result_status=ToolStatus.INDETERMINATE.value,
+                        error_code="outcome_finalization_failed",
+                        reconciliation_status="required",
+                    )
             self._record_event(
                 EventType.TOOL_OUTCOME,
                 invocation,
@@ -432,17 +493,105 @@ class ToolExecutionService:
             mode,
             status=normalized.status.value,
         )
-        disposition = (
-            ToolExecutionDisposition.EXECUTED
-            if normalized.status == ToolStatus.COMPLETED
-            else ToolExecutionDisposition.FAILED
-        )
+        disposition = {
+            ToolStatus.COMPLETED: ToolExecutionDisposition.EXECUTED,
+            ToolStatus.CANCELLED: ToolExecutionDisposition.CANCELLED,
+            ToolStatus.INDETERMINATE: ToolExecutionDisposition.INDETERMINATE,
+        }.get(normalized.status, ToolExecutionDisposition.FAILED)
         return ToolExecutionOutcome(
             disposition=disposition,
             result=normalized,
             preflight_decision=preflight.decision,
             authorized_for_dispatch=True,
         )
+
+    def list_invocations_for_run(self, run_id: str) -> tuple[InvocationReservation, ...]:
+        """Return normalized safe lifecycle history for a Run."""
+        if self._reservations is None:
+            return ()
+        return self._reservations.list_for_run(run_id)
+
+    def reconcile_interrupted_invocations(self) -> tuple[InvocationReservation, ...]:
+        """Finalize interrupted records without replay; safe to invoke repeatedly."""
+        if self._reservations is None:
+            return ()
+        reconciled: list[InvocationReservation] = []
+        for pending in self._reservations.list_incomplete(limit=100):
+            run = self._runs.get(pending.run_id)
+            run_matches = run is not None and run.execution_mode.value == pending.execution_mode
+            if pending.state == InvocationReservationState.RESERVED:
+                target = (
+                    InvocationReservationState.CANCELLED
+                    if run is not None and run.cancellation_requested
+                    else InvocationReservationState.FAILED
+                )
+                if target == InvocationReservationState.CANCELLED:
+                    error_code = "run_cancelled_before_execution"
+                elif run is None:
+                    error_code = "associated_run_missing_before_execution"
+                elif not run_matches:
+                    error_code = "associated_run_mismatch_before_execution"
+                else:
+                    error_code = "execution_not_started"
+                result_status = (
+                    ToolStatus.CANCELLED.value
+                    if target == InvocationReservationState.CANCELLED
+                    else ToolStatus.FAILED.value
+                )
+            else:
+                target = InvocationReservationState.INDETERMINATE
+                if run is None:
+                    error_code = "associated_run_missing_outcome_unknown"
+                elif not run_matches:
+                    error_code = "associated_run_mismatch_outcome_unknown"
+                else:
+                    error_code = "interrupted_execution_outcome_unknown"
+                result_status = ToolStatus.INDETERMINATE.value
+            try:
+                updated = self._reservations.transition(
+                    pending.invocation_id,
+                    expected_revision=pending.revision,
+                    state=target,
+                    error_code=error_code,
+                    result_status=result_status,
+                    reconciliation_status="reconciled",
+                )
+            except InvocationReservationConflict:
+                continue
+            reconciled.append(updated)
+            self._record_reservation_outcome(updated)
+        return tuple(reconciled)
+
+    def _record_reservation_outcome(self, reservation: InvocationReservation) -> None:
+        if self._run_events is None or self._runs.get(reservation.run_id) is None:
+            return
+        existing = self._run_events.get_events(reservation.run_id)
+        if any(
+            event.payload.get("invocation_id") == reservation.invocation_id
+            and event.event_type == EventType.TOOL_OUTCOME
+            for event in existing
+        ):
+            return
+        try:
+            self._run_events.append(
+                RunEvent(
+                    event_id=str(
+                        uuid5(NAMESPACE_URL, f"ava:tool-outcome:{reservation.invocation_id}:{reservation.revision}")
+                    ),
+                    run_id=reservation.run_id,
+                    event_type=EventType.TOOL_OUTCOME,
+                    payload={
+                        "invocation_id": reservation.invocation_id,
+                        "tool_id": reservation.tool_id,
+                        "tool_version": reservation.tool_version,
+                        "execution_mode": reservation.execution_mode,
+                        "status": reservation.result_status or reservation.state.value,
+                        "reason_code": reservation.error_code or "reconciled",
+                    },
+                )
+            )
+        except Exception:
+            logger.warning("Unable to persist reconciled tool outcome for run %s", reservation.run_id)
 
     @staticmethod
     def _normalize_executor_result(request: ToolRequest, result: ToolResult) -> ToolResult:
@@ -533,7 +682,7 @@ class ToolExecutionService:
             ),
         )
         return ToolExecutionOutcome(
-            disposition=ToolExecutionDisposition.FAILED,
+            disposition=ToolExecutionDisposition.INDETERMINATE,
             result=result,
             policy_reason=reason,
             preflight_decision=preflight_decision,
