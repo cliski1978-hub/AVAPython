@@ -14,6 +14,8 @@ the schema.
 
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,17 @@ from ava.infrastructure.persistence.migrations.versions.v0001_initial_schema imp
 def _file_database() -> tuple[SqliteDatabase, Path]:
     path = Path(tempfile.mktemp(suffix=".sqlite3"))
     return SqliteDatabase(str(path), auto_migrate=False), path
+
+
+@contextmanager
+def _sqlite_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Commit or roll back a direct fixture connection, then close it on Windows too."""
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _make_legacy_schema(path: Path) -> None:
@@ -619,7 +632,7 @@ def test_migrate_adopts_a_legacy_step4_6_database_without_destroying_data() -> N
     database, path = _file_database()
     try:
         _make_legacy_schema(path)
-        with sqlite3.connect(path) as connection:
+        with _sqlite_connection(path) as connection:
             connection.execute(
                 "INSERT INTO runs (run_id, status, created_at, updated_at) VALUES ("
                 "'legacy-run', 'completed', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
@@ -671,7 +684,7 @@ def test_legacy_v1_v2_database_upgrades_to_v3_without_backfill() -> None:
         MigrationRunner(database, pre_v3).migrate()
         database.dispose()
 
-        with sqlite3.connect(path) as connection:
+        with _sqlite_connection(path) as connection:
             connection.execute(
                 "INSERT INTO documents (document_id, title, content, content_format, created_at, updated_at) "
                 "VALUES ('doc-1', 'T', '<p>x</p>', 'html', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
@@ -721,7 +734,7 @@ def test_create_relational_repositories_adopts_a_legacy_database_usable_through_
         repositories.run_repository.create("via-port")
         assert repositories.run_repository.get("via-port") is not None
         repositories.dispose()
-        with sqlite3.connect(path) as connection:
+        with _sqlite_connection(path) as connection:
             assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 28
     finally:
         path.unlink()
@@ -731,7 +744,7 @@ def test_unknown_legacy_database_is_rejected_without_destructive_rewrite() -> No
     database, path = _file_database()
     try:
         _make_legacy_schema(path)
-        with sqlite3.connect(path) as connection:
+        with _sqlite_connection(path) as connection:
             connection.execute("CREATE TABLE future_unknown_table (id INTEGER PRIMARY KEY)")
         tables_before = _tables(database)
 
@@ -1022,7 +1035,7 @@ def _seed_version_8_run(database: SqliteDatabase, path: Path) -> None:
     MigrationRunner(database, only_through_eight).migrate()
     database.dispose()
 
-    with sqlite3.connect(path) as connection:
+    with _sqlite_connection(path) as connection:
         connection.execute(
             "INSERT INTO runs (run_id, status, created_at, updated_at) VALUES ("
             "'old-run', 'completed', '2026-02-03T04:05:06+00:00', '2026-02-03T04:05:06+00:00')"

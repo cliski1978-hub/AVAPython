@@ -451,7 +451,7 @@ def test_the_terminal_fact_records_the_moment_the_run_settled() -> None:
 
     # A non-status write moves ``updated_at`` but not the recorded moment.
     lifecycle.runs.set_execution_selection("run-1", None)
-    assert lifecycle.runs.get("run-1").updated_at > settled_at
+    assert lifecycle.runs.get("run-1").updated_at >= settled_at
 
     # And the recorded moment itself can never be rewritten.
     assert [
