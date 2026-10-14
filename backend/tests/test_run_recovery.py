@@ -46,6 +46,16 @@ def _recovery() -> tuple[RunStore, RunEventStore, RunLifecycleService, RunRecove
     return runs, events, lifecycle, RunRecoveryService(run_repository=runs, lifecycle=lifecycle)
 
 
+def _test_owner(app) -> dict[str, object]:
+    principal = app.state.test_principal
+    return {
+        "owner_principal_ref": principal.principal_ref,
+        "owner_tenant_ref": principal.tenant_ref,
+        "owner_auth_context_ref": principal.authentication_context_ref,
+        "owner_auth_valid_until": principal.valid_until,
+    }
+
+
 # ============================================================
 # BEGIN: Convergence policy
 # ============================================================
@@ -175,6 +185,11 @@ class _MinimalRunRepository(RunRepository):
         conversation_id=None,
         source_user_message_id=None,
         execution_mode=ExecutionMode.CHAT,
+        owner_principal_ref=None,
+        owner_tenant_ref=None,
+        owner_auth_context_ref=None,
+        owner_auth_valid_until=None,
+        execution_workspace_id=None,
     ):
         now = datetime.now(UTC)
         self.runs[run_id] = RunRecord(
@@ -182,6 +197,11 @@ class _MinimalRunRepository(RunRepository):
             source_user_message_id=source_user_message_id, execution_selection=None,
             execution_mode=execution_mode,
             cancellation_requested_at=None, created_at=now, updated_at=now,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
+            owner_auth_context_ref=owner_auth_context_ref,
+            owner_auth_valid_until=owner_auth_valid_until,
+            execution_workspace_id=execution_workspace_id,
         )
         return self.runs[run_id]
 
@@ -324,6 +344,7 @@ def test_startup_settles_a_stranded_run_before_serving_requests(tmp_path) -> Non
             "stranded",
             conversation_id=conversation_id,
             source_user_message_id=message["message_id"],
+            **_test_owner(first),
         )
         runs.set_assistant_message_id("stranded", "assistant-1")
         now = datetime.now(UTC)
@@ -415,7 +436,7 @@ def test_replay_after_recovery_returns_only_persisted_facts(tmp_path) -> None:
             run_repository=runs,
             run_event_repository=first.state.persistence.run_event_repository,
         )
-        lifecycle.create_run("stranded")
+        lifecycle.create_run("stranded", **_test_owner(first))
         lifecycle.start("stranded")
     first.state.persistence.dispose()
 
@@ -452,7 +473,7 @@ def test_a_resuming_client_receives_the_recovery_event_and_closes(tmp_path) -> N
             run_repository=runs,
             run_event_repository=first.state.persistence.run_event_repository,
         )
-        lifecycle.create_run("stranded")
+        lifecycle.create_run("stranded", **_test_owner(first))
         lifecycle.start("stranded")
         # Fact 1 is what the client already processed before the restart.
         assert len(first.state.persistence.run_event_repository.get_events("stranded")) == 1
@@ -495,7 +516,7 @@ def test_recovery_never_touches_execution_provider_or_model_code(tmp_path) -> No
             run_repository=runs,
             run_event_repository=first.state.persistence.run_event_repository,
         )
-        lifecycle.create_run("stranded")
+        lifecycle.create_run("stranded", **_test_owner(first))
         lifecycle.start("stranded")
     first.state.persistence.dispose()
 
@@ -543,7 +564,7 @@ def test_startup_readiness_follows_recovery_so_no_client_sees_a_stale_running_ru
             run_repository=runs,
             run_event_repository=first.state.persistence.run_event_repository,
         )
-        lifecycle.create_run("stranded")
+        lifecycle.create_run("stranded", **_test_owner(first))
         lifecycle.start("stranded")
     first.state.persistence.dispose()
 
@@ -705,7 +726,7 @@ def test_a_startup_persistence_failure_prevents_the_application_from_serving(
             run_repository=runs,
             run_event_repository=first.state.persistence.run_event_repository,
         )
-        lifecycle.create_run("stranded")
+        lifecycle.create_run("stranded", **_test_owner(first))
         lifecycle.transition("stranded", RunStatus.RUNNING)
     first.state.persistence.dispose()
 

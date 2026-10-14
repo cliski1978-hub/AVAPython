@@ -13,6 +13,7 @@ from ava.api.app import create_app
 from ava.api.principal import UnavailableHttpPrincipalResolver
 from ava.contracts.execution import ExecutionMode
 from ava.contracts.security_identity import (
+    DenyConversationAccess,
     DenyPrincipalValidity,
     PrincipalActorType,
     PrincipalResolution,
@@ -70,6 +71,7 @@ def _trusted_app(principal: VerifiedPrincipal | None = None, *, current: bool = 
     return create_app(
         http_principal_resolver=_PrincipalResolver(principal or _principal()),
         principal_validity=_Validity(current),
+        conversation_access=DenyConversationAccess(),
     )
 
 
@@ -165,6 +167,8 @@ def test_run_routes_hide_foreign_and_ownerless_records_and_bind_new_run_to_resol
     assert client.get(f"/runs/{run_id}/inspection").status_code == 200
 
     conversation = app.state.conversation_service.create_conversation()
+    assert client.get(f"/runs?conversation_id={conversation.conversation_id}").status_code == 503
+    app.state.conversation_access = SimpleNamespace(can_access=lambda *args: True)
     app.state.run_lifecycle_service.create_run(
         "owned-list-entry",
         conversation_id=conversation.conversation_id,
@@ -173,6 +177,8 @@ def test_run_routes_hide_foreign_and_ownerless_records_and_bind_new_run_to_resol
         owner_tenant_ref="org-a",
         owner_auth_context_ref=_principal().authentication_context_ref,
     )
+    app.state.run_lifecycle_service.start("owned-list-entry")
+    app.state.run_lifecycle_service.complete("owned-list-entry")
     app.state.run_lifecycle_service.create_run(
         "foreign-list-entry",
         conversation_id=conversation.conversation_id,
@@ -181,9 +187,13 @@ def test_run_routes_hide_foreign_and_ownerless_records_and_bind_new_run_to_resol
         owner_tenant_ref="org-a",
         owner_auth_context_ref=_principal("bob").authentication_context_ref,
     )
+    app.state.run_lifecycle_service.start("foreign-list-entry")
+    app.state.run_lifecycle_service.complete("foreign-list-entry")
     app.state.run_lifecycle_service.create_run(
         "ownerless-list-entry", conversation_id=conversation.conversation_id, execution_mode=ExecutionMode.AGENT
     )
+    app.state.run_lifecycle_service.start("ownerless-list-entry")
+    app.state.run_lifecycle_service.complete("ownerless-list-entry")
     listed = client.get(f"/runs?conversation_id={conversation.conversation_id}")
     assert listed.status_code == 200
     assert [item["run_id"] for item in listed.json()] == ["owned-list-entry"]

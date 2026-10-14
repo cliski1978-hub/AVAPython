@@ -566,8 +566,8 @@ def test_cancellation_winning_the_race_beats_a_late_completion(tmp_path) -> None
         service = app.state.run_service
         agent = service._agent  # type: ignore[attr-defined]
 
-        async def cancel_then_complete(run_id: str, request, *, context=None):
-            del request, context
+        async def cancel_then_complete(run_id: str, request, *, context=None, resolved_execution=None):
+            del request, context, resolved_execution
             await agent.cancel_run(run_id)
             # Simulate a cancellation request landing while the run is active.
             service._lifecycle.cancel(run_id)
@@ -616,12 +616,12 @@ def test_a_cancel_reported_completion_gains_its_missing_fact(tmp_path) -> None:
         agent = service._agent  # type: ignore[attr-defined]
         original = agent.start_run
 
-        async def hold_then_cancel(run_id: str, request, *, context=None):
+        async def hold_then_cancel(run_id: str, request, *, context=None, resolved_execution=None):
             run_holder.append(run_id)
             # The run settles out of band while the agent is still in flight,
             # exactly as a runtime finishing first would.
             service._lifecycle.complete(run_id)
-            return await original(run_id, request, context=context)
+            return await original(run_id, request, context=context, resolved_execution=resolved_execution)
 
         agent.start_run = hold_then_cancel  # type: ignore[method-assign]
         client.post("/runs", json=request)
@@ -830,7 +830,7 @@ def test_a_restarted_run_converges_to_failed_and_keeps_its_history(tmp_path) -> 
     assert stored.status_code == 404
     assert events.status_code == 404
     # The failure is recorded when recovery observed it, not backdated.
-    recovery_events = app.state.persistence.run_event_repository.list_for_run("stranded-run")
+    recovery_events = app.state.persistence.run_event_repository.get_events("stranded-run")
     assert recovery_events[-1].timestamp >= before.created_at
 
 
