@@ -4,7 +4,7 @@
 
 Phase 6.13 adds durable lifecycle infrastructure for normalized tool invocations. Production agent dispatch remains unavailable: application composition still has no trusted execution-authority issuer, context resolver, or production executor registration. The SQLite reservation adapter is wired into relational composition; the memory composition receives an explicitly non-durable test adapter that cannot satisfy the dispatch gate.
 
-Implementation status: reviewed and checkpointed; native Windows acceptance remains pending GitHub Actions. The Phase 6.14 handoff records the checkpoint commit SHA.
+Implementation status: reviewed, checkpointed, and validated on native Windows and Linux GitHub Actions runners. The Phase 6.14 handoff records the implementation and CI-correction commit SHAs.
 
 Implementation branch: `codex/phase-6.13-durable-tool-lifecycle`
 Baseline: `646121e9792d066db83805727f0e5b3b3120ec93` (`codex/phase-6.12-12a-reviewed`)
@@ -48,15 +48,17 @@ The recovery method is not called automatically during application startup. The 
 
 The adapter provides atomic uniqueness and compare-and-set transitions only among processes using the same SQLite database. Separate application instances with separate database files do not coordinate. SQLite does not provide global exactly-once side effects: a crash after an external effect but before outcome persistence leaves an indeterminate record, and this phase never retries it. Multi-instance Windows/Linux cloud hosting and Databricks Apps require externally managed shared durable persistence with equivalent transactional guarantees. Executor host/resource selection remains independent from the repository.
 
-Durable model-loop resumption, automatic retry, distributed leases, approval-driven Run resumption, and full inspection UI remain deferred. The Phase 6.11 native Windows workflow has not been triggered for this branch; local validation here ran on Linux. No implementation commit was created and no branch was pushed.
+Durable model-loop resumption, automatic retry, distributed leases, approval-driven Run resumption, and full inspection UI remain deferred. The Phase 6.11 native Windows workflow was run against the dedicated validation branch; see the Validation section for the run and results.
 
 ## Validation
 
 The earlier handoff's Linux evidence included 72 focused tests, 131 architecture tests, Ruff, and strict mypy across 290 source files. These are prior results, not substitutes for this checkpoint's validation.
 
-Current checkpoint validation: invocation reservation, execution-service, runtime bridge, and migration tests passed (58); architecture guards passed (131); Ruff passed; strict mypy passed across all 290 backend source files; and `git diff --check` passed. The existing workspace Run Inspector regression suite also passed (274 passed, 6 skipped), before Phase 6.14 edits. The workflow now runs reservation and migration certification tests in the existing `ubuntu-22.04` and `windows-2025` matrix. Native Windows results are pending the GitHub Actions run; no cross-platform PASS is claimed.
+The Phase 6.13 implementation and a separate Windows-test correction were pushed to `phase-6.13-windows-validation`. GitHub Actions run [38587156271](https://github.com/cliski1978-hub/AVAPython/actions/runs/38587156271) completed successfully for commit `3520d0eae89224b563afca17c011fa0bbf45f8f1`. Linux (`ubuntu-22.04`) passed shared filesystem/authorization contracts, Linux adversarial filesystem tests, Ruff, and strict mypy. Windows (`windows-2025`) passed shared filesystem/authorization contracts, Windows-native filesystem security tests, and Ruff. Platform-specific steps were skipped on the opposite runner by design. The earlier run `38585897194` exposed Windows test assumptions (SQLite connection handles, timestamp resolution, and tied ordering); the corrections are in the separate CI-fix commit and the rerun is green.
 
-The current `test_run_recovery.py` run passed (16 tests). `test_run_lifecycle_integration.py` reported 13 failures and 7 passes: the failing cases raise `TypeError` because the unchanged `ControllableAgent.start_run` test double does not accept the `resolved_execution` keyword that the already-committed `AgentPort` contract passes. The failing fixture and contract are unchanged from the Phase 6.12 baseline, so this is a pre-existing test-fixture compatibility failure rather than a Phase 6.13 regression; it remains an open regression-suite issue. No Phase 6.14 frontend change existed during the checkpoint test. Native Windows CI remains required before cross-platform acceptance.
+Local Phase 6.13 checkpoint validation also passed 58 reservation, execution-service, runtime-bridge, and migration tests; 131 architecture tests; Ruff; strict mypy across 290 backend files; and `git diff --check`. The workspace Run Inspector suite passed 274 tests with 6 skipped before Phase 6.14 edits.
+
+The current `test_run_recovery.py` run passed (16 tests). `test_run_lifecycle_integration.py` reported 13 failures and 7 passes: the failing cases raise `TypeError` because the unchanged `ControllableAgent.start_run` test double does not accept the `resolved_execution` keyword that the already-committed `AgentPort` contract passes. The failing fixture and contract are unchanged from the Phase 6.12 baseline, so this is a pre-existing test-fixture compatibility failure rather than a Phase 6.13 regression; it remains an open regression-suite issue. No Phase 6.14 frontend change existed during the checkpoint test. The 13 failures are outside the Phase 6.13 CI workflow's selected acceptance suites and are not represented as CI passes.
 
 The focused tests cover atomic duplicate reservation across two independent SQLite connections, CAS and stale-revision rejection, terminal immutability, file-backed restart retrieval, immutable identity on duplicate reuse, corrupt-row fail-closed behavior, interrupted reserved/executing recovery, recovery idempotence and Run-mode mismatch, execution gating, executor failure/event behavior, finalization failure to indeterminate, migration certification, and native workspace read regressions. No file mutation or shell execution was used to validate tool dispatch.
 
@@ -78,4 +80,4 @@ The owner-approved additive roadmap companion, `AVA_Phase_6_Production_Execution
 
 ## Phase 6.14 readiness
 
-Phase 6.13 establishes safe durable lifecycle primitives and explicitly bounded reconciliation, while production dispatch remains disabled. Phase 6.14 proceeds against the owner-approved brief. Native Windows validation remains an open acceptance item and must be reported accurately. Phase 6.13 does not grant production agent authority.
+Phase 6.13 establishes safe durable lifecycle primitives and explicitly bounded reconciliation, while production dispatch remains disabled. Native Windows and Linux workflow acceptance passed on the dedicated validation branch. Phase 6.13 does not grant production agent authority.
