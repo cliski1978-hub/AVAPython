@@ -32,7 +32,7 @@ from ava.contracts.models import (
 )
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
-from ava.execution.selector import ExecutionSelector
+from ava.execution.selector import ExecutionSelector, ResolvedExecution
 from ava.models.bindings import ModelBindingResolver
 from ava.models.contracts import ModelProviderPort
 from ava.models.model_registry import ModelProfile, ModelRegistry
@@ -42,7 +42,6 @@ from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.registry import RuntimeRegistry
 from ava.runtimes.resolver import RuntimeResolver
 from ava.services.run_lifecycle_service import RunLifecycleService
-from ava.services.run_recovery_service import RESTART_INTERRUPTION_PAYLOAD
 from ava.services.run_service import RunService
 
 _TINY_LIMIT = 1_024
@@ -115,9 +114,14 @@ class ControllableAgent(AgentPort):
         return set()
 
     async def start_run(
-        self, run_id: str, request: RunRequest, *, context: object = None
+        self,
+        run_id: str,
+        request: RunRequest,
+        *,
+        context: object = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
-        del context
+        del context, resolved_execution
         if self.before_return is not None:
             self.before_return(run_id)  # type: ignore[operator]
         return AgentRunResult(status=self.outcome, content=self.content)
@@ -143,9 +147,14 @@ class _BlockingAgent(AgentPort):
         return set()
 
     async def start_run(
-        self, run_id: str, request: RunRequest, *, context: object = None
+        self,
+        run_id: str,
+        request: RunRequest,
+        *,
+        context: object = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
-        del request, context
+        del request, context, resolved_execution
         self.run_id = run_id
         while not self._cancelled:
             await asyncio.sleep(0)
@@ -511,13 +520,12 @@ def test_cancelling_a_terminal_run_reports_it_unchanged(tmp_path) -> None:
         assert app.state.lifecycle.get(run["run_id"]).status is RunStatus.COMPLETED
 
 
-def test_cancelling_an_unknown_run_is_an_idempotent_no_op(tmp_path) -> None:
-    """Preserved behavior: an unknown run is reported cancelled, not an error."""
+def test_cancelling_an_unknown_run_is_hidden_from_the_caller(tmp_path) -> None:
+    """Unknown Runs are indistinguishable from Runs the caller cannot access."""
     app = _app(tmp_path, ControllableAgent())
     with TestClient(app) as client:
         response = client.post("/runs/does-not-exist/cancel")
-        assert response.status_code == 200
-        assert response.json()["status"] == "cancelled"
+        assert response.status_code == 404
         assert app.state.lifecycle.get("does-not-exist") is None
 
 
@@ -811,19 +819,19 @@ def test_a_restarted_run_converges_to_failed_and_keeps_its_history(tmp_path) -> 
 
     app = create_app(settings=settings)
     with TestClient(app) as client:
-        stored = client.get("/runs/stranded-run").json()
-        events = client.get("/runs/stranded-run/events").json()
+        stored = client.get("/runs/stranded-run")
+        events = client.get("/runs/stranded-run/events")
+    recovered = app.state.persistence.run_repository.get("stranded-run")
     app.state.persistence.dispose()
 
     assert before is not None
-    assert stored["status"] == "failed"
-    assert [event["event_type"] for event in events] == [
-        "run_started",
-        "run_failed",
-    ]
-    assert events[-1]["payload"] == RESTART_INTERRUPTION_PAYLOAD
+    assert before.status is RunStatus.RUNNING
+    assert recovered is not None and recovered.status is RunStatus.FAILED
+    assert stored.status_code == 404
+    assert events.status_code == 404
     # The failure is recorded when recovery observed it, not backdated.
-    assert events[-1]["timestamp"] >= before.created_at.isoformat()
+    recovery_events = app.state.persistence.run_event_repository.list_for_run("stranded-run")
+    assert recovery_events[-1].timestamp >= before.created_at
 
 
 # ============================================================

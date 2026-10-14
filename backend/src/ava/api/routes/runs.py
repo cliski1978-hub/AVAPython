@@ -12,16 +12,19 @@ normalized lifecycle, available both as a snapshot and as an SSE stream.
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ava.api.principal import principal_is_current, require_verified_principal
 from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.events import EventType, RunEvent
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse
 from ava.contracts.run_inspection import ContextWindowAccounting, RunInspection, RunListItem
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.services.context_construction_service import ContextConstructionError
 from ava.services.run_service import (
     CancellationRequestError,
@@ -35,9 +38,22 @@ router = APIRouter(tags=["runs"])
 
 
 @router.post("/runs/context-preview", response_model=ContextWindowAccounting)
-async def preview_context_window(request: Request, body: RunRequest) -> ContextWindowAccounting | JSONResponse:
+async def preview_context_window(
+    request: Request, body: RunRequest, principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)]
+) -> ContextWindowAccounting | JSONResponse:
     """Estimate the current draft using the same resolved execution and budget policy as a run."""
     service: RunService = request.app.state.run_service
+    if body.workspace_id is not None:
+        # The legacy OpenHands tool factory consumes the globally configured
+        # Workspace binding and cannot yet narrow it with this principal's
+        # durable grant. Do not start a Workspace-bound Run until the runtime
+        # path itself enforces principal-scoped authority.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Workspace-scoped execution is not provisioned for authenticated Runs."},
+        )
+    if body.conversation_id is not None and not _can_access_conversation(request, principal, body.conversation_id):
+        return JSONResponse(status_code=503, content={"detail": "Conversation ownership is not provisioned."})
     try:
         result = service.preview_context_window(body)
         if result is None:
@@ -50,10 +66,22 @@ async def preview_context_window(request: Request, body: RunRequest) -> ContextW
 
 
 @router.get("/runs", response_model=list[RunListItem])
-async def list_conversation_runs(request: Request, conversation_id: str = Query(min_length=1)) -> list[RunListItem]:
+async def list_conversation_runs(
+    request: Request,
+    conversation_id: Annotated[str, Query(min_length=1)],
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> list[RunListItem]:
     """List the captured runs that belong to one conversation."""
-    service: RunService = request.app.state.run_service
-    return service.list_run_summaries_for_conversation(conversation_id)
+    return [
+        RunListItem(
+            run_id=record.run_id,
+            status=record.status,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            execution_mode=record.execution_mode,
+        )
+        for record in request.app.state.run_access_service.list_for_conversation(conversation_id, principal)
+    ]
 
 
 # ============================================================
@@ -63,7 +91,10 @@ async def list_conversation_runs(request: Request, conversation_id: str = Query(
 
 @router.post("/runs", response_model=RunResponse, status_code=202)
 async def start_run(
-    request: Request, body: RunRequest, background_tasks: BackgroundTasks
+    request: Request,
+    body: RunRequest,
+    background_tasks: BackgroundTasks,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
 ) -> RunResponse | JSONResponse:
     """Start an AVA run.
 
@@ -72,8 +103,18 @@ async def start_run(
     through its snapshot or its SSE stream.
     """
     service: RunService = request.app.state.run_service
+    if body.workspace_id is not None:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Workspace-scoped execution is not provisioned for authenticated Runs."},
+        )
+    if body.conversation_id is not None and not _can_access_conversation(request, principal, body.conversation_id):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Conversation ownership is not provisioned for authenticated Run context."},
+        )
     try:
-        prepared = service.prepare_run(body)
+        prepared = service.prepare_run(body, owner=principal)
         if isinstance(prepared, RunResponse):
             return prepared
         background_tasks.add_task(service.execute_prepared_run, prepared)
@@ -143,7 +184,8 @@ _STREAM_HEARTBEAT_TICKS = 150
 async def stream_run(
     request: Request,
     run_id: str,
-    after_sequence: int = Query(default=0, ge=0),
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+    after_sequence: Annotated[int, Query(ge=0)] = 0,
 ) -> StreamingResponse | JSONResponse:
     """Observe one run's persisted AVA events as standards-compliant SSE.
 
@@ -151,8 +193,7 @@ async def stream_run(
     cancels a run. A connection close has no lifecycle meaning.
     """
     service: RunService = request.app.state.run_service
-    run = service.get_run(run_id)
-    if run is None:
+    if request.app.state.run_access_service.get_authorized(run_id, principal) is None:
         return _unknown_run(run_id)
     events = service.get_run_events(run_id, after_sequence=0)
     latest_sequence = events[-1].sequence if events else 0
@@ -161,14 +202,14 @@ async def stream_run(
     if after_sequence > latest_sequence:
         return _invalid_resume_cursor(run_id, after_sequence, latest_sequence)
     return StreamingResponse(
-        _run_event_stream(request, service, run_id, after_sequence=after_sequence),
+        _run_event_stream(request, service, run_id, principal, after_sequence=after_sequence),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
 async def _run_event_stream(
-    request: Request, service: RunService, run_id: str, *, after_sequence: int = 0
+    request: Request, service: RunService, run_id: str, principal: VerifiedPrincipal, *, after_sequence: int = 0
 ) -> AsyncIterator[str]:
     """Yield persisted events after a cursor, then tail later persisted ones.
 
@@ -179,6 +220,11 @@ async def _run_event_stream(
     delivered_sequence = after_sequence
     idle_ticks = 0
     while True:
+        if (
+            not principal_is_current(request, principal)
+            or request.app.state.run_access_service.get_authorized(run_id, principal) is None
+        ):
+            return
         if await request.is_disconnected():
             return
         events = service.get_run_events(run_id, after_sequence=delivered_sequence)
@@ -227,13 +273,17 @@ def _encode_sse_event(event: RunEvent) -> str:
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunResponse, status_code=200)
-async def cancel_run(request: Request, run_id: str) -> RunResponse | JSONResponse:
+async def cancel_run(
+    request: Request, run_id: str, principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)]
+) -> RunResponse | JSONResponse:
     """Durably request cancellation and return the actual run status.
 
     A request timestamp confirms intent, not a terminal outcome. The service
     performs best-effort cancellation; the returned status can remain active.
     """
     service: RunService = request.app.state.run_service
+    if request.app.state.run_access_service.get_authorized(run_id, principal) is None:
+        return _unknown_run(run_id)
     try:
         return await service.cancel_run(run_id)
     except CancellationRequestError:
@@ -262,17 +312,19 @@ async def cancel_run(request: Request, run_id: str) -> RunResponse | JSONRespons
     response_model=RunResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_run(request: Request, run_id: str) -> RunResponse | JSONResponse:
+async def get_run(
+    request: Request, run_id: str, principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)]
+) -> RunResponse | JSONResponse:
     """Return the stored state for an AVA run as a snapshot.
 
     Retrieval is not streaming; this returns exactly what the service
     recorded so far.
     """
     service: RunService = request.app.state.run_service
-    run = service.get_run(run_id)
-    if run is None:
+    if request.app.state.run_access_service.get_authorized(run_id, principal) is None:
         return _unknown_run(run_id)
-    return run
+    run = service.get_run(run_id)
+    return run if run is not None else _unknown_run(run_id)
 
 
 # ============================================================
@@ -293,13 +345,16 @@ async def get_run(request: Request, run_id: str) -> RunResponse | JSONResponse:
 async def get_run_events(
     request: Request,
     run_id: str,
-    after_sequence: int = Query(default=0, ge=0),
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+    after_sequence: Annotated[int, Query(ge=0)] = 0,
 ) -> list[RunEvent] | JSONResponse:
     """Return an AVA run's normalized events in append order.
 
     Snapshot retrieval only; this is not a streaming or SSE endpoint.
     """
     service: RunService = request.app.state.run_service
+    if request.app.state.run_access_service.get_authorized(run_id, principal) is None:
+        return _unknown_run(run_id)
     events = service.get_run_events(run_id, after_sequence=after_sequence)
     if events is None:
         return _unknown_run(run_id)
@@ -307,9 +362,13 @@ async def get_run_events(
 
 
 @router.get("/runs/{run_id}/inspection", response_model=RunInspection, responses={404: {"model": ErrorResponse}})
-async def get_run_inspection(request: Request, run_id: str) -> RunInspection | JSONResponse:
+async def get_run_inspection(
+    request: Request, run_id: str, principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)]
+) -> RunInspection | JSONResponse:
     """Return backend-captured execution facts and the ordered normalized event stream."""
     service: RunService = request.app.state.run_service
+    if request.app.state.run_access_service.get_authorized(run_id, principal) is None:
+        return _unknown_run(run_id)
     inspection = service.get_run_inspection(run_id)
     if inspection is None:
         return _unknown_run(run_id)
@@ -331,6 +390,15 @@ def _unknown_run(run_id: str) -> JSONResponse:
             message=f"Unknown run: {run_id}",
         ).model_dump(),
     )
+
+
+def _can_access_conversation(request: Request, principal: VerifiedPrincipal, conversation_id: str) -> bool:
+    try:
+        return request.app.state.conversation_access.can_access(
+            principal.principal_ref, principal.tenant_ref, conversation_id
+        ) is True
+    except Exception:
+        return False
 
 
 def _invalid_resume_cursor(run_id: str, after_sequence: int, latest_sequence: int) -> JSONResponse:

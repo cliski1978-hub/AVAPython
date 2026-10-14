@@ -80,9 +80,9 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
     try:
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert [m.version for m in runner.pending_migrations()] == list(range(1, 29))
-        assert runner.migrate() == list(range(1, 29))
-        assert runner.current_version() == 28
+        assert [m.version for m in runner.pending_migrations()] == list(range(1, 30))
+        assert runner.migrate() == list(range(1, 30))
+        assert runner.current_version() == 29
         assert list(runner.pending_migrations()) == []
         tables = _tables(database)
         assert {
@@ -131,6 +131,7 @@ def test_migrate_bootstraps_a_fresh_database_with_the_default_migrations() -> No
             (26, "durable tool approvals"),
             (27, "run execution mode"),
             (28, "durable tool invocation reservations"),
+            (29, "trusted Run ownership and Workspace grants"),
         ]
         assert applied[0].applied_at
     finally:
@@ -145,9 +146,9 @@ def test_migrate_is_idempotent_for_an_already_current_database() -> None:
         runner.migrate()
         tables_before = _tables(database)
         assert runner.migrate() == []
-        assert runner.current_version() == 28
+        assert runner.current_version() == 29
         assert _tables(database) == tables_before
-        assert _metadata_versions(database) == list(range(1, 29))
+        assert _metadata_versions(database) == list(range(1, 30))
     finally:
         database.dispose()
         path.unlink()
@@ -199,7 +200,7 @@ def test_project_file_name_migration_preserves_existing_unique_metadata() -> Non
                 "VALUES ('file-a','project-a','SKILL.md','text/markdown',12,'blob-a','created','updated')"
             )
 
-        assert MigrationRunner(database, default_registry()).migrate() == [23, 24, 25, 26, 27, 28]
+        assert MigrationRunner(database, default_registry()).migrate() == [23, 24, 25, 26, 27, 28, 29]
         with database.connect() as connection:
             row = connection.execute(
                 "SELECT id,project_id,file_name,content_type,size_bytes,content_ref,created_at,updated_at,"
@@ -239,7 +240,7 @@ def test_migration_0019_marks_previously_renamed_conversations() -> None:
                 "VALUES ('untouched','New Conversation','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
             )
 
-        assert MigrationRunner(database, default_registry()).migrate() == [19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+        assert MigrationRunner(database, default_registry()).migrate() == [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
         with database.connect() as connection:
             rows = connection.execute(
                 "SELECT conversation_id,is_title_custom FROM conversations ORDER BY conversation_id"
@@ -286,9 +287,10 @@ def test_migration_0015_upgrades_version_14_without_resetting_existing_data() ->
             26,
             27,
             28,
+                29,
         ]
         assert MigrationRunner(database, default_registry()).migrate() == []
-        assert MigrationRunner(database, default_registry()).current_version() == 28
+        assert MigrationRunner(database, default_registry()).current_version() == 29
         with database.connect() as connection:
             project_name = connection.execute("SELECT name FROM projects WHERE id='existing-project'").fetchone()[0]
             assert project_name == "Keep me"
@@ -354,7 +356,7 @@ def test_migration_0017_upgrades_populated_schema_16_additively() -> None:
             )
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+        assert runner.migrate() == [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
         assert runner.migrate() == []
         with database.connect() as connection:
             project = connection.execute(
@@ -391,7 +393,7 @@ def test_migration_records_version_and_name_metadata() -> None:
             rows = connection.execute(
                 "SELECT version, name, applied_at FROM ava_schema_migrations ORDER BY version"
             ).fetchall()
-        assert len(rows) == 28
+        assert len(rows) == 29
         assert [(row["version"], row["name"]) for row in rows] == [
             (1, "initial application persistence schema"),
             (2, "document revision history"),
@@ -421,6 +423,7 @@ def test_migration_records_version_and_name_metadata() -> None:
             (26, "durable tool approvals"),
             (27, "run execution mode"),
             (28, "durable tool invocation reservations"),
+            (29, "trusted Run ownership and Workspace grants"),
         ]
         assert rows[0]["applied_at"].startswith("20")
         assert rows[1]["applied_at"].startswith("20")
@@ -640,9 +643,9 @@ def test_migrate_adopts_a_legacy_step4_6_database_without_destroying_data() -> N
 
         runner = MigrationRunner(database, default_registry())
         assert runner.current_version() == 0
-        assert runner.migrate() == list(range(1, 29))
-        assert runner.current_version() == 28
-        assert _metadata_versions(database) == list(range(1, 29))
+        assert runner.migrate() == list(range(1, 30))
+        assert runner.current_version() == 29
+        assert _metadata_versions(database) == list(range(1, 30))
         with database.connect() as connection:
             row = connection.execute("SELECT run_id, status, execution_mode FROM runs").fetchone()
         assert row["run_id"] == "legacy-run"
@@ -707,8 +710,8 @@ def test_legacy_v1_v2_database_upgrades_to_v3_without_backfill() -> None:
         assert "document_revisions" in before
 
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == list(range(3, 29))
-        assert _metadata_versions(database) == list(range(1, 29))
+        assert runner.migrate() == list(range(3, 30))
+        assert _metadata_versions(database) == list(range(1, 30))
 
         with database.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
@@ -735,7 +738,7 @@ def test_create_relational_repositories_adopts_a_legacy_database_usable_through_
         assert repositories.run_repository.get("via-port") is not None
         repositories.dispose()
         with _sqlite_connection(path) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 28
+            assert connection.execute("SELECT COUNT(*) FROM ava_schema_migrations").fetchone()[0] == 29
     finally:
         path.unlink()
 
@@ -985,7 +988,7 @@ def test_migrated_file_database_keeps_schema_and_data_across_reopen() -> None:
 
         reopened = SqliteDatabase(str(path), auto_migrate=False)
         runner = MigrationRunner(reopened, default_registry())
-        assert runner.current_version() == 28
+        assert runner.current_version() == 29
         assert runner.migrate() == []
         with reopened.connect() as connection:
             assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
@@ -1070,7 +1073,9 @@ def test_v9_leaves_existing_runs_with_no_cancellation_request() -> None:
         try:
             runner = MigrationRunner(reopened, default_registry())
             assert runner.current_version() == 8
-            assert runner.migrate() == [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+            assert runner.migrate() == [
+                9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+            ]
 
             with reopened.connect() as connection:
                 assert "cancellation_requested_at" in _table_columns(connection, "runs")
@@ -1109,6 +1114,11 @@ def test_v9_preserves_the_existing_runs_table_and_its_rows() -> None:
                     "cancellation_requested_at",
                     "inspection_snapshot",
                     "execution_mode",
+                    "owner_principal_ref",
+                    "owner_tenant_ref",
+                    "owner_auth_context_ref",
+                    "owner_auth_valid_until",
+                    "execution_workspace_id",
                 )
                 assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
                 assert (

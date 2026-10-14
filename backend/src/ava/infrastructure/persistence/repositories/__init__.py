@@ -57,6 +57,7 @@ from ava.infrastructure.persistence.repositories.runtime_configuration_repositor
     RelationalRuntimeConfigurationRepository,
 )
 from ava.infrastructure.persistence.repositories.workspace_access_repository import RelationalWorkspaceAccessRepository
+from ava.infrastructure.persistence.repositories.workspace_grant_repository import RelationalWorkspaceGrantRepository
 
 __all__ = [
     "RelationalApprovalRepository",
@@ -79,5 +80,6 @@ __all__ = [
     "RelationalRunRepository",
     "RelationalRuntimeConfigurationRepository",
     "RelationalWorkspaceAccessRepository",
+    "RelationalWorkspaceGrantRepository",
     "RelationalInvocationReservationRepository",
 ]

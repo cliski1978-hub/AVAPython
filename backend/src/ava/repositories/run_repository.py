@@ -52,6 +52,11 @@ class RunRecord:
     assistant_message_id: str | None = None
     cancellation_requested_at: datetime | None = None
     inspection_snapshot: RunInspectionSnapshot | None = None
+    owner_principal_ref: str | None = None
+    owner_tenant_ref: str | None = None
+    owner_auth_context_ref: str | None = None
+    owner_auth_valid_until: datetime | None = None
+    execution_workspace_id: str | None = None
 
     @property
     def cancellation_requested(self) -> bool:
@@ -117,6 +122,11 @@ class RunRepository(ABC):
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
         execution_mode: ExecutionMode = ExecutionMode.CHAT,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
+        owner_auth_context_ref: str | None = None,
+        owner_auth_valid_until: datetime | None = None,
+        execution_workspace_id: str | None = None,
     ) -> RunRecord:
         """Create a new pending run record.
 

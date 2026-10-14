@@ -99,7 +99,14 @@ def _setup(tmp_path: Path, mode: ExecutionMode):
     fixture = PolicyFixture(tmp_path)
     fixture.authority.grant = replace(fixture.authority.grant, run_id="run-1")
     runs = RunStore()
-    runs.create("run-1", execution_mode=mode)
+    runs.create(
+        "run-1",
+        execution_mode=mode,
+        owner_principal_ref="caller-1",
+        owner_tenant_ref="tenant-1",
+        owner_auth_context_ref="a" * 64,
+        execution_workspace_id="workspace-1",
+    )
     executor = _Executor()
     reservations = _Reservations()
     service = ToolExecutionService(
@@ -317,9 +324,15 @@ def test_run_service_captures_mode_once_on_new_run() -> None:
 
 def test_production_composition_has_no_dispatch_authority_or_adapters() -> None:
     from ava.api.app import create_app
+    from ava.api.principal import UnavailableHttpPrincipalResolver
     from ava.configuration.settings import Settings
+    from ava.contracts.security_identity import DenyPrincipalValidity
 
-    app = create_app(settings=Settings(persistence_provider="memory"))
+    app = create_app(
+        settings=Settings(persistence_provider="memory"),
+        http_principal_resolver=UnavailableHttpPrincipalResolver(),
+        principal_validity=DenyPrincipalValidity(),
+    )
     execution = app.state.tool_execution_service
     assert execution._authority is None
     assert execution._executors == {}

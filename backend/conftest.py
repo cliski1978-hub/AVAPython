@@ -57,7 +57,9 @@ from __future__ import annotations
 
 import os
 import tempfile
+from hashlib import sha256
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -129,6 +131,78 @@ def reset_settings_cache() -> None:
 
 
 apply_test_environment()
+from ava.api import app as _ava_app_module  # noqa: E402
+
+
+class _SuitePrincipalResolver:
+    """Explicit test-only authentication provider; never imported by AVA runtime code."""
+
+    def __init__(self) -> None:
+        from ava.contracts.security_identity import (
+            PrincipalActorType,
+            PrincipalResolution,
+            PrincipalResolutionStatus,
+            VerifiedPrincipal,
+        )
+
+        now = datetime.now(UTC)
+        self.principal = VerifiedPrincipal(
+            identity_provider="https://pytest.invalid/ava-suite",
+            subject="suite-principal",
+            tenant_ref="suite-tenant",
+            actor_type=PrincipalActorType.HUMAN,
+            authentication_context="test_session",
+            authentication_context_ref=sha256(b"test-only-session-context").hexdigest(),
+            authenticated_at=now,
+            valid_until=now + timedelta(days=1),
+        )
+        self._resolution = PrincipalResolution(
+            status=PrincipalResolutionStatus.AUTHENTICATED,
+            principal=self.principal,
+        )
+
+    def resolve(self, request: object) -> object:
+        del request
+        return self._resolution
+
+
+class _SuitePrincipalValidity:
+    def __init__(self, resolver: _SuitePrincipalResolver) -> None:
+        self._resolver = resolver
+
+    def is_current(self, principal_ref: str, authentication_context_ref: str) -> bool:
+        principal = self._resolver.principal
+        return (
+            principal_ref == principal.principal_ref
+            and authentication_context_ref == principal.authentication_context_ref
+        )
+
+
+class _SuiteConversationAccess:
+    def can_access(self, principal_ref: str, tenant_ref: str | None, conversation_id: str) -> bool:
+        # Existing test conversations are intentionally owned by this isolated
+        # single-principal test adapter. Production defaults to deny.
+        del principal_ref, tenant_ref, conversation_id
+        return True
+
+
+# API tests must opt into a trusted identity adapter now that Run routes no
+# longer permit anonymous traffic. The real factory stays default-deny; this
+# wrapper exists only in pytest's process and never changes production behavior.
+_suite_resolver = _SuitePrincipalResolver()
+_production_create_app = _ava_app_module.create_app
+
+
+def _create_test_app(*args: object, **kwargs: object):
+    kwargs.setdefault("http_principal_resolver", _suite_resolver)
+    kwargs.setdefault("principal_validity", _SuitePrincipalValidity(_suite_resolver))
+    kwargs.setdefault("conversation_access", _SuiteConversationAccess())
+    app = _production_create_app(*args, **kwargs)
+    app.state.test_principal = _suite_resolver.principal
+    return app
+
+
+_ava_app_module.create_app = _create_test_app
 
 
 @pytest.fixture(autouse=True)

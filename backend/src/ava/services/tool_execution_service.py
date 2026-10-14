@@ -191,6 +191,13 @@ class ToolExecutionService:
             not isinstance(authority, ToolExecutionAuthority)
             or authority.revoked
             or authority.run_id != run_id
+            or run.owner_principal_ref is None
+            or authority.principal_ref != run.owner_principal_ref
+            or authority.tenant_ref != run.owner_tenant_ref
+            or authority.workspace_configuration_revision is None
+            or authority.grant_id is None
+            or authority.grant_revision is None
+            or run.execution_workspace_id != authority.context.workspace_id
             or authority.context.context_id != execution_context_ref
             or authority.context.workspace_id is None
             or not isinstance(authority.workspace, RuntimeWorkspaceBinding)
@@ -292,8 +299,15 @@ class ToolExecutionService:
             not isinstance(authority, ToolExecutionAuthority)
             or authority.revoked
             or authority.run_id != run_id
+            or run.owner_principal_ref is None
+            or authority.principal_ref != run.owner_principal_ref
+            or authority.tenant_ref != run.owner_tenant_ref
             or authority.context.context_id != invocation.execution_context_ref
             or authority.context.workspace_id is None
+            or authority.context.workspace_id != run.execution_workspace_id
+            or authority.grant_id is None
+            or authority.grant_revision is None
+            or authority.workspace_configuration_revision is None
         ):
             return self._denied(invocation, "execution_authority_invalid")
 
@@ -320,23 +334,22 @@ class ToolExecutionService:
             current_authority = self._authority.resolve(invocation.execution_context_ref)
         except Exception:
             current_authority = None
+        current_run = self._runs.get(run_id)
         if (
             current.decision != preflight.decision
             or current.operation_binding != preflight.operation_binding
             or current_authority != authority
             or current_authority is None
             or current_authority.revoked
-        ):
-            return self._denied(invocation, "execution_context_changed", preflight.decision)
-        current_run = self._runs.get(run_id)
-        if (
-            current_run is None
+            or current_run is None
             or current_run.status.is_terminal
             or current_run.cancellation_requested
             or current_run.execution_mode != mode
+            or current_authority.principal_ref != current_run.owner_principal_ref
+            or current_authority.tenant_ref != current_run.owner_tenant_ref
+            or current_authority.context.workspace_id != current_run.execution_workspace_id
         ):
-            return self._denied(invocation, "run_execution_context_changed", preflight.decision)
-
+            return self._denied(invocation, "execution_context_changed", preflight.decision)
         executor = self._executors.get(invocation.tool_id)
         if executor is None:
             return self._denied(invocation, "executor_unavailable", preflight.decision)

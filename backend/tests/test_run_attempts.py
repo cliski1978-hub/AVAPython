@@ -30,6 +30,7 @@ from ava.contracts.events import EventType
 from ava.contracts.execution import RunExecutionSelection
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.execution.selector import ResolvedExecution
 from ava.services.run_lifecycle_service import RunLifecycleService
 from ava.services.run_recovery_service import RESTART_INTERRUPTION_PAYLOAD
 from ava.services.run_service import RunService
@@ -65,9 +66,14 @@ class ScriptedAgent(AgentPort):
         return set()
 
     async def start_run(
-        self, run_id: str, request: RunRequest, *, context: object = None
+        self,
+        run_id: str,
+        request: RunRequest,
+        *,
+        context: object = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
-        del run_id
+        del run_id, resolved_execution
         index = self._index
         self._index += 1
         self.prompts.append(request.prompt)
@@ -113,9 +119,14 @@ class _BlockingAgent(AgentPort):
         return set()
 
     async def start_run(
-        self, run_id: str, request: RunRequest, *, context: object = None
+        self,
+        run_id: str,
+        request: RunRequest,
+        *,
+        context: object = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
-        del request, context
+        del request, context, resolved_execution
         self.run_id = run_id
         while not self.released:
             await asyncio.sleep(0.001)
@@ -142,7 +153,7 @@ def _abandoned_run(
     )
 
     async def scenario() -> str:
-        task = asyncio.create_task(service.start_run(request))
+        task = asyncio.create_task(service.start_run(request, owner=app.state.test_principal))
         agent = service._agent  # type: ignore[attr-defined]
         for _ in range(2_000):
             if getattr(agent, "run_id", None) is not None:
@@ -711,6 +722,10 @@ def test_a_waiting_run_cannot_be_superseded(tmp_path) -> None:
             "waiting-attempt",
             conversation_id=conversation_id,
             source_user_message_id=source,
+            owner_principal_ref=app.state.test_principal.principal_ref,
+            owner_tenant_ref=app.state.test_principal.tenant_ref,
+            owner_auth_context_ref=app.state.test_principal.authentication_context_ref,
+            owner_auth_valid_until=app.state.test_principal.valid_until,
         ).run_id
         app.state.lifecycle.transition(waiting_id, RunStatus.WAITING_FOR_APPROVAL)
         assert _record(app, waiting_id).status is RunStatus.WAITING_FOR_APPROVAL
@@ -737,6 +752,10 @@ def test_a_pending_run_cannot_be_superseded(tmp_path) -> None:
             "pending-attempt",
             conversation_id=conversation_id,
             source_user_message_id=source,
+            owner_principal_ref=app.state.test_principal.principal_ref,
+            owner_tenant_ref=app.state.test_principal.tenant_ref,
+            owner_auth_context_ref=app.state.test_principal.authentication_context_ref,
+            owner_auth_valid_until=app.state.test_principal.valid_until,
         ).run_id
         assert _record(app, pending_id).status is RunStatus.PENDING
 
@@ -759,7 +778,7 @@ def test_an_unknown_new_attempt_target_is_refused(tmp_path) -> None:
         )
         assert response.status_code == 409
         assert response.json()["error_code"] == "run_not_supersedable"
-        assert "does not exist" in response.json()["message"]
+        assert "unavailable" in response.json()["message"]
 
 
 def test_the_new_run_inherits_the_prior_runs_source_user_message(tmp_path) -> None:
@@ -1204,6 +1223,10 @@ def test_execution_interrupted_is_retryable_history_not_a_resume(tmp_path) -> No
             "lost-run",
             conversation_id=conversation_id,
             source_user_message_id=source,
+            owner_principal_ref=app.state.test_principal.principal_ref,
+            owner_tenant_ref=app.state.test_principal.tenant_ref,
+            owner_auth_context_ref=app.state.test_principal.authentication_context_ref,
+            owner_auth_valid_until=app.state.test_principal.valid_until,
         ).run_id
         lifecycle.start(lost_id)
         summary = app.state.run_recovery_service.recover_stranded_runs()
