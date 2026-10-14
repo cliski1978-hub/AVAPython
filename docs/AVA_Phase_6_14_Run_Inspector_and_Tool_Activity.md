@@ -4,7 +4,7 @@
 
 Phase 6.14 implementation is complete and committed separately from Phase 6.13. The existing shared Run Inspector now includes a read-only Tool Activity tab. Production tool dispatch remains disabled. No work from Phase 6.14A was started.
 
-The Phase 6.13 implementation was checkpointed at `9f167b32eae1dfede8016933ad4c8c9c4b8c18f5`; Windows test corrections were committed separately at `3520d0eae89224b563afca17c011fa0bbf45f8f1`; the completed CI result was recorded at `d09189bb1d8b896ee24e94fa2f730f35666b18ef`. Phase 6.14 is committed in the commit immediately following this report.
+The Phase 6.13 implementation was checkpointed at `9f167b32eae1dfede8016933ad4c8c9c4b8c18f5`; Windows test corrections were committed separately at `3520d0eae89224b563afca17c011fa0bbf45f8f1`; the completed CI result was recorded at `d09189bb1d8b896ee24e94fa2f730f35666b18ef`. The Phase 6.14 implementation and this report are included in dedicated checkpoint `c920ba8522cf08a276a39d7c226855a7b3c9a3ee`.
 
 ## Scope and implementation
 
