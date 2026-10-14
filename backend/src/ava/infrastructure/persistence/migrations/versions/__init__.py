@@ -48,6 +48,7 @@ from ava.infrastructure.persistence.migrations.versions import (
     v0025_workspace_access,
     v0026_approvals,
     v0027_run_execution_mode,
+    v0028_tool_invocation_reservations,
 )
 
 __all__ = ["default_registry"]
@@ -287,6 +288,14 @@ def default_registry() -> MigrationRegistry:
             name=v0027_run_execution_mode.NAME,
             up=v0027_run_execution_mode.migrate_up,
             verify=v0027_run_execution_mode.verify_structure,
+        )
+    )
+    registry.register(
+        Migration(
+            version=v0028_tool_invocation_reservations.VERSION,
+            name=v0028_tool_invocation_reservations.NAME,
+            up=v0028_tool_invocation_reservations.migrate_up,
+            verify=v0028_tool_invocation_reservations.verify_structure,
         )
     )
     return registry

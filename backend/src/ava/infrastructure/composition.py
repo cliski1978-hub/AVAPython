@@ -77,6 +77,7 @@ from ava.repositories import (
     DocumentRepository,
     DocumentRevisionRepository,
     ExecutionDefaultsRepository,
+    InvocationReservationRepository,
     MessageRepository,
     ModelConfigurationRepository,
     ProjectFileContentPort,
@@ -88,6 +89,7 @@ from ava.repositories import (
     RuntimeConfigurationRepository,
 )
 from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoordinator
+from ava.repositories.invocation_reservation_repository import InMemoryInvocationReservationRepository
 from ava.repositories.tool_feature_repository import ToolFeatureRepository
 from ava.repositories.workspace_access_repository import WorkspaceAccessRepository
 from ava.runtimes import RuntimeRegistry
@@ -561,6 +563,7 @@ class ApplicationPersistence:
     tool_feature_repository: ToolFeatureRepository
     workspace_access_repository: WorkspaceAccessRepository
     approval_repository: ApprovalRepository
+    invocation_reservation_repository: InvocationReservationRepository
     project_repository: ProjectRepository
     core_prompt_repository: CorePromptRepository
     core_prompt_assignment_repository: CorePromptAssignmentRepository
@@ -627,6 +630,7 @@ def create_application_persistence(
         project_files = ProjectFileStore()
         return ApplicationPersistence(
             approval_repository=ApprovalStore(),
+            invocation_reservation_repository=InMemoryInvocationReservationRepository(),
             tool_feature_repository=ToolFeatureStore(),
             workspace_access_repository=WorkspaceAccessStore(),
             run_repository=RunStore(),
@@ -662,6 +666,7 @@ def create_application_persistence(
         )
         return ApplicationPersistence(
             approval_repository=bundle.approval_repository,
+            invocation_reservation_repository=bundle.invocation_reservation_repository,
             tool_feature_repository=bundle.tool_feature_repository,
             workspace_access_repository=bundle.workspace_access_repository,
             run_repository=bundle.run_repository,

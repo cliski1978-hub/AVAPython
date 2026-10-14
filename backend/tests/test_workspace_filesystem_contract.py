@@ -56,11 +56,29 @@ def _service(root: Path) -> ToolExecutionService:
 class _Reservations:
     durable = True
 
-    def reserve(self, invocation_id, binding):
-        return True
+    def reserve(self, reservation):
+        self.records = {reservation.invocation_id: reservation}
+        return reservation
 
-    def transition(self, invocation_id, state):
-        return None
+    def get(self, invocation_id):
+        return self.records.get(invocation_id)
+
+    def transition(self, invocation_id, *, expected_revision, state, **metadata):
+        from dataclasses import replace
+
+        self.records[invocation_id] = replace(
+            self.records[invocation_id],
+            state=state,
+            revision=expected_revision + 1,
+            **{k: v for k, v in metadata.items() if v is not None},
+        )
+        return self.records[invocation_id]
+
+    def list_incomplete(self):
+        return ()
+
+    def list_for_run(self, run_id):
+        return tuple(r for r in self.records.values() if r.run_id == run_id)
 
 
 async def _invoke(service: ToolExecutionService, tool_id: str, path: str, **arguments):

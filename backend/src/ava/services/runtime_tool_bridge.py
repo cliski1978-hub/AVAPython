@@ -267,6 +267,7 @@ class ToolExecutionRuntimeBridge:
             ToolExecutionDisposition.DENIED: RuntimeToolDisposition.DENIED,
             ToolExecutionDisposition.FAILED: RuntimeToolDisposition.FAILED,
             ToolExecutionDisposition.CANCELLED: RuntimeToolDisposition.CANCELLED,
+            ToolExecutionDisposition.INDETERMINATE: RuntimeToolDisposition.INDETERMINATE,
         }[service_outcome.disposition]
         outcome = RuntimeToolOutcome(
             invocation_id=invocation_id,

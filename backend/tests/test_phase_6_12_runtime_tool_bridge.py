@@ -39,14 +39,33 @@ class _Reservations:
     def __init__(self) -> None:
         self.states = {}
 
-    def reserve(self, invocation_id, binding):
-        if invocation_id in self.states:
-            return False
-        self.states[invocation_id] = InvocationReservationState.RESERVED
-        return True
+    def reserve(self, reservation):
+        if reservation.invocation_id in self.states:
+            from ava.repositories.invocation_reservation_repository import InvocationReservationConflict
 
-    def transition(self, invocation_id, state):
+            raise InvocationReservationConflict("duplicate")
+        self.records = getattr(self, "records", {})
+        self.records[reservation.invocation_id] = reservation
+        self.states[reservation.invocation_id] = reservation.state
+        return reservation
+
+    def get(self, invocation_id):
+        return getattr(self, "records", {}).get(invocation_id)
+
+    def transition(self, invocation_id, *, expected_revision, state, **metadata):
+        from dataclasses import replace
+
+        updated = replace(self.records[invocation_id], state=state, revision=expected_revision + 1,
+                          **{k: v for k, v in metadata.items() if v is not None})
+        self.records[invocation_id] = updated
         self.states[invocation_id] = state
+        return updated
+
+    def list_incomplete(self):
+        return ()
+
+    def list_for_run(self, run_id):
+        return tuple(r for r in getattr(self, "records", {}).values() if r.run_id == run_id)
 
 
 class _ContextRefs:

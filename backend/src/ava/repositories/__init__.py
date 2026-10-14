@@ -42,6 +42,13 @@ from ava.repositories.document_revision_repository import (
     DocumentRevisionRepository,
 )
 from ava.repositories.execution_defaults_repository import ExecutionDefaultsRepository
+from ava.repositories.invocation_reservation_repository import (
+    InMemoryInvocationReservationRepository,
+    InvocationReservation,
+    InvocationReservationConflict,
+    InvocationReservationRepository,
+    InvocationReservationState,
+)
 from ava.repositories.knowledge import (
     KnowledgeDocumentRecord,
     KnowledgeQuery,
@@ -99,6 +106,11 @@ __all__ = [
     "KnowledgeSourceRef",
     "MessageRecord",
     "MessageRepository",
+    "InvocationReservation",
+    "InvocationReservationConflict",
+    "InvocationReservationRepository",
+    "InvocationReservationState",
+    "InMemoryInvocationReservationRepository",
     "ModelConfigurationRepository",
     "ProviderConnectionRepository",
     "ProjectRecord",

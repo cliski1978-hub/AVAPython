@@ -27,6 +27,7 @@ from ava.infrastructure.persistence.repositories import (
     RelationalDocumentRevisionRepository,
     RelationalDocumentWriteCoordinator,
     RelationalExecutionDefaultsRepository,
+    RelationalInvocationReservationRepository,
     RelationalMessageRepository,
     RelationalModelConfigurationRepository,
     RelationalProjectFileRepository,
@@ -52,6 +53,7 @@ from ava.repositories import (
     DocumentRepository,
     DocumentRevisionRepository,
     ExecutionDefaultsRepository,
+    InvocationReservationRepository,
     MessageRepository,
     ModelConfigurationRepository,
     ProjectFileRepository,
@@ -106,6 +108,7 @@ class PersistenceRepositories:
     project_file_repository: ProjectFileRepository
     core_prompt_repository: CorePromptRepository
     core_prompt_assignment_repository: CorePromptAssignmentRepository
+    invocation_reservation_repository: InvocationReservationRepository
 
     def dispose(self) -> None:
         """Close the shared database connection backing these adapters."""
@@ -170,6 +173,7 @@ def create_relational_repositories(
         project_file_repository=RelationalProjectFileRepository(database=database),
         core_prompt_repository=RelationalCorePromptRepository(database=database),
         core_prompt_assignment_repository=RelationalCorePromptAssignmentRepository(database=database),
+        invocation_reservation_repository=RelationalInvocationReservationRepository(database=database),
     )
 
 
