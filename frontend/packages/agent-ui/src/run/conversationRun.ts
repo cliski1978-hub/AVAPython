@@ -328,6 +328,7 @@ export async function startRunForPrompt(options: {
   prompt: string;
   retryOfRunId?: string | null;
   execution?: RunRequest["execution"];
+  executionMode?: RunRequest["execution_mode"];
   workspaceId?: string | null;
   acquireRunStream?: AcquireRunStream;
   agent: RunAgent;
@@ -374,6 +375,7 @@ export async function startRunForPrompt(options: {
       ...(options.sourceUserMessageId ? { source_user_message_id: options.sourceUserMessageId } : {}),
       ...(options.retryOfRunId ? { retry_of_run_id: options.retryOfRunId } : {}),
       ...(options.execution ? { execution: options.execution } : {}),
+      ...(options.executionMode ? { execution_mode: options.executionMode } : {}),
       ...(options.workspaceId ? { workspace_id: options.workspaceId } : {}),
     });
     if (!isRunCurrent(commands, options.conversationId, runEpoch)) {
@@ -518,6 +520,7 @@ export async function submitPrompt(
   execution?: RunRequest["execution"],
   workspaceId?: string | null,
   acquireRunStream?: AcquireRunStream,
+  executionMode?: RunRequest["execution_mode"],
 ): Promise<void> {
   const created = await commands.addUserMessage(conversationId, prompt);
   const assistantMessageId = createEntityId();
@@ -533,6 +536,7 @@ export async function submitPrompt(
     sourceUserMessageId: created.messageId,
     prompt,
     execution,
+    executionMode,
     workspaceId,
     acquireRunStream,
     agent,
@@ -562,6 +566,7 @@ export async function rerunAssistantResponse(options: {
   /** Prior run being branched from, for backend-side eligibility and lineage. */
   retryOfRunId: string;
   execution?: RunRequest["execution"];
+  executionMode?: RunRequest["execution_mode"];
   workspaceId?: string | null;
   acquireRunStream?: AcquireRunStream;
   agent: RunAgent;
@@ -574,6 +579,7 @@ export async function rerunAssistantResponse(options: {
     prompt: options.prompt,
     retryOfRunId: options.retryOfRunId,
     execution: options.execution,
+    executionMode: options.executionMode,
     workspaceId: options.workspaceId,
     acquireRunStream: options.acquireRunStream,
     agent: options.agent,

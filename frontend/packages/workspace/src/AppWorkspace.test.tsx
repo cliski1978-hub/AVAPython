@@ -4,6 +4,8 @@ import {
   createDocument,
   getHealth,
   getModels,
+  getRuntimes,
+  getExecutionProfiles,
   getDocument,
   getWorkspaces,
   previewContextWindow,
@@ -1009,6 +1011,76 @@ describe("AppWorkspace", () => {
         }),
       );
     });
+  });
+
+  it("keeps execution mode independent from model/runtime and reports unavailable normalized tools honestly", async () => {
+    vi.mocked(getModels).mockResolvedValueOnce({
+      contract_version: "v1",
+      default_model_id: "model-a",
+      models: [{
+        provider_name: "OpenAI-compatible",
+        model_id: "model-a",
+        display_name: "Model A",
+        context_limit: 8192,
+        capabilities: {
+          chat: true, streaming: true, tool_calling: false, structured_output: false,
+          vision: false, embeddings: false, reasoning: false, code_specialization: false,
+          contract_version: "v1",
+        },
+        provider_id: "connection-a",
+        hosting_mode: "external",
+        enabled: true,
+        qualifications: [],
+        contract_version: "v1",
+      }],
+    });
+    vi.mocked(getRuntimes).mockResolvedValueOnce({
+      contract_version: "v1",
+      default_runtime_id: "native",
+      runtimes: [
+        { is_default: true, runtime_info: { runtime_id: "native", display_name: "Native AVA" }, contract_version: "v1" },
+        { is_default: false, runtime_info: { runtime_id: "openhands", display_name: "OpenHands" }, contract_version: "v1" },
+      ],
+    });
+    vi.mocked(getExecutionProfiles).mockResolvedValueOnce({ contract_version: "v1", default_profile_id: "default", profiles: [] });
+    render(<AppWorkspace client={client} />);
+
+    const mode = screen.getByRole("combobox", { name: "Execution mode" }) as HTMLSelectElement;
+    expect(mode.value).toBe("chat");
+    fireEvent.change(mode, { target: { value: "agent" } });
+    expect(await screen.findByText(/Normalized tool execution is unavailable in this deployment/)).toBeTruthy();
+    expect(screen.getByText(/Model tool calling: reported supported|reported unsupported/)).toBeTruthy();
+
+    fireEvent.change(executionControl("Select runtime"), { target: { value: "openhands" } });
+    fireEvent.change(executionControl("Select model"), { target: { value: "model-a" } });
+    expect(mode.value).toBe("agent");
+    expect(screen.getByText(/OpenHands may expose legacy Workspace tools/)).toBeTruthy();
+    expect(screen.getByText(/Model tool calling: reported unsupported/)).toBeTruthy();
+
+    await submitPrompt("use independent selections");
+    await waitFor(() => {
+      expect(vi.mocked(startRun)).toHaveBeenCalledWith(client, expect.objectContaining({
+        execution_mode: "agent",
+        execution: { runtime_id: "openhands", model_id: "model-a" },
+      }));
+    });
+    expect(mode.value).toBe("agent");
+  });
+
+  it("resets transient execution mode to Chat when switching conversations", async () => {
+    vi.mocked(listConversations).mockResolvedValueOnce({
+      contract_version: "v1",
+      conversations: [
+        { conversation_id: "conversation-a", title: "Conversation A", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+        { conversation_id: "conversation-b", title: "Conversation B", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", is_pinned: false, is_archived: false, folder_id: null, project_id: null, contract_version: "v1" },
+      ],
+    });
+    render(<AppWorkspace client={client} />);
+    await screen.findByRole("button", { name: "Conversation A" });
+    const mode = screen.getByRole("combobox", { name: "Execution mode" }) as HTMLSelectElement;
+    fireEvent.change(mode, { target: { value: "agent" } });
+    fireEvent.click(screen.getByRole("button", { name: "Conversation B" }));
+    await waitFor(() => expect(mode.value).toBe("chat"));
   });
 
   it("omits workspace_id from the run request when no workspace is selected", async () => {

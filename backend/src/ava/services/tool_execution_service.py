@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.events import EventType, RunEvent
 from ava.contracts.execution import ExecutionMode
+from ava.contracts.json_types import JsonValue
 from ava.contracts.tool_policy import ToolPolicyDecisionType, ToolPolicyRequest
-from ava.contracts.tools import ToolCapability, ToolOperationBinding, ToolRequest, ToolResult, ToolStatus
+from ava.contracts.tools import (
+    ToolCapability,
+    ToolDefinition,
+    ToolOperationBinding,
+    ToolRequest,
+    ToolResult,
+    ToolStatus,
+)
+from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import RunRepository
 from ava.services.approval_service import ApprovalService
 from ava.services.tool_feature_service import ToolFeatureService
@@ -21,6 +33,8 @@ from ava.services.tool_policy_service import ToolPolicyService
 from ava.tools.authority import ToolExecutionAuthority, ToolExecutionAuthorityPort, ToolOperationType
 from ava.tools.registry import ToolRegistry
 from ava.workspaces.contracts import RuntimeWorkspaceBinding
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutionDisposition(StrEnum):
@@ -115,6 +129,7 @@ class ToolExecutionService:
         approvals: ApprovalService | None = None,
         executors: dict[str, ToolExecutorPort] | None = None,
         reservations: InvocationReservationRepository | None = None,
+        run_events: RunEventRepository | None = None,
     ) -> None:
         self._runs = runs
         self._registry = registry
@@ -126,6 +141,129 @@ class ToolExecutionService:
         if any(registry.get(tool_id) is None for tool_id in self._executors):
             raise ValueError("executor mappings must reference registered tools")
         self._reservations = reservations
+        self._run_events = run_events
+
+    def _record_event(
+        self,
+        event_type: EventType,
+        request: ToolRequest,
+        mode: ExecutionMode,
+        *,
+        status: str,
+        reason_code: str | None = None,
+    ) -> None:
+        """Persist safe lifecycle facts without arguments or result contents."""
+        if self._run_events is None or request.run_id is None:
+            return
+        payload: dict[str, JsonValue] = {
+            "invocation_id": request.invocation_id,
+            "tool_id": request.tool_id,
+            "tool_version": request.tool_version,
+            "execution_mode": mode.value,
+            "status": status,
+        }
+        if reason_code:
+            payload["reason_code"] = reason_code
+        try:
+            self._run_events.append(
+                RunEvent(
+                    event_id=str(uuid4()),
+                    run_id=request.run_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.warning("Unable to persist tool lifecycle event for run %s", request.run_id)
+
+    def persisted_execution_mode(self, run_id: str) -> ExecutionMode | None:
+        """Read the mode owned by the stored Run, never a model or runtime field."""
+        run = self._runs.get(run_id)
+        return run.execution_mode if run is not None else None
+
+    def discover_tools(self, run_id: str, execution_context_ref: str) -> list[ToolDefinition]:
+        """Return only tools that could reach the central dispatch boundary.
+
+        This is still descriptive: every call is revalidated by ``execute``.
+        Discovery fails closed when the run, authority, executor, or durable
+        reservation is missing, and it uses the persisted Run mode.
+        """
+        run = self._runs.get(run_id)
+        try:
+            durable_reservations = self._reservations is not None and self._reservations.durable
+        except Exception:
+            durable_reservations = False
+        if (
+            run is None
+            or run.status.is_terminal
+            or run.cancellation_requested
+            or run.execution_mode == ExecutionMode.CHAT
+            or self._authority is None
+            or not durable_reservations
+        ):
+            return []
+        try:
+            authority = self._authority.resolve(execution_context_ref)
+        except Exception:
+            return []
+        if (
+            not isinstance(authority, ToolExecutionAuthority)
+            or authority.revoked
+            or authority.run_id != run_id
+            or authority.context.context_id != execution_context_ref
+            or authority.context.workspace_id is None
+            or not isinstance(authority.workspace, RuntimeWorkspaceBinding)
+            or authority.workspace.workspace_id != authority.context.workspace_id
+        ):
+            return []
+        minimum_capabilities = {
+            ToolOperationType.READ: frozenset({ToolCapability.FILE_READ}),
+            ToolOperationType.WRITE: frozenset({ToolCapability.FILE_READ, ToolCapability.FILE_WRITE}),
+            ToolOperationType.EDIT: frozenset({ToolCapability.FILE_READ, ToolCapability.FILE_WRITE}),
+            ToolOperationType.DELETE: frozenset(
+                {ToolCapability.FILE_READ, ToolCapability.FILE_WRITE, ToolCapability.FILE_DELETE}
+            ),
+        }
+        candidates: list[ToolDefinition] = []
+        for definition in self._registry.list():
+            operation = self._policy.operation_for_tool(definition.tool_id)
+            if operation is None or operation == ToolOperationType.COMMAND:
+                continue
+            minimum = minimum_capabilities[operation]
+            required = minimum | frozenset(definition.required_capabilities)
+            if not minimum.issubset(definition.required_capabilities):
+                continue
+            if run.execution_mode == ExecutionMode.PLAN and (
+                operation != ToolOperationType.READ
+                or not set(definition.required_capabilities).issubset({ToolCapability.FILE_READ})
+            ):
+                continue
+            if (
+                definition.tool_id not in self._executors
+                or definition.tool_id not in authority.allowed_tool_ids
+                or (
+                    authority.narrowing_tool_ids is not None
+                    and definition.tool_id not in authority.narrowing_tool_ids
+                )
+            ):
+                continue
+            try:
+                self._features.require_enabled(definition.tool_id)
+            except Exception:
+                continue
+            workspace = authority.workspace
+            if not workspace.permissions.read:
+                continue
+            if operation in {ToolOperationType.WRITE, ToolOperationType.EDIT, ToolOperationType.DELETE} and not (
+                workspace.permissions.write
+            ):
+                continue
+            if not required.issubset(authority.allowed_capabilities) or not required.issubset(
+                authority.technical_capabilities
+            ):
+                continue
+            candidates.append(definition)
+        return candidates
 
     async def execute(self, request: ToolRequest, *, approval_id: str | None = None) -> ToolExecutionOutcome:
         """Validate current run/mode/policy/approval, then dispatch at most once."""
@@ -248,16 +386,30 @@ class ToolExecutionService:
             _proof=_AUTHORIZATION_PROOF,
         )
         try:
+            self._record_event(
+                EventType.TOOL_STARTED, invocation, mode, status=ToolStatus.STARTED.value
+            )
             result = await executor.execute(authorized)
             normalized = self._normalize_executor_result(invocation, result)
         except asyncio.CancelledError:
             with suppress(Exception):
                 reservations.transition(invocation.invocation_id, InvocationReservationState.CANCELLED)
+            self._record_event(
+                EventType.TOOL_OUTCOME, invocation, mode, status=ToolStatus.CANCELLED.value
+            )
             raise
         except Exception:
             with suppress(Exception):
                 reservations.transition(invocation.invocation_id, InvocationReservationState.FAILED)
-            return self._failure(invocation, "tool_execution_failed")
+            failed = self._failure(invocation, "tool_execution_failed")
+            self._record_event(
+                EventType.TOOL_OUTCOME,
+                invocation,
+                mode,
+                status=ToolStatus.FAILED.value,
+                reason_code="tool_execution_failed",
+            )
+            return failed
         try:
             reservations.transition(
                 invocation.invocation_id,
@@ -266,7 +418,20 @@ class ToolExecutionService:
                 else InvocationReservationState.FAILED,
             )
         except Exception:
+            self._record_event(
+                EventType.TOOL_OUTCOME,
+                invocation,
+                mode,
+                status=ToolStatus.INDETERMINATE.value,
+                reason_code="invocation_reservation_finalization_failed",
+            )
             return self._indeterminate(invocation, "invocation_reservation_finalization_failed", preflight.decision)
+        self._record_event(
+            EventType.TOOL_OUTCOME,
+            invocation,
+            mode,
+            status=normalized.status.value,
+        )
         disposition = (
             ToolExecutionDisposition.EXECUTED
             if normalized.status == ToolStatus.COMPLETED
@@ -343,7 +508,11 @@ class ToolExecutionService:
                 message="The tool executor failed.",
             ),
         )
-        return ToolExecutionOutcome(disposition=ToolExecutionDisposition.FAILED, result=result)
+        return ToolExecutionOutcome(
+            disposition=ToolExecutionDisposition.FAILED,
+            result=result,
+            authorized_for_dispatch=True,
+        )
 
     @classmethod
     def _indeterminate(

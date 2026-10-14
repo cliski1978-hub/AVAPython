@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronDownIcon, PaperclipIcon, SquareIcon, XIcon, shadcn } from "@ava/ui-core";
-import type { AttachmentResponse, AttachmentContextItem } from "@ava/contracts";
+import type { AttachmentResponse, AttachmentContextItem, ExecutionMode } from "@ava/contracts";
 import { attachmentContextPresentation } from "../lib/attachmentContextPresentation";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
@@ -21,7 +21,7 @@ export interface PromptComposerProps {
   /** Called on every edit in both controlled and self-managed modes. */
   onChange?: (value: string) => void;
   /** Called with the trimmed prompt once meaningful content is submitted. */
-  onSubmit: (prompt: string) => void | Promise<void>;
+  onSubmit: (prompt: string, executionMode: ExecutionMode) => void | Promise<void>;
   /** Called when the user activates the Stop action while running. */
   onStop: () => void;
   /** True while a run is active with a backend run id (Stop is enabled). */
@@ -38,6 +38,11 @@ export interface PromptComposerProps {
   controls?: ReactNode;
   /** Human-readable execution choice shown while the settings are closed. */
   executionSummary?: string;
+  /** Transient mode for the next Run; the persisted Run remains authoritative. */
+  executionMode?: ExecutionMode;
+  onExecutionModeChange?: (mode: ExecutionMode) => void;
+  /** Conservative capability feedback for Plan and Agent modes. */
+  executionModeStatus?: ReactNode;
   /** Context window estimate for the current unsent draft. */
   contextWindowStatus?: ReactNode;
   /** Active conversation id, used to bind a file picker selection to its original owner. */
@@ -66,6 +71,9 @@ export function PromptComposer({
   maxRows = 6,
   controls,
   executionSummary = "Execution settings",
+  executionMode = "chat",
+  onExecutionModeChange,
+  executionModeStatus,
   contextWindowStatus,
   conversationId = null,
   attachments = [],
@@ -86,6 +94,7 @@ export function PromptComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const filePickerConversationId = useRef<string | null>(null);
   const currentConversationId = useRef(conversationId);
+  const submissionPending = useRef(false);
   currentConversationId.current = conversationId;
 
   const controlled = value !== undefined;
@@ -116,19 +125,31 @@ export function PromptComposer({
 
   const inFlight = isRunning || isStarting || isStopping;
 
+  // The shared submit callback resolves after streaming completes. Once the
+  // parent reports a starting/running phase, the in-flight props own the lock;
+  // release the local synchronous guard so switching conversations can submit
+  // independently while the original Run continues in the background.
+  useEffect(() => {
+    if (inFlight) submissionPending.current = false;
+  }, [inFlight]);
+
   const handleSubmit = () => {
-    if (disabled || inFlight) return;
+    if (disabled || inFlight || submissionPending.current) return;
     if (!isMeaningfulPrompt(text)) return;
     const prompt = text.trim();
     setSubmissionError(null);
+    submissionPending.current = true;
     let outcome: void | Promise<void>;
     try {
-      outcome = onSubmit(prompt);
+      outcome = onSubmit(prompt, executionMode);
     } catch (error) {
+      submissionPending.current = false;
       reportSubmissionFailure(error);
       return;
     }
-    Promise.resolve(outcome).catch(reportSubmissionFailure);
+    void Promise.resolve(outcome)
+      .catch(reportSubmissionFailure)
+      .finally(() => { submissionPending.current = false; });
     update("");
   };
 
@@ -252,8 +273,38 @@ export function PromptComposer({
         </div>
       ) : null}
 
+      {executionModeStatus != null && executionMode !== "chat" ? (
+        <div
+          id="execution-mode-status"
+          data-execution-mode-status=""
+          role="status"
+          aria-live="polite"
+          className="px-4 pb-2 text-[11px] leading-snug text-muted-foreground sm:px-5"
+        >
+          {executionModeStatus}
+        </div>
+      ) : null}
+
       <div className="flex min-h-12 items-center justify-between gap-3 px-3 pb-2 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
+          <label className="sr-only" htmlFor="prompt-execution-mode">Execution mode</label>
+          <select
+            id="prompt-execution-mode"
+            aria-label="Execution mode"
+            aria-describedby={executionModeStatus != null && executionMode !== "chat" ? "execution-mode-description execution-mode-status" : "execution-mode-description"}
+            title={executionModeDescription(executionMode)}
+            value={executionMode}
+            disabled={disabled}
+            onChange={(event) => onExecutionModeChange?.(event.currentTarget.value as ExecutionMode)}
+            className="h-8 w-[5.5rem] shrink-0 rounded-md border border-input bg-background px-2 text-xs font-medium text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:inherit]"
+          >
+            <option value="chat">Chat</option>
+            <option value="plan">Plan</option>
+            <option value="agent">Agent</option>
+          </select>
+          <span id="execution-mode-description" className="sr-only">
+            Chat does not request agent tools. Plan is read-only and still requires authorization. Agent tool requests remain subject to policy, Workspace permissions, and approval.
+          </span>
           {onUploadAttachment ? (
             <>
               <shadcn.IconButton icon={PaperclipIcon} label="Attach files" tooltip={uploadingAttachments ? "Uploading attachments…" : "Attach files to this conversation"} variant="ghost" shape="circle" disabled={disabled || uploadingAttachments || attachmentsLoading} onClick={() => { filePickerConversationId.current = conversationId; fileInputRef.current?.click(); }} />
@@ -334,4 +385,12 @@ function formatAttachmentSize(sizeBytes: number): string {
   if (sizeBytes < 1024) return `${sizeBytes} B`;
   if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(0)} KB`;
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function executionModeDescription(mode: ExecutionMode): string {
+  switch (mode) {
+    case "plan": return "Plan: authorized read-only investigation and planning.";
+    case "agent": return "Agent: tool requests remain subject to policy, Workspace permissions, and human approval.";
+    default: return "Chat: normal conversation without agentic tools.";
+  }
 }

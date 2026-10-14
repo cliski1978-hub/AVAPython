@@ -33,6 +33,7 @@ export {
 export type { RunAgent, RunCommands } from "./run/conversationRun";
 export type { RuntimeDiscoveryItem, ModelProviderDiscoveryItem, ModelInfo } from "@ava/contracts";
 export type { ExecutionProfile } from "@ava/contracts";
+export type { ExecutionMode } from "@ava/contracts";
 export type { WorkspaceInfo } from "@ava/contracts";
 export type { ConversationFolder } from "@ava/contracts";
 export { attachmentContextPresentation, attachmentContextSummary } from "./lib/attachmentContextPresentation";

@@ -124,9 +124,10 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del run_id, workspace, context
+        del run_id, workspace, model_capabilities, context
         assert model_binding is not None
         self.invocations.append(
             Invocation(

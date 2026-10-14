@@ -23,7 +23,7 @@ import {
   type RunCommands,
 } from "./conversationRun";
 import { createPersistAssistantMessageCommand } from "./persistAssistantMessage";
-import type { RunExecutionOverride } from "@ava/contracts";
+import type { ExecutionMode, RunExecutionOverride } from "@ava/contracts";
 
 export interface AgentRunApi {
   /** Submit a prompt: immediate user + pending assistant, then a backend run. */
@@ -31,6 +31,7 @@ export interface AgentRunApi {
     prompt: string,
     execution?: RunExecutionOverride,
     workspaceId?: string | null,
+    executionMode?: ExecutionMode,
   ): Promise<void>;
   /** Cancel the active run of the active conversation (via the API). */
   stopRun(): void;
@@ -43,6 +44,7 @@ export interface AgentRunApi {
     messageId: string,
     execution?: RunExecutionOverride,
     workspaceId?: string | null,
+    executionMode?: ExecutionMode,
   ): void;
   /**
    * Regenerate a completed assistant response by starting a new run for the
@@ -53,6 +55,7 @@ export interface AgentRunApi {
     messageId: string,
     execution?: RunExecutionOverride,
     workspaceId?: string | null,
+    executionMode?: ExecutionMode,
   ): void;
   /** Clears this conversation's local stream observer and recovery marker. */
   forgetConversation(conversationId: string): void;
@@ -184,7 +187,12 @@ export function AgentRunProvider({
   }, [activeConversation, agent, commands, acquireRunStream]);
 
   const submitPromptFn = useCallback(
-    async (prompt: string, execution?: RunExecutionOverride, workspaceId?: string | null) => {
+    async (
+      prompt: string,
+      execution?: RunExecutionOverride,
+      workspaceId?: string | null,
+      executionMode?: ExecutionMode,
+    ) => {
       const current = conversation.activeConversation;
       // One active run per conversation; ignore programmatic double submits.
       if (isActiveRunPhase(current?.run?.uiPhase)) {
@@ -196,7 +204,7 @@ export function AgentRunProvider({
       if (current?.id != null) recoveryKeys.current.delete(current.id);
       await submitPrompt(
         promptText, current?.id ?? null, agent, commands, execution, workspaceId,
-        acquireRunStream,
+        acquireRunStream, executionMode,
       );
     },
     [conversation, agent, commands, acquireRunStream],
@@ -226,6 +234,7 @@ export function AgentRunProvider({
       isEligible: (status: MessageStatus) => boolean,
       execution?: RunExecutionOverride,
       workspaceId?: string | null,
+      executionMode?: ExecutionMode,
     ) => {
       const current = conversation.activeConversation;
       if (current == null) return;
@@ -257,6 +266,7 @@ export function AgentRunProvider({
         prompt,
         retryOfRunId,
         execution,
+        executionMode,
         workspaceId,
         agent,
         commands,
@@ -273,8 +283,9 @@ export function AgentRunProvider({
       messageId: string,
       execution?: RunExecutionOverride,
       workspaceId?: string | null,
+      executionMode?: ExecutionMode,
     ) => {
-      rerunMessageFn(messageId, canRetryResponse, execution, workspaceId);
+      rerunMessageFn(messageId, canRetryResponse, execution, workspaceId, executionMode);
     },
     [rerunMessageFn],
   );
@@ -284,8 +295,9 @@ export function AgentRunProvider({
       messageId: string,
       execution?: RunExecutionOverride,
       workspaceId?: string | null,
+      executionMode?: ExecutionMode,
     ) => {
-      rerunMessageFn(messageId, canRegenerateResponse, execution, workspaceId);
+      rerunMessageFn(messageId, canRegenerateResponse, execution, workspaceId, executionMode);
     },
     [rerunMessageFn],
   );

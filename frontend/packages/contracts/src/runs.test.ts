@@ -9,6 +9,11 @@ describe("run contracts", () => {
     expect(request.prompt).toBe("Summarize the document");
   });
 
+  it.each(["chat", "plan", "agent"] as const)("types the %s execution mode", (execution_mode) => {
+    const request: RunRequest = { prompt: "Review", execution_mode };
+    expect(request.execution_mode).toBe(execution_mode);
+  });
+
   it("types a run response", () => {
     const response: RunResponse = { run_id: "run-1", status: "completed", contract_version: "v1" };
     expect(response.status).toBe("completed");

@@ -10,6 +10,7 @@ import {
   applyRunEvents,
   cancelActiveRun,
   recoverRunForConversation,
+  rerunAssistantResponse,
   runErrorMessage,
   startRunForPrompt,
   submitPrompt,
@@ -461,6 +462,49 @@ describe("startRunForPrompt", () => {
       source_user_message_id: "user-1",
       execution: { mode: "auto" },
       workspace_id: "approved-workspace",
+    });
+  });
+
+  it.each(["chat", "plan", "agent"] as const)("transmits the selected %s mode on the normal Run request", async (executionMode) => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+    await startRunForPrompt({
+      conversationId: "conv-x",
+      assistantMessageId: "asm-1",
+      sourceUserMessageId: "user-1",
+      prompt: "investigate",
+      executionMode,
+      execution: { runtime_id: "openhands", model_id: "model-a" },
+      agent,
+      commands,
+    });
+    expect(agent.startRun).toHaveBeenCalledWith({
+      prompt: "investigate",
+      conversation_id: "conv-x",
+      source_user_message_id: "user-1",
+      execution: { runtime_id: "openhands", model_id: "model-a" },
+      execution_mode: executionMode,
+    });
+  });
+
+  it("uses the explicitly selected mode for retry without copying a prior mode", async () => {
+    const agent = makeAgent();
+    const { commands } = makeCommands();
+    await rerunAssistantResponse({
+      conversationId: "conv-x",
+      sourceUserMessageId: "user-1",
+      prompt: "same source prompt",
+      retryOfRunId: "prior-agent-run",
+      executionMode: "chat",
+      agent,
+      commands,
+    });
+    expect(agent.startRun).toHaveBeenCalledWith({
+      prompt: "same source prompt",
+      conversation_id: "conv-x",
+      source_user_message_id: "user-1",
+      retry_of_run_id: "prior-agent-run",
+      execution_mode: "chat",
     });
   });
 });

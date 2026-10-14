@@ -13,6 +13,7 @@ from ava.contracts.capabilities import CapabilityName
 from ava.contracts.conversations import RunContext
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
+from ava.execution.selector import ResolvedExecution
 from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
 from ava.services.run_store import RunStore
@@ -41,8 +42,14 @@ class StubAgent(AgentPort):
         return "stub"
 
     async def start_run(
-        self, run_id: str, request: RunRequest, *, context: RunContext | None = None
+        self,
+        run_id: str,
+        request: RunRequest,
+        *,
+        context: RunContext | None = None,
+        resolved_execution: ResolvedExecution | None = None,
     ) -> AgentRunResult:
+        del resolved_execution
         self.captured_run_id = run_id
         self.captured_request = request
         self.captured_context = context

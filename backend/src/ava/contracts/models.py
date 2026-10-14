@@ -8,9 +8,11 @@ escape adapters.
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ava.contracts.json_types import JsonValue
 from ava.contracts.version import CONTRACT_VERSION
 
 # ============================================================
@@ -171,11 +173,30 @@ class ModelInfo(BaseModel):
 # ============================================================
 
 
+class ModelToolDefinition(BaseModel):
+    """Provider-neutral function schema offered to a model for one request."""
+
+    name: str
+    description: str
+    parameters: dict[str, JsonValue]
+
+
+class ModelToolCall(BaseModel):
+    """Structured model request; arguments remain untrusted JSON text."""
+
+    id: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=128)
+    arguments: str = Field(max_length=131072)
+
+
 class ModelMessage(BaseModel):
     """A single message exchanged with a model."""
 
     role: str
     content: str
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    name: str | None = None
 
 
 # ============================================================
@@ -198,6 +219,7 @@ class ModelRequest(BaseModel):
     messages: list[ModelMessage]
     temperature: float | None = None
     max_output_tokens: int | None = None
+    tools: list[ModelToolDefinition] = Field(default_factory=list)
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 
@@ -214,8 +236,15 @@ class ModelRequest(BaseModel):
 class ModelResponse(BaseModel):
     """AVA-owned response contract for model generation."""
 
-    content: str
+    content: str = ""
     model_id: str
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def response_has_content_or_tool_calls(self) -> Self:
+        if not self.content and not self.tool_calls:
+            raise ValueError("model response requires content or a structured tool call")
+        return self
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)
 
 

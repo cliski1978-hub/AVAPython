@@ -8,7 +8,7 @@ import pytest
 from test_model_provider_port import FakeModelProvider
 
 from ava.contracts.conversations import RunContext
-from ava.contracts.models import ModelMessage, ModelRequest
+from ava.contracts.models import ModelCapabilities, ModelMessage, ModelRequest
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunStatus
 from ava.contracts.runtimes import RuntimeCapabilities, RuntimeInfo
@@ -36,9 +36,10 @@ class StubRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del workspace, model_binding, context
+        del workspace, model_binding, model_capabilities, context
         self.calls.append((run_id, request, model_provider))
         response = await model_provider.generate(
             ModelRequest(messages=[ModelMessage(role="user", content=request.prompt)])
@@ -134,7 +135,15 @@ def test_same_runtime_accepts_different_provider_instances() -> None:
 ])
 def test_runtime_result_serializes_minimal_internal_contract(status: RunStatus, content: str | None) -> None:
     result = RuntimeRunResult(status=status, content=content)
-    assert result.model_dump(mode="json") == {"status": status.value, "content": content, "failure_code": None}
+    assert result.model_dump(mode="json") == {
+        "status": status.value,
+        "content": content,
+        "failure_code": None,
+        "runtime_request": None,
+        "runtime_response": None,
+    }
     assert RuntimeRunResult.model_validate_json(result.model_dump_json()) == result
-    assert set(RuntimeRunResult.model_fields) == {"status", "content", "failure_code"}
+    assert set(RuntimeRunResult.model_fields) == {
+        "status", "content", "failure_code", "runtime_request", "runtime_response"
+    }
     assert RuntimeRunResult(status=status).content is None

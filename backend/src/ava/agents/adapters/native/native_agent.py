@@ -331,6 +331,7 @@ class NativeAgentAdapter(AgentPort):
                     model_provider=execution.model_provider,
                     workspace=workspace,
                     model_binding=execution.model_binding,
+                    model_capabilities=execution.model_profile.capabilities,
                     context=bounded,
                 )
             else:
@@ -341,6 +342,7 @@ class NativeAgentAdapter(AgentPort):
                     on_content=on_content,
                     workspace=workspace,
                     model_binding=execution.model_binding,
+                    model_capabilities=execution.model_profile.capabilities,
                     context=bounded,
                 )
             terminal_status = result.status

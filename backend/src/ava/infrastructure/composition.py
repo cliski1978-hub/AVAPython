@@ -93,6 +93,7 @@ from ava.repositories.workspace_access_repository import WorkspaceAccessReposito
 from ava.runtimes import RuntimeRegistry
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.adapters.openhands.openhands_runtime import OpenHandsRuntime
+from ava.runtimes.contracts import RuntimeToolBridgePort
 from ava.runtimes.resolver import RuntimeResolver
 from ava.services.approval_store import ApprovalStore
 from ava.services.attachment_content_store import InMemoryAttachmentContentStore
@@ -391,10 +392,11 @@ def create_runtime_registry(
     *,
     command_policy: SandboxedCommandExecutionPolicy | None = None,
     command_runner: BubblewrapSandboxedCommandRunner | None = None,
+    tool_bridge: RuntimeToolBridgePort | None = None,
 ) -> RuntimeRegistry:
     """Construct the supported runtime instances for production composition."""
     registry = RuntimeRegistry()
-    registry.register("native", NativeRuntime())
+    registry.register("native", NativeRuntime(tool_bridge=tool_bridge))
     registry.register(
         "openhands",
         OpenHandsRuntime(

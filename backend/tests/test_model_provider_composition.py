@@ -267,6 +267,20 @@ def test_app_exposes_one_runtime_registry_and_resolver(monkeypatch: pytest.Monke
     assert set(registry.list()) == {"native", "openhands"}
 
 
+def test_production_native_runtime_is_bridged_but_has_no_operational_dispatch() -> None:
+    from ava.runtimes.adapters.native.native_runtime import NativeRuntime
+
+    app = create_app()
+    runtime = app.state.runtime_registry.get("native")
+    assert isinstance(runtime, NativeRuntime)
+    assert runtime._tool_bridge is not None
+    assert runtime._tool_bridge._context_refs is None
+    assert app.state.tool_execution_service._authority is None
+    assert app.state.tool_execution_service._executors == {}
+    assert app.state.tool_execution_service._reservations is None
+    assert runtime.get_runtime_info().capabilities.tools
+
+
 def test_unknown_runtime_does_not_fail_unused_mock_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AVA_AGENT_RUNTIME", "does-not-exist")
     monkeypatch.setattr("ava.configuration.settings._settings", None)

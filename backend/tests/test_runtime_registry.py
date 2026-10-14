@@ -3,6 +3,7 @@
 import pytest
 
 from ava.contracts.conversations import RunContext
+from ava.contracts.models import ModelCapabilities
 from ava.contracts.requests import RunRequest
 from ava.contracts.runtimes import RuntimeInfo
 from ava.models.contracts import ModelProviderPort
@@ -18,8 +19,9 @@ class RegistryRuntime(AgentRuntimePort):
 
     async def execute(
         self, *, run_id: str, request: RunRequest, model_provider: ModelProviderPort,
-        context: RunContext | None = None,
+        context: RunContext | None = None, model_capabilities: ModelCapabilities | None = None,
     ) -> RuntimeRunResult:
+        del model_capabilities
         raise AssertionError("Registry must not execute")
 
     async def cancel_run(self, run_id: str) -> RuntimeRunResult:

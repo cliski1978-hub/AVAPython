@@ -2,6 +2,7 @@
 
 import type { ContractVersion } from "./version";
 import type { ModelHostingMode } from "./runs";
+import type { JsonValue } from "./json_types";
 
 export type ModelProviderHealthStatus =
   | "healthy"
@@ -69,20 +70,38 @@ export interface ModelDiscoveryResponse {
   default_model_id?: string | null;
 }
 
+export interface ModelToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, JsonValue>;
+}
+
+/** Structured provider response; arguments remain untrusted JSON text. */
+export interface ModelToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
 export interface ModelMessage {
   role: string;
   content: string;
+  tool_calls?: ModelToolCall[];
+  tool_call_id?: string | null;
+  name?: string | null;
 }
 
 export interface ModelRequest {
   messages: ModelMessage[];
   temperature?: number;
   max_output_tokens?: number;
+  tools?: ModelToolDefinition[];
   contract_version?: ContractVersion;
 }
 
 export interface ModelResponse {
   content: string;
   model_id: string;
+  tool_calls?: ModelToolCall[];
   contract_version: ContractVersion;
 }

@@ -12,6 +12,7 @@ import {
   type ModelProviderDiscoveryItem,
   type ExecutionProfile,
   type WorkspaceInfo,
+  type ExecutionMode,
 } from "@ava/agent-ui";
 import { ApiError, deleteConversationAttachment, listConversationAttachments, uploadConversationAttachment, type ApiClient } from "@ava/api-client";
 import { getHealth, getModelProviders, getModels, getRuntimes, getExecutionProfiles, getProjectExecutionDefaults, getWorkspaces, listProjects, listProjectConversations, subscribeConnectivity } from "@ava/api-client";
@@ -196,11 +197,20 @@ function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; a
   });
   const [inspectorTab, setInspectorTab] = useState<RunInspectorTab>("Prompts");
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("chat");
+  const preserveModeForCreatedConversation = useRef(false);
   const [conversationAttachments, setConversationAttachments] = useState<Awaited<ReturnType<typeof listConversationAttachments>>["attachments"]>([]);
   const [attachmentsOwnerId, setAttachmentsOwnerId] = useState<string | null>(null);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [attachmentsLoadError, setAttachmentsLoadError] = useState<string | null>(null);
   const activeConversationId = activeConversation?.id ?? null;
+  useEffect(() => {
+    if (preserveModeForCreatedConversation.current) {
+      preserveModeForCreatedConversation.current = false;
+      return;
+    }
+    setExecutionMode("chat");
+  }, [activeConversationId]);
   const promptDraft = promptDrafts[activeConversationId ?? "__new__"] ?? "";
   const setPromptDraft = (value: string) => {
     const draftKey = activeConversationId ?? "__new__";
@@ -613,6 +623,31 @@ function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; a
     : providerIdIsModel ? { model_id: providerId } : { model_provider_id: providerId };
   const currentExecution = profileId === "application-default" ? undefined : profileId === "auto" ? { mode: "auto" as const } : (runtimeId || providerId ? { ...(runtimeId ? { runtime_id: runtimeId } : {}), ...modelAxis } : undefined);
   const currentExecutionKey = JSON.stringify(currentExecution ?? null);
+  const selectedModelIdForStatus = profileId === "application-default"
+    ? (activeConversation?.projectId != null && projectDefaultModelId != null ? projectDefaultModelId : defaultModelId)
+    : providerId != null && configuredModels.some((model) => model.model_id === providerId)
+      ? providerId
+      : null;
+  const selectedModelForStatus = selectedModelIdForStatus == null
+    ? undefined
+    : configuredModels.find((model) => model.model_id === selectedModelIdForStatus);
+  const selectedRuntimeIdForStatus = runtimeId ?? runtimes.find((runtime) => runtime.is_default)?.runtime_info.runtime_id;
+  const selectedRuntimeIsOpenHands = selectedRuntimeIdForStatus?.toLowerCase() === "openhands";
+  const executionModeStatus = executionMode === "chat" ? null : (
+    <span className="block space-y-0.5">
+      <span className="block">
+        Model tool calling: {selectedModelForStatus == null
+          ? "not reported for this selection"
+          : selectedModelForStatus.capabilities.tool_calling ? "reported supported" : "reported unsupported"}.
+        {" "}Normalized tool execution is unavailable in this deployment; end-to-end readiness is not reported by the backend.
+      </span>
+      {selectedRuntimeIsOpenHands ? (
+        <span className="block">
+          OpenHands may expose legacy Workspace tools under separate security controls; they are not part of normalized approval-managed dispatch.
+        </span>
+      ) : null}
+    </span>
+  );
 
   const { preview: contextWindowPreview, loading: contextWindowPreviewLoading, error: contextWindowPreviewError } = useContextWindowPreview(client, {
     prompt: promptDraft,
@@ -641,8 +676,13 @@ function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; a
       ? selectedWorkspaceId
       : null;
 
-  const handleComposerSubmit = (prompt: string) => {
-    return submitPrompt(prompt, currentExecution, currentWorkspaceId);
+  const handleComposerSubmit = (prompt: string, mode: ExecutionMode) => {
+    const creatingConversation = activeConversationId == null;
+    if (creatingConversation) preserveModeForCreatedConversation.current = true;
+    return submitPrompt(prompt, currentExecution, currentWorkspaceId, mode).catch((error: unknown) => {
+      if (creatingConversation) preserveModeForCreatedConversation.current = false;
+      throw error;
+    });
   };
 
   const toggleInspector = () => setInspectorOpen((open) => {
@@ -654,11 +694,11 @@ function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; a
   // A retry or regenerate creates a new run for the same source user message,
   // so it carries the same explicit selection a fresh submit would.
   const handleRetryMessage = (messageId: string) => {
-    retryMessage(messageId, currentExecution, currentWorkspaceId);
+    retryMessage(messageId, currentExecution, currentWorkspaceId, executionMode);
   };
 
   const handleRegenerateMessage = (messageId: string) => {
-    regenerateMessage(messageId, currentExecution, currentWorkspaceId);
+    regenerateMessage(messageId, currentExecution, currentWorkspaceId, executionMode);
   };
 
   return (
@@ -827,6 +867,9 @@ function WorkspaceContent({ client, approvalDataSource }: { client: ApiClient; a
           <PromptComposer
             value={promptDraft}
             executionSummary={composerExecutionSummary}
+            executionMode={executionMode}
+            onExecutionModeChange={setExecutionMode}
+            executionModeStatus={executionModeStatus}
             contextWindowStatus={contextWindowStatus}
             conversationId={activeConversationId}
             attachments={attachmentsOwnerId === activeConversationId ? conversationAttachments : []}

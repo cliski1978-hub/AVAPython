@@ -98,6 +98,7 @@ from ava.services.run_lifecycle_service import RunLifecycleService
 from ava.services.run_recovery_service import RunRecoveryService
 from ava.services.run_service import RunService
 from ava.services.runtime_discovery_service import RuntimeDiscoveryService
+from ava.services.runtime_tool_bridge import ToolExecutionRuntimeBridge
 from ava.services.settings_service import SettingsService
 from ava.services.tool_execution_service import ToolExecutionService
 from ava.services.tool_feature_service import ToolFeatureService
@@ -197,13 +198,6 @@ def create_app(
     app.state.sandboxed_command_runner = sandboxed_command_runner
     app.state.command_execution_policy = command_execution_policy
 
-    runtime_registry = create_runtime_registry(
-        command_policy=command_execution_policy if sandboxed_command_runner.available else None,
-        command_runner=sandboxed_command_runner if sandboxed_command_runner.available else None,
-    )
-    app.state.runtime_registry = runtime_registry
-    app.state.runtime_resolver = RuntimeResolver(runtime_registry)
-
     # The model provider registry and resolver are composed once at startup.
     # The API layer reaches the concrete provider only through composition;
     # startup never contacts a provider runtime. Shutdown closes provider-owned
@@ -251,42 +245,6 @@ def create_app(
         projects=application_persistence.project_repository,
     )
     app.state.project_execution_defaults_resolver = project_execution_defaults_resolver
-    app.state.configuration_bootstrap_status = bootstrap_execution_configuration(
-        settings, application_persistence, runtime_registry
-    )
-
-    # Persisted execution configuration (Phase 5.16). The provider factory is
-    # composed from the already-built registry, so the adapter types a
-    # configured connection may name are exactly the installed ones, and the
-    # resolver is the single component that reads all four configuration
-    # repositories. The agent adapter receives only the resolution capability.
-    configured_provider_factory = create_configured_model_provider_factory(settings, model_provider_registry)
-    app.state.model_provider_factory = configured_provider_factory
-    execution_configuration_resolver = create_execution_configuration_resolver(
-        application_persistence,
-        runtime_resolver=app.state.runtime_resolver,
-        provider_factory=configured_provider_factory,
-        credential_resolver=create_credential_resolver(),
-        model_orchestrator=model_orchestrator,
-        hosting_requirement=hosting_requirement,
-    )
-    app.state.execution_configuration_resolver = execution_configuration_resolver
-
-    # Prompt resolution is AVA-owned and read-only. It is composed before the
-    # agent so the execution adapter can resolve once after selecting the
-    # actual runtime, then hand the runtime a complete neutral context.
-    effective_prompt_resolver = EffectivePromptResolver(
-        prompts=application_persistence.core_prompt_repository,
-        assignments=application_persistence.core_prompt_assignment_repository,
-        conversations=application_persistence.conversation_repository,
-        runtime_ids=runtime_registry.list(),
-    )
-    app.state.effective_prompt_resolver = effective_prompt_resolver
-    app.state.execution_prompt_context_service = ExecutionPromptContextService(
-        resolver=effective_prompt_resolver,
-        projects=application_persistence.project_repository,
-    )
-
     # The workspace registry/resolver are composed once at startup. The
     # registry starts empty and resolution performs no filesystem, shell, or
     # network activity, so startup remains network-free. The agent adapter
@@ -300,6 +258,85 @@ def create_app(
     )
     app.state.workspace_registry = workspace_registry
     app.state.workspace_resolver = workspace_resolver
+
+    # Normalized tool services are composed before runtimes so Native AVA gets
+    # the same central execution boundary as every future runtime. Production
+    # intentionally has no authority issuer, executor, reservation adapter, or
+    # context-reference resolver, so discovery and dispatch remain closed.
+    app.state.tool_feature_service = ToolFeatureService(
+        app.state.tool_registry,
+        application_persistence.tool_feature_repository,
+        feature_administration,
+        on_configuration_changed=lambda: app.state.approval_service.invalidate_all_pending(),
+    )
+    app.state.tool_policy_service = ToolPolicyService(
+        app.state.tool_registry,
+        app.state.tool_feature_service,
+        workspace_resolver,
+        operations=INITIAL_WORKSPACE_OPERATIONS,
+        command_policy=command_execution_policy,
+    )
+    app.state.approval_service = ApprovalService(
+        repository=application_persistence.approval_repository,
+        runs=application_persistence.run_repository,
+        policy=app.state.tool_policy_service,
+        features=app.state.tool_feature_service,
+        workspaces=workspace_resolver,
+        execution_authority=None,
+        registry=app.state.tool_registry,
+    )
+    app.state.tool_execution_service = ToolExecutionService(
+        runs=application_persistence.run_repository,
+        registry=app.state.tool_registry,
+        features=app.state.tool_feature_service,
+        policy=app.state.tool_policy_service,
+        authority=None,
+        approvals=app.state.approval_service,
+        executors={},
+        reservations=None,
+        run_events=application_persistence.run_event_repository,
+    )
+    tool_bridge = ToolExecutionRuntimeBridge(
+        execution_service=app.state.tool_execution_service,
+        context_refs=None,
+        events=application_persistence.run_event_repository,
+    )
+    runtime_registry = create_runtime_registry(
+        command_policy=command_execution_policy if sandboxed_command_runner.available else None,
+        command_runner=sandboxed_command_runner if sandboxed_command_runner.available else None,
+        tool_bridge=tool_bridge,
+    )
+    app.state.runtime_registry = runtime_registry
+    app.state.runtime_resolver = RuntimeResolver(runtime_registry)
+    app.state.configuration_bootstrap_status = bootstrap_execution_configuration(
+        settings, application_persistence, runtime_registry
+    )
+
+    # Persisted execution configuration (Phase 5.16) resolves through the
+    # same runtime registry that now carries the normalized tool bridge.
+    configured_provider_factory = create_configured_model_provider_factory(settings, model_provider_registry)
+    app.state.model_provider_factory = configured_provider_factory
+    execution_configuration_resolver = create_execution_configuration_resolver(
+        application_persistence,
+        runtime_resolver=app.state.runtime_resolver,
+        provider_factory=configured_provider_factory,
+        credential_resolver=create_credential_resolver(),
+        model_orchestrator=model_orchestrator,
+        hosting_requirement=hosting_requirement,
+    )
+    app.state.execution_configuration_resolver = execution_configuration_resolver
+
+    effective_prompt_resolver = EffectivePromptResolver(
+        prompts=application_persistence.core_prompt_repository,
+        assignments=application_persistence.core_prompt_assignment_repository,
+        conversations=application_persistence.conversation_repository,
+        runtime_ids=runtime_registry.list(),
+    )
+    app.state.effective_prompt_resolver = effective_prompt_resolver
+    app.state.execution_prompt_context_service = ExecutionPromptContextService(
+        resolver=effective_prompt_resolver,
+        projects=application_persistence.project_repository,
+    )
 
     # The configured agent adapter is composed once at startup. The API layer
     # consumes it only through services, never directly.
@@ -480,44 +517,6 @@ def create_app(
         execution_defaults=application_persistence.execution_defaults_repository,
     )
     app.include_router(execution_profiles_router)
-    app.state.tool_feature_service = ToolFeatureService(
-        app.state.tool_registry,
-        application_persistence.tool_feature_repository,
-        feature_administration,
-        on_configuration_changed=lambda: app.state.approval_service.invalidate_all_pending(),
-    )
-    app.state.tool_policy_service = ToolPolicyService(
-        app.state.tool_registry,
-        app.state.tool_feature_service,
-        workspace_resolver,
-        operations=INITIAL_WORKSPACE_OPERATIONS,
-        command_policy=command_execution_policy,
-    )
-    # Durable approval state is composed for internal future integration only.
-    # Human mutation/read endpoints stay absent until a trusted identity and
-    # approval-scope adapter exists; execution authority also defaults to none.
-    app.state.approval_service = ApprovalService(
-        repository=application_persistence.approval_repository,
-        runs=application_persistence.run_repository,
-        policy=app.state.tool_policy_service,
-        features=app.state.tool_feature_service,
-        workspaces=workspace_resolver,
-        execution_authority=None,
-        registry=app.state.tool_registry,
-    )
-    # The core boundary is present for dependency composition and testing, but
-    # production has no trusted authority issuer, executor, or durable
-    # invocation reservation adapter, so dispatch remains disabled.
-    app.state.tool_execution_service = ToolExecutionService(
-        runs=application_persistence.run_repository,
-        registry=app.state.tool_registry,
-        features=app.state.tool_feature_service,
-        policy=app.state.tool_policy_service,
-        authority=None,
-        approvals=app.state.approval_service,
-        executors={},
-        reservations=None,
-    )
     app.include_router(tool_features_router)
     app.include_router(settings_router)
     app.include_router(runtimes_router)

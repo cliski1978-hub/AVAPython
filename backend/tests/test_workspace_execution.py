@@ -93,9 +93,10 @@ class RecordingRuntime(AgentRuntimePort):
         model_provider: ModelProviderPort,
         workspace: RuntimeWorkspaceBinding | None = None,
         model_binding: ConfiguredModelBinding | None = None,
+        model_capabilities: ModelCapabilities | None = None,
         context: RunContext | None = None,
     ) -> RuntimeRunResult:
-        del model_provider, model_binding, context
+        del model_provider, model_binding, model_capabilities, context
         self.calls += 1
         self.received.append(workspace)
         return RuntimeRunResult(status=self._status, content=self._content)
@@ -450,10 +451,17 @@ def _stub_openhands_sdk(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
             return None
 
     class _Agent:
-        def __init__(self, llm: object, tools: list[object], include_default_tools: list[str]) -> None:
+        def __init__(
+            self,
+            llm: object,
+            tools: list[object],
+            include_default_tools: list[str],
+            agent_context: object | None = None,
+        ) -> None:
             assert include_default_tools == []
             self.llm = llm
             self.tools = tools
+            self.agent_context = agent_context
 
     class _LLM:
         def __init__(self, model: str, base_url: str, api_key: str) -> None:
@@ -466,6 +474,14 @@ def _stub_openhands_sdk(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     stub.Agent = _Agent
     stub.Conversation = _Conversation
     monkeypatch.setitem(sys.modules, "openhands.sdk", stub)
+    sdk_context = types.ModuleType("openhands.sdk.context")
+
+    class _AgentContext:
+        def __init__(self, **values: object) -> None:
+            self.values = values
+
+    sdk_context.AgentContext = _AgentContext
+    monkeypatch.setitem(sys.modules, "openhands.sdk.context", sdk_context)
     controlled = types.ModuleType("ava.runtimes.adapters.openhands.conversation")
     controlled.ControlledAgent = _Agent
     controlled.ControlledConversation = lambda **kwargs: stub.Conversation(
@@ -506,7 +522,7 @@ def test_openhands_receives_approved_binding_when_supplied(
         )
 
     result = asyncio.run(scenario())
-    assert result.status == RunStatus.COMPLETED
+    assert result.status == RunStatus.COMPLETED, result.content
     assert result.content == "OpenHands answer"
     assert captured["workspace"] == str(binding.local_path)
     assert captured["tools_empty"] is True
