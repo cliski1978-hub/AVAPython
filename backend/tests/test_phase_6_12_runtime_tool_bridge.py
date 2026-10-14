@@ -84,7 +84,14 @@ def _setup(
     fixture = PolicyFixture(tmp_path)
     fixture.authority.grant = replace(fixture.authority.grant, run_id="run-1")
     runs = RunStore()
-    runs.create("run-1", execution_mode=mode)
+    runs.create(
+        "run-1",
+        execution_mode=mode,
+        owner_principal_ref="caller-1",
+        owner_tenant_ref="tenant-1",
+        owner_auth_context_ref="a" * 64,
+        execution_workspace_id="workspace-1",
+    )
     executor = _Executor(fail=executor_failure)
     reservations = _Reservations()
     events = RunEventStore()

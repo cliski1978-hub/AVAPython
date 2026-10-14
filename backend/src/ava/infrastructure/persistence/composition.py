@@ -42,6 +42,7 @@ from ava.infrastructure.persistence.repositories.conversation_hard_delete_coordi
 )
 from ava.infrastructure.persistence.repositories.tool_feature_repository import RelationalToolFeatureRepository
 from ava.infrastructure.persistence.repositories.workspace_access_repository import RelationalWorkspaceAccessRepository
+from ava.infrastructure.persistence.repositories.workspace_grant_repository import RelationalWorkspaceGrantRepository
 from ava.repositories import (
     ApprovalRepository,
     AttachmentRepository,
@@ -66,6 +67,7 @@ from ava.repositories import (
 from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoordinator
 from ava.repositories.tool_feature_repository import ToolFeatureRepository
 from ava.repositories.workspace_access_repository import WorkspaceAccessRepository
+from ava.repositories.workspace_grant_repository import WorkspaceGrantRepository
 
 # ============================================================
 # BEGIN: Persistence Repositories
@@ -103,6 +105,7 @@ class PersistenceRepositories:
     execution_defaults_repository: ExecutionDefaultsRepository
     tool_feature_repository: ToolFeatureRepository
     workspace_access_repository: WorkspaceAccessRepository
+    workspace_grant_repository: WorkspaceGrantRepository
     approval_repository: ApprovalRepository
     project_repository: ProjectRepository
     project_file_repository: ProjectFileRepository
@@ -145,6 +148,7 @@ def create_relational_repositories(
         approval_repository=RelationalApprovalRepository(database),
         tool_feature_repository=RelationalToolFeatureRepository(database),
         workspace_access_repository=RelationalWorkspaceAccessRepository(database),
+        workspace_grant_repository=RelationalWorkspaceGrantRepository(database),
         database=database,
         run_repository=RelationalRunRepository(database=database),
         run_event_repository=RelationalRunEventRepository(database=database),

@@ -135,6 +135,12 @@ class PolicyFixture:
                 allowed_tool_ids=frozenset(self.operations),
                 allowed_capabilities=capabilities_set,
                 technical_capabilities=capabilities_set,
+                principal_ref="caller-1",
+                tenant_ref="tenant-1",
+                grant_id="scope-1",
+                grant_revision=1,
+                workspace_configuration_revision=1,
+                feature_configuration_version=1,
             )
         )
 

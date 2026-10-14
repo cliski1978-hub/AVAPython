@@ -10,15 +10,28 @@ on:
       - "backend/src/ava/infrastructure/persistence/migrations/versions/**"
       - "backend/src/ava/infrastructure/persistence/repositories/invocation_reservation_repository.py"
       - "backend/src/ava/repositories/invocation_reservation_repository.py"
+      - "backend/src/ava/contracts/security_identity.py"
+      - "backend/src/ava/contracts/workspace_grants.py"
+      - "backend/src/ava/repositories/workspace_grant_repository.py"
+      - "backend/src/ava/services/run_access_service.py"
+      - "backend/src/ava/services/run_execution_authority_service.py"
+      - "backend/src/ava/services/workspace_grant_*.py"
+      - "backend/src/ava/infrastructure/persistence/repositories/workspace_grant_repository.py"
       - "backend/src/ava/tools/**"
       - "backend/src/ava/services/tool_*.py"
       - "backend/src/ava/api/app.py"
+      - "backend/src/ava/api/routes/capabilities.py"
+      - "backend/src/ava/api/routes/health.py"
       - "backend/src/ava/infrastructure/composition.py"
       - "backend/src/ava/workspaces/**"
       - "backend/tests/test_workspace*"
       - "backend/tests/test_tool_*.py"
       - "backend/tests/test_approvals.py"
       - "backend/tests/test_invocation_reservations.py"
+      - "backend/tests/test_phase_6_14a_trusted_authority.py"
+      - "backend/tests/test_capabilities.py"
+      - "backend/tests/test_health.py"
+      - "backend/conftest.py"
       - "backend/tests/test_persistence_migrations.py"
       - "backend/tests/test_run*.py"
       - "backend/tests/test_relational_run_event_repository.py"
@@ -31,15 +44,28 @@ on:
       - "backend/src/ava/infrastructure/persistence/migrations/versions/**"
       - "backend/src/ava/infrastructure/persistence/repositories/invocation_reservation_repository.py"
       - "backend/src/ava/repositories/invocation_reservation_repository.py"
+      - "backend/src/ava/contracts/security_identity.py"
+      - "backend/src/ava/contracts/workspace_grants.py"
+      - "backend/src/ava/repositories/workspace_grant_repository.py"
+      - "backend/src/ava/services/run_access_service.py"
+      - "backend/src/ava/services/run_execution_authority_service.py"
+      - "backend/src/ava/services/workspace_grant_*.py"
+      - "backend/src/ava/infrastructure/persistence/repositories/workspace_grant_repository.py"
       - "backend/src/ava/tools/**"
       - "backend/src/ava/services/tool_*.py"
       - "backend/src/ava/api/app.py"
+      - "backend/src/ava/api/routes/capabilities.py"
+      - "backend/src/ava/api/routes/health.py"
       - "backend/src/ava/infrastructure/composition.py"
       - "backend/src/ava/workspaces/**"
       - "backend/tests/test_workspace*"
       - "backend/tests/test_tool_*.py"
       - "backend/tests/test_approvals.py"
       - "backend/tests/test_invocation_reservations.py"
+      - "backend/tests/test_phase_6_14a_trusted_authority.py"
+      - "backend/tests/test_capabilities.py"
+      - "backend/tests/test_health.py"
+      - "backend/conftest.py"
       - "backend/tests/test_persistence_migrations.py"
       - "backend/tests/test_run*.py"
       - "backend/tests/test_relational_run_event_repository.py"
@@ -109,8 +135,13 @@ jobs:
           tests/test_tool_features.py
           tests/test_approvals.py
           tests/test_invocation_reservations.py
+          tests/test_phase_6_14a_trusted_authority.py
+          tests/test_capabilities.py
+          tests/test_health.py
           tests/test_persistence_migrations.py
           tests/test_run_lifecycle.py
+          tests/test_run_lifecycle_integration.py
+          tests/test_run_attempts.py
           tests/test_run_recovery.py
           tests/test_run_events.py
           tests/test_run_event_concurrency.py

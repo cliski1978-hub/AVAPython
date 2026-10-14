@@ -64,6 +64,7 @@ from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 from ava.contracts.run_inspection import ContextWindowAccounting, RunInspection, RunInspectionSnapshot, RunListItem
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.contracts.tool_activity import ToolActivityHistory, ToolActivityItem, ToolActivityStatus
 from ava.repositories.conversation_repository import ConversationRepository
 from ava.repositories.invocation_reservation_repository import (
@@ -284,7 +285,7 @@ class RunService:
             message_repository=message_repository,
         )
 
-    async def start_run(self, request: RunRequest) -> RunResponse:
+    async def start_run(self, request: RunRequest, *, owner: VerifiedPrincipal | None = None) -> RunResponse:
         """Start a run, generating the AVA-owned run identifier.
 
         Run identifiers and event identifiers are owned and created by AVA,
@@ -306,18 +307,26 @@ class RunService:
         reports the cancellation that already won; it never resurrects itself
         as completed.
         """
-        prepared = self.prepare_run(request)
+        prepared = self.prepare_run(request, owner=owner)
         if isinstance(prepared, RunResponse):
             return prepared
         return await self.execute_prepared_run(prepared)
 
-    def prepare_run(self, request: RunRequest) -> PreparedRun | RunResponse:
+    def prepare_run(self, request: RunRequest, *, owner: VerifiedPrincipal | None = None) -> PreparedRun | RunResponse:
         """Create and dispatch a run before its agent execution begins.
 
         The returned :class:`PreparedRun` is consumed by the API route's
         background task. Its public run response is therefore available before
         a stream is opened. This method never schedules work itself.
         """
+        if request.retry_of_run_id is not None and owner is not None:
+            prior = self._run_repository.get(request.retry_of_run_id)
+            if (
+                prior is None
+                or prior.owner_principal_ref != owner.principal_ref
+                or prior.owner_tenant_ref != owner.tenant_ref
+            ):
+                raise RunNotSupersedableError("retry target run is unavailable")
         request = self._resolve_supersession(request)
         self._validate_relationship_request(request)
         context = self._build_context(request)
@@ -328,6 +337,11 @@ class RunService:
                 conversation_id=request.conversation_id,
                 source_user_message_id=request.source_user_message_id,
                 execution_mode=request.execution_mode,
+                owner_principal_ref=owner.principal_ref if owner is not None else None,
+                owner_tenant_ref=owner.tenant_ref if owner is not None else None,
+                owner_auth_context_ref=owner.authentication_context_ref if owner is not None else None,
+                owner_auth_valid_until=owner.valid_until if owner is not None else None,
+                execution_workspace_id=request.workspace_id,
             )
         except ActiveConversationRunError as exc:
             raise ConversationRunActiveError("This conversation already has an active run.") from exc

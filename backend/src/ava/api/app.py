@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from ava.api.principal import HttpPrincipalResolverPort, UnavailableHttpPrincipalResolver
 from ava.api.routes.attachments import router as attachments_router
 from ava.api.routes.capabilities import router as capabilities_router
 from ava.api.routes.conversation_folders import router as conversation_folders_router
@@ -40,8 +41,15 @@ from ava.api.routes.workspace_access import router as workspace_access_router
 from ava.api.routes.workspaces import router as workspaces_router
 from ava.configuration.settings import Settings, get_settings
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.security_identity import (
+    ConversationAccessPort,
+    DenyConversationAccess,
+    DenyPrincipalValidity,
+    PrincipalValidityPort,
+)
 from ava.contracts.tool_features import ToolFeatureAdministrationPort
 from ava.contracts.workspace_access import WorkspaceAdministrationPort
+from ava.contracts.workspace_grants import DenyWorkspaceGrantAdministration, WorkspaceGrantAdministrationPort
 from ava.core.application import Application, ApplicationConfig
 from ava.execution.hosting import ModelHostingRequirement
 from ava.infrastructure.composition import (
@@ -93,7 +101,9 @@ from ava.services.project_execution_defaults_resolver import ProjectExecutionDef
 from ava.services.project_execution_defaults_service import ProjectExecutionDefaultsService
 from ava.services.project_file_service import ProjectFileService
 from ava.services.project_service import ProjectService
+from ava.services.run_access_service import RunAccessService
 from ava.services.run_context_preparation_service import RunContextPreparationService
+from ava.services.run_execution_authority_service import RunExecutionAuthorityService, RuntimeExecutionContextResolver
 from ava.services.run_lifecycle_service import RunLifecycleService
 from ava.services.run_recovery_service import RunRecoveryService
 from ava.services.run_service import RunService
@@ -105,6 +115,7 @@ from ava.services.tool_feature_service import ToolFeatureService
 from ava.services.tool_policy_service import ToolPolicyService
 from ava.services.workspace_access_service import WorkspaceAccessService
 from ava.services.workspace_discovery_service import WorkspaceDiscoveryService
+from ava.services.workspace_grant_service import WorkspaceGrantService
 from ava.tools.initial_tools import INITIAL_WORKSPACE_OPERATIONS
 
 # ============================================================
@@ -138,6 +149,10 @@ def create_app(
     settings: Settings | None = None,
     feature_administration: ToolFeatureAdministrationPort | None = None,
     workspace_administration: WorkspaceAdministrationPort | None = None,
+    http_principal_resolver: HttpPrincipalResolverPort | None = None,
+    principal_validity: PrincipalValidityPort | None = None,
+    conversation_access: ConversationAccessPort | None = None,
+    workspace_grant_administration: WorkspaceGrantAdministrationPort | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -186,6 +201,9 @@ def create_app(
     app = FastAPI(title="AVA", version="0.1.0", lifespan=_app_lifespan)
     app.state.default_runtime_key = settings.agent_runtime
     app.state.attachment_max_size_bytes = settings.attachment_max_size_bytes
+    app.state.http_principal_resolver = http_principal_resolver or UnavailableHttpPrincipalResolver()
+    app.state.principal_validity = principal_validity or DenyPrincipalValidity()
+    app.state.conversation_access = conversation_access or DenyConversationAccess()
 
     app.state.application = core_application
     # Descriptive catalog only. No production handlers or tool API exist yet.
@@ -240,6 +258,12 @@ def create_app(
     # instances the Settings API writes to.
     application_persistence = create_application_persistence(settings)
     app.state.persistence = application_persistence
+    app.state.run_access_service = RunAccessService(application_persistence.run_repository)
+    app.state.workspace_grant_service = WorkspaceGrantService(
+        grants=application_persistence.workspace_grant_repository,
+        workspaces=application_persistence.workspace_access_repository,
+        administration=workspace_grant_administration or DenyWorkspaceGrantAdministration(),
+    )
     project_execution_defaults_resolver = ProjectExecutionDefaultsResolver(
         conversations=application_persistence.conversation_repository,
         projects=application_persistence.project_repository,
@@ -260,9 +284,10 @@ def create_app(
     app.state.workspace_resolver = workspace_resolver
 
     # Normalized tool services are composed before runtimes so Native AVA gets
-    # the same central execution boundary as every future runtime. Production
-    # intentionally has no authority issuer, executor, reservation adapter, or
-    # context-reference resolver, so discovery and dispatch remain closed.
+    # the same central execution boundary as every future runtime. The issuer
+    # revalidates durable owner/grant/configuration state, while authentication
+    # and session validity default-deny. There are still no production executors,
+    # and memory reservations are not durable, so dispatch remains unavailable.
     app.state.tool_feature_service = ToolFeatureService(
         app.state.tool_registry,
         application_persistence.tool_feature_repository,
@@ -276,13 +301,33 @@ def create_app(
         operations=INITIAL_WORKSPACE_OPERATIONS,
         command_policy=command_execution_policy,
     )
+    execution_authority = (
+        RunExecutionAuthorityService(
+            runs=application_persistence.run_repository,
+            workspaces=workspace_resolver,
+            workspace_configurations=application_persistence.workspace_access_repository,
+            grants=application_persistence.workspace_grant_repository,
+            features=app.state.tool_feature_service,
+            registry=app.state.tool_registry,
+            policy=app.state.tool_policy_service,
+            principal_validity=app.state.principal_validity,
+        )
+        if (
+            http_principal_resolver is not None
+            and not isinstance(http_principal_resolver, UnavailableHttpPrincipalResolver)
+            and principal_validity is not None
+            and not isinstance(principal_validity, DenyPrincipalValidity)
+        )
+        else None
+    )
+    app.state.execution_authority = execution_authority
     app.state.approval_service = ApprovalService(
         repository=application_persistence.approval_repository,
         runs=application_persistence.run_repository,
         policy=app.state.tool_policy_service,
         features=app.state.tool_feature_service,
         workspaces=workspace_resolver,
-        execution_authority=None,
+        execution_authority=execution_authority,
         registry=app.state.tool_registry,
     )
     app.state.tool_execution_service = ToolExecutionService(
@@ -290,7 +335,7 @@ def create_app(
         registry=app.state.tool_registry,
         features=app.state.tool_feature_service,
         policy=app.state.tool_policy_service,
-        authority=None,
+        authority=execution_authority,
         approvals=app.state.approval_service,
         executors={},
         reservations=application_persistence.invocation_reservation_repository,
@@ -298,7 +343,7 @@ def create_app(
     )
     tool_bridge = ToolExecutionRuntimeBridge(
         execution_service=app.state.tool_execution_service,
-        context_refs=None,
+        context_refs=RuntimeExecutionContextResolver(execution_authority) if execution_authority is not None else None,
         events=application_persistence.run_event_repository,
     )
     runtime_registry = create_runtime_registry(

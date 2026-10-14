@@ -1528,7 +1528,10 @@ def test_persistence_layer_imports_only_repositories_and_contracts() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for name in _top_level_imports(tree):
             if name != "ava" and name not in sys.stdlib_module_names:
-                if path.name == "workspace_access_repository.py" and name == "pydantic":
+                if (
+                    path.name in {"workspace_access_repository.py", "workspace_grant_repository.py"}
+                    and name == "pydantic"
+                ):
                     continue
                 violations.append(f"{path}: top-level import '{name}'")
         for name in _ava_sibling_imports(tree):
@@ -1806,8 +1809,11 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "idx_runs_source_user_message",
         "ix_core_prompt_assignments_prompt_order",
         "ix_core_prompt_assignments_scope_order",
+        "ix_runs_owner_conversation_created",
         "ix_tool_invocation_reservations_run_created",
         "ix_tool_invocation_reservations_state",
+        "ix_workspace_access_grants_principal",
+        "ix_workspace_access_grants_workspace",
         "messages",
         "model_configurations",
         "project_files",
@@ -1821,7 +1827,9 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "ux_core_prompt_assignment_global",
         "ux_core_prompt_assignment_target",
         "ux_project_files_project_normalized_name",
+        "ux_workspace_access_grants_active_scope",
         "workspace_access_configurations",
+        "workspace_access_grants",
     ]
     forbidden = ("audit", "model_invocation", "qualification")
     for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
@@ -1993,6 +2001,7 @@ def test_application_persistence_carries_all_activated_ports() -> None:
         "context_summary_repository",
         "tool_feature_repository",
         "workspace_access_repository",
+        "workspace_grant_repository",
         "approval_repository",
         "invocation_reservation_repository",
     }
@@ -2075,6 +2084,7 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
         "v0026_approvals.py",
         "v0027_run_execution_mode.py",
         "v0028_tool_invocation_reservations.py",
+        "v0029_trusted_execution_authority.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)

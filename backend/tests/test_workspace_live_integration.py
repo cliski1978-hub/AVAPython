@@ -49,9 +49,7 @@ from ava.runtimes import RuntimeResolver
 from ava.runtimes.contracts import AgentRuntimePort, RuntimeRunResult
 from ava.runtimes.registry import RuntimeRegistry
 from ava.services.model_provider_discovery_service import ModelProviderDiscoveryService
-from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
-from ava.services.run_store import RunStore
 from ava.services.runtime_discovery_service import RuntimeDiscoveryService
 from ava.workspaces import (
     ResolvedWorkspace,
@@ -192,8 +190,8 @@ def make_offline_app(workspace_id: str | None = None) -> FastAPI:
     )
     app.state.run_service = RunService(
         app.state.agent_port,
-        run_repository=RunStore(),
-        run_event_repository=RunEventStore(),
+        run_repository=app.state.persistence.run_repository,
+        run_event_repository=app.state.persistence.run_event_repository,
     )
     return app
 

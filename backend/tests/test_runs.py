@@ -19,9 +19,7 @@ from ava.contracts.events import EventType
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse
 from ava.contracts.version import CONTRACT_VERSION
-from ava.services.run_event_store import RunEventStore
 from ava.services.run_service import RunService
-from ava.services.run_store import RunStore
 
 # ============================================================
 # BEGIN: Helpers
@@ -56,6 +54,7 @@ def test_start_run_returns_early_run_response_shape() -> None:
         body = start_run(client, "Hello AVA")
     assert set(body) == {
         "run_id", "status", "contract_version", "execution_selection",
+        "execution_mode",
         "conversation_id", "source_user_message_id", "assistant_message_id",
         "cancellation_requested_at",
     }
@@ -151,15 +150,14 @@ def test_start_run_rejects_malformed_json() -> None:
 # ============================================================
 
 
-def test_cancel_unknown_run_is_idempotent_noop() -> None:
-    """Cancelling an unknown run should reflect the agreed idempotent behavior."""
+def test_cancel_unknown_run_returns_not_found() -> None:
+    """Unknown Runs are hidden by the same response as inaccessible Runs."""
     with make_client() as client:
         response = client.post("/runs/never-started/cancel")
-    assert response.status_code == 200
+    assert response.status_code == 404
     body = response.json()
-    assert body["run_id"] == "never-started"
-    assert body["status"] == "cancelled"
-    assert body["contract_version"] == CONTRACT_VERSION
+    assert body["error_code"] == "run_not_found"
+    assert body["category"] == "not_found"
 
 
 def test_cancel_completed_run_reports_recorded_outcome() -> None:
@@ -222,12 +220,14 @@ def test_get_run_reports_cancelled_status() -> None:
     app = create_app()
     adapter = MockAgentAdapter(run_delay=0.2)
     app.state.run_service = RunService(
-        adapter, run_repository=RunStore(), run_event_repository=RunEventStore()
+        adapter,
+        run_repository=app.state.persistence.run_repository,
+        run_event_repository=app.state.persistence.run_event_repository,
     )
 
     async def cancel_during_run() -> str:
         service = app.state.run_service
-        task = asyncio.create_task(service.start_run(RunRequest(prompt="Cancel me")))
+        task = asyncio.create_task(service.start_run(RunRequest(prompt="Cancel me"), owner=app.state.test_principal))
         await asyncio.sleep(0.01)
         (run_id,) = adapter.active_run_ids()
         await service.cancel_run(run_id)
@@ -318,7 +318,9 @@ def test_get_run_events_for_cancelled_run() -> None:
     app = create_app()
     adapter = MockAgentAdapter(run_delay=0.2)
     app.state.run_service = RunService(
-        adapter, run_repository=RunStore(), run_event_repository=RunEventStore()
+        adapter,
+        run_repository=app.state.persistence.run_repository,
+        run_event_repository=app.state.persistence.run_event_repository,
     )
 
     async def cancel_during_run() -> str:
@@ -347,13 +349,13 @@ def test_get_run_events_for_failed_run() -> None:
     app = create_app()
     app.state.run_service = RunService(
         MockAgentAdapter(fail_on_prompt="force failure"),
-        run_repository=RunStore(),
-        run_event_repository=RunEventStore(),
+        run_repository=app.state.persistence.run_repository,
+        run_event_repository=app.state.persistence.run_event_repository,
     )
 
     async def start_failing_run() -> str:
         response: RunResponse = await app.state.run_service.start_run(
-            RunRequest(prompt="force failure")
+            RunRequest(prompt="force failure"), owner=app.state.test_principal
         )
         return response.run_id
 

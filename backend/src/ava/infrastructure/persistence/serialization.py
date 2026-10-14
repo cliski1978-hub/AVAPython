@@ -171,6 +171,15 @@ def row_to_run_record(row: sqlite3.Row) -> RunRecord:
             if row["inspection_snapshot"] is not None
             else None
         ),
+        owner_principal_ref=row["owner_principal_ref"] if "owner_principal_ref" in columns else None,
+        owner_tenant_ref=row["owner_tenant_ref"] if "owner_tenant_ref" in columns else None,
+        owner_auth_context_ref=row["owner_auth_context_ref"] if "owner_auth_context_ref" in columns else None,
+        owner_auth_valid_until=(
+            parse_utc(row["owner_auth_valid_until"])
+            if "owner_auth_valid_until" in columns and row["owner_auth_valid_until"] is not None
+            else None
+        ),
+        execution_workspace_id=row["execution_workspace_id"] if "execution_workspace_id" in columns else None,
     )
 
 

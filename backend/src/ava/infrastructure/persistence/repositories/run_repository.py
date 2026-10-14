@@ -22,7 +22,8 @@ from ava.repositories.run_repository import ActiveConversationRunError, RunRecor
 
 _RUN_COLUMNS = (
     "run_id, status, created_at, updated_at, execution_selection, conversation_id, "
-    "source_user_message_id, assistant_message_id, cancellation_requested_at, inspection_snapshot, execution_mode"
+    "source_user_message_id, assistant_message_id, cancellation_requested_at, inspection_snapshot, execution_mode, "
+    "owner_principal_ref, owner_tenant_ref, owner_auth_context_ref, owner_auth_valid_until, execution_workspace_id"
 )
 
 #: The statuses a run may still hold when a cancellation request arrives. A
@@ -48,6 +49,11 @@ class RelationalRunRepository(RunRepository):
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
         execution_mode: ExecutionMode = ExecutionMode.CHAT,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
+        owner_auth_context_ref: str | None = None,
+        owner_auth_valid_until: datetime | None = None,
+        execution_workspace_id: str | None = None,
     ) -> RunRecord:
         now = datetime.now(UTC)
         try:
@@ -62,7 +68,9 @@ class RelationalRunRepository(RunRepository):
                         raise ActiveConversationRunError(conversation_id)
                 connection.execute(
                     "INSERT INTO runs (run_id, status, created_at, updated_at, conversation_id, "
-                    "source_user_message_id, execution_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "source_user_message_id, execution_mode, owner_principal_ref, owner_tenant_ref, "
+                    "owner_auth_context_ref, owner_auth_valid_until, execution_workspace_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         RunStatus.PENDING.value,
@@ -71,6 +79,11 @@ class RelationalRunRepository(RunRepository):
                         conversation_id,
                         source_user_message_id,
                         execution_mode.value,
+                        owner_principal_ref,
+                        owner_tenant_ref,
+                        owner_auth_context_ref,
+                        to_utc_iso(owner_auth_valid_until) if owner_auth_valid_until is not None else None,
+                        execution_workspace_id,
                     ),
                 )
         except sqlite3.Error as exc:
@@ -83,6 +96,11 @@ class RelationalRunRepository(RunRepository):
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
             execution_mode=execution_mode,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
+            owner_auth_context_ref=owner_auth_context_ref,
+            owner_auth_valid_until=owner_auth_valid_until,
+            execution_workspace_id=execution_workspace_id,
         )
 
     def get(self, run_id: str) -> RunRecord | None:

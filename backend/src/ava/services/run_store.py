@@ -39,6 +39,11 @@ class RunStore(RunRepository):
         conversation_id: str | None = None,
         source_user_message_id: str | None = None,
         execution_mode: ExecutionMode = ExecutionMode.CHAT,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
+        owner_auth_context_ref: str | None = None,
+        owner_auth_valid_until: datetime | None = None,
+        execution_workspace_id: str | None = None,
     ) -> RunRecord:
         """Create a new pending run record.
 
@@ -66,6 +71,11 @@ class RunStore(RunRepository):
             conversation_id=conversation_id,
             source_user_message_id=source_user_message_id,
             execution_mode=execution_mode,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
+            owner_auth_context_ref=owner_auth_context_ref,
+            owner_auth_valid_until=owner_auth_valid_until,
+            execution_workspace_id=execution_workspace_id,
         )
         self._runs[run_id] = record
         return record

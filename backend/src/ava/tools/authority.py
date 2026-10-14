@@ -32,6 +32,12 @@ class ToolExecutionAuthority:
     allowed_capabilities: frozenset[ToolCapability]
     technical_capabilities: frozenset[ToolCapability]
     run_id: str | None = None
+    principal_ref: str | None = None
+    tenant_ref: str | None = None
+    grant_id: str | None = None
+    grant_revision: int | None = None
+    workspace_configuration_revision: int | None = None
+    feature_configuration_version: int | None = None
     narrowing_tool_ids: frozenset[str] | None = None
     revoked: bool = False
 

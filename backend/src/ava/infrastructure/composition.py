@@ -92,6 +92,7 @@ from ava.repositories.conversation_hard_delete import ConversationHardDeleteCoor
 from ava.repositories.invocation_reservation_repository import InMemoryInvocationReservationRepository
 from ava.repositories.tool_feature_repository import ToolFeatureRepository
 from ava.repositories.workspace_access_repository import WorkspaceAccessRepository
+from ava.repositories.workspace_grant_repository import WorkspaceGrantRepository
 from ava.runtimes import RuntimeRegistry
 from ava.runtimes.adapters.native.native_runtime import NativeRuntime
 from ava.runtimes.adapters.openhands.openhands_runtime import OpenHandsRuntime
@@ -124,6 +125,7 @@ from ava.services.run_store import RunStore
 from ava.services.runtime_configuration_store import RuntimeConfigurationStore
 from ava.services.tool_feature_store import ToolFeatureStore
 from ava.services.workspace_access_store import WorkspaceAccessStore
+from ava.services.workspace_grant_store import WorkspaceGrantStore
 from ava.tools import ToolRegistry
 from ava.tools.initial_tools import initial_workspace_tools
 from ava.tools.workspace_filesystem import WorkspaceFilesystemSecurityPort
@@ -562,6 +564,7 @@ class ApplicationPersistence:
     execution_defaults_repository: ExecutionDefaultsRepository
     tool_feature_repository: ToolFeatureRepository
     workspace_access_repository: WorkspaceAccessRepository
+    workspace_grant_repository: WorkspaceGrantRepository
     approval_repository: ApprovalRepository
     invocation_reservation_repository: InvocationReservationRepository
     project_repository: ProjectRepository
@@ -633,6 +636,7 @@ def create_application_persistence(
             invocation_reservation_repository=InMemoryInvocationReservationRepository(),
             tool_feature_repository=ToolFeatureStore(),
             workspace_access_repository=WorkspaceAccessStore(),
+            workspace_grant_repository=WorkspaceGrantStore(),
             run_repository=RunStore(),
             run_event_repository=RunEventStore(),
             conversation_repository=conversations,
@@ -669,6 +673,7 @@ def create_application_persistence(
             invocation_reservation_repository=bundle.invocation_reservation_repository,
             tool_feature_repository=bundle.tool_feature_repository,
             workspace_access_repository=bundle.workspace_access_repository,
+            workspace_grant_repository=bundle.workspace_grant_repository,
             run_repository=bundle.run_repository,
             run_event_repository=bundle.run_event_repository,
             conversation_repository=bundle.conversation_repository,
