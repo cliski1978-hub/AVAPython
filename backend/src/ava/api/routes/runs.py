@@ -72,6 +72,11 @@ async def list_conversation_runs(
     principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
 ) -> list[RunListItem]:
     """List the captured runs that belong to one conversation."""
+    if not _can_access_conversation(request, principal, conversation_id):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Conversation ownership is not provisioned."},
+        )  # type: ignore[return-value]
     return [
         RunListItem(
             run_id=record.run_id,

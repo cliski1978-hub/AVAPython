@@ -39,7 +39,13 @@ def _service(root: Path) -> ToolExecutionService:
     policy = fixture.service()
     policy._operations = operations
     runs = RunStore()
-    runs.create("run-1", execution_mode=ExecutionMode.AGENT)
+    runs.create(
+        "run-1",
+        execution_mode=ExecutionMode.AGENT,
+        owner_principal_ref="caller-1",
+        owner_tenant_ref="tenant-1",
+        execution_workspace_id="workspace-1",
+    )
     executor = WorkspaceReadExecutor(_native_adapter())
     reservations = _Reservations()
     return ToolExecutionService(
