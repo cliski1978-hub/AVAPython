@@ -28,3 +28,7 @@
 **Exit criterion:** At least one AVA-defined tool operates through Native AVA and OpenHands with the same contract and validated feature gating, Workspace authorization, approvals where needed, persistence, and inspection.
 
 **Development rule:** Implement and validate one bounded step at a time; stop for review before advancing. Preserve `RunService → AgentPort` and model/runtime/provider independence.
+
+## Owner-approved additive implementation sequence
+
+The owner approved a bounded production-security integration extension on 2026-10-14. The later implementation records use 6.11 for initial tool implementations, 6.12 for runtime integration, 6.12A for the mode selector, 6.13 for durable lifecycle, and 6.14 for Run Inspector; the numbering in this legacy outline is retained as historical planning context and completed work is not renumbered. The approved 6.14A–6.14D additions precede the existing 6.15 security/integration testing and 6.16 final validation/handoff. See [AVA Phase 6 Production Execution Integration Addendum](AVA_Phase_6_Production_Execution_Integration_Addendum.md) for owners, dependencies, acceptance criteria, security requirements, and validation gates. The locked canonical master plan was not changed.

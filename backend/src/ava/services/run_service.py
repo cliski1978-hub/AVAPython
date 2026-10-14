@@ -49,6 +49,7 @@ retrieval only — they are not streaming.
 """
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -63,7 +64,12 @@ from ava.contracts.json_types import JsonValue
 from ava.contracts.requests import RunRequest
 from ava.contracts.responses import RunResponse, RunStatus
 from ava.contracts.run_inspection import ContextWindowAccounting, RunInspection, RunInspectionSnapshot, RunListItem
+from ava.contracts.tool_activity import ToolActivityHistory, ToolActivityItem, ToolActivityStatus
 from ava.repositories.conversation_repository import ConversationRepository
+from ava.repositories.invocation_reservation_repository import (
+    InvocationReservationRepository,
+    InvocationReservationState,
+)
 from ava.repositories.message_repository import MessageRecord, MessageRepository
 from ava.repositories.run_event_repository import RunEventRepository
 from ava.repositories.run_repository import ActiveConversationRunError, RunRecord, RunRepository
@@ -77,6 +83,12 @@ from ava.services.run_lifecycle_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SAFE_ACTIVITY_CODE = re.compile(r"[a-z0-9_.-]{1,128}")
+
+
+def _safe_activity_code(value: str) -> bool:
+    return _SAFE_ACTIVITY_CODE.fullmatch(value) is not None
 
 _SENSITIVE_KEYS = {
     "authorization",
@@ -230,6 +242,8 @@ class RunService:
         context_preparation_service: RunContextPreparationService | None = None,
         lifecycle: RunLifecycleService | None = None,
         approval_cancellation: Callable[[str], object] | None = None,
+        invocation_reservations: InvocationReservationRepository | None = None,
+        tool_name_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         """Construct the run service over an agent adapter and repository ports.
 
@@ -262,6 +276,8 @@ class RunService:
             run_repository=run_repository, run_event_repository=run_event_repository
         )
         self._approval_cancellation = approval_cancellation
+        self._invocation_reservations = invocation_reservations
+        self._tool_name_resolver = tool_name_resolver
         self._assistant_responses = AssistantResponseService(
             run_repository=run_repository,
             run_event_repository=run_event_repository,
@@ -808,7 +824,7 @@ class RunService:
             and record.assistant_message_id is not None
             else None
         )
-        events = self._run_event_repository.list_after_sequence(run_id, 0)
+        events = [sanitize_event(event) for event in self._run_event_repository.list_after_sequence(run_id, 0)]
         return RunInspection(
             run_id=record.run_id,
             conversation_id=record.conversation_id,
@@ -821,8 +837,138 @@ class RunService:
             assistant_message_id=record.assistant_message_id,
             assistant_message=message.content if message is not None else None,
             snapshot=sanitize_inspection(record.inspection_snapshot) if record.inspection_snapshot else None,
-            events=[sanitize_event(event) for event in events],
+            events=events,
+            tool_activity=self._tool_activity(run_id, events),
         )
+
+    def _tool_activity(self, run_id: str, events: list[RunEvent]) -> ToolActivityHistory:
+        """Merge safe Run facts with durable reservations, which take precedence."""
+        try:
+            reservations = (
+                self._invocation_reservations.list_for_run(run_id, limit=101)
+                if self._invocation_reservations is not None
+                else ()
+            )
+        except Exception:
+            logger.warning("Unable to load tool activity for run %s", run_id)
+            return ToolActivityHistory(available=False)
+
+        by_invocation: dict[str, dict[str, object]] = {}
+        conflicted_invocations: set[str] = set()
+        for event in events:
+            if event.event_type not in {
+                EventType.TOOL_REQUESTED,
+                EventType.TOOL_REJECTED,
+                EventType.TOOL_STARTED,
+                EventType.TOOL_COMPLETED,
+                EventType.TOOL_OUTCOME,
+            }:
+                continue
+            payload = event.payload
+            invocation_id = payload.get("invocation_id")
+            tool_id = payload.get("tool_id")
+            if not isinstance(invocation_id, str) or not invocation_id or not isinstance(tool_id, str) or not tool_id:
+                continue
+            if invocation_id in conflicted_invocations:
+                continue
+            existing = by_invocation.get(invocation_id)
+            if existing is not None and existing.get("tool_id") != tool_id:
+                by_invocation.pop(invocation_id, None)
+                conflicted_invocations.add(invocation_id)
+                continue
+            item = by_invocation.setdefault(
+                invocation_id,
+                {"invocation_id": invocation_id, "tool_id": tool_id, "status": ToolActivityStatus.REQUESTED},
+            )
+            item.setdefault("tool_id", tool_id)
+            if self._tool_name_resolver is not None:
+                try:
+                    name = self._tool_name_resolver(tool_id)
+                    if isinstance(name, str) and name.strip() and len(name) <= 128:
+                        item["tool_name"] = name.strip()
+                except Exception:
+                    pass
+            version = payload.get("tool_version")
+            mode = payload.get("execution_mode")
+            if isinstance(version, str):
+                item["tool_version"] = version
+            if mode in {"chat", "plan", "agent"}:
+                item["execution_mode"] = mode
+            if event.event_type == EventType.TOOL_REQUESTED:
+                item.setdefault("requested_at", event.timestamp)
+            elif event.event_type == EventType.TOOL_STARTED:
+                item["status"] = ToolActivityStatus.EXECUTING
+                item.setdefault("started_at", event.timestamp)
+            elif event.event_type == EventType.TOOL_COMPLETED:
+                item["status"] = ToolActivityStatus.COMPLETED
+                item["completed_at"] = event.timestamp
+            elif event.event_type == EventType.TOOL_REJECTED:
+                event_status = payload.get("status")
+                item["status"] = (
+                    ToolActivityStatus.CANCELLED
+                    if event_status == "cancelled"
+                    else ToolActivityStatus.REJECTED
+                )
+                item["completed_at"] = event.timestamp
+            elif event.event_type == EventType.TOOL_OUTCOME:
+                event_status = payload.get("status")
+                status_by_value = {status.value: status for status in ToolActivityStatus}
+                if isinstance(event_status, str) and event_status in status_by_value:
+                    item["status"] = status_by_value[event_status]
+                    if item["status"] in {
+                        ToolActivityStatus.REJECTED,
+                        ToolActivityStatus.COMPLETED,
+                        ToolActivityStatus.FAILED,
+                        ToolActivityStatus.CANCELLED,
+                        ToolActivityStatus.INDETERMINATE,
+                    }:
+                        item["completed_at"] = event.timestamp
+                    item["approval_required"] = item["status"] == ToolActivityStatus.AWAITING_APPROVAL
+            reason = payload.get("reason_code")
+            if isinstance(reason, str) and _safe_activity_code(reason):
+                item["reason_code"] = reason
+
+        state_status = {
+            InvocationReservationState.RESERVED: ToolActivityStatus.RESERVED,
+            InvocationReservationState.EXECUTING: ToolActivityStatus.EXECUTING,
+            InvocationReservationState.COMPLETED: ToolActivityStatus.COMPLETED,
+            InvocationReservationState.FAILED: ToolActivityStatus.FAILED,
+            InvocationReservationState.CANCELLED: ToolActivityStatus.CANCELLED,
+            InvocationReservationState.INDETERMINATE: ToolActivityStatus.INDETERMINATE,
+        }
+        for reservation in reservations:
+            item = by_invocation.setdefault(
+                reservation.invocation_id,
+                {"invocation_id": reservation.invocation_id, "tool_id": reservation.tool_id},
+            )
+            if self._tool_name_resolver is not None:
+                try:
+                    name = self._tool_name_resolver(reservation.tool_id)
+                    if isinstance(name, str) and name.strip() and len(name) <= 128:
+                        item["tool_name"] = name.strip()
+                except Exception:
+                    pass
+            item.update(
+                {
+                    "tool_id": reservation.tool_id,
+                    "tool_version": reservation.tool_version,
+                    "execution_mode": reservation.execution_mode,
+                    "requested_at": item.get("requested_at") or reservation.created_at,
+                    "started_at": reservation.started_at or item.get("started_at"),
+                    "completed_at": reservation.completed_at or item.get("completed_at"),
+                    "status": state_status[reservation.state],
+                    "approval_required": False,
+                    "recovery_status": reservation.reconciliation_status
+                    if reservation.reconciliation_status != "not_required"
+                    else None,
+                    "reason_code": reservation.error_code,
+                }
+            )
+
+        items = [ToolActivityItem.model_validate(item) for item in by_invocation.values()]
+        items.sort(key=lambda item: (item.requested_at or datetime.min.replace(tzinfo=UTC), item.invocation_id))
+        has_more = len(items) > 100 or len(reservations) > 100
+        return ToolActivityHistory(items=items[-100:], has_more=has_more)
 
     def _append(
         self,

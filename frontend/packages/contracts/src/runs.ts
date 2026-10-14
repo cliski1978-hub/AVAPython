@@ -189,6 +189,39 @@ export interface RunInspectionResponse {
   assistant_message?: string | null;
   snapshot?: RunInspectionSnapshot | null;
   events: RunEvent[];
+  tool_activity?: ToolActivityHistory;
+}
+
+export type ToolActivityStatus =
+  | "requested"
+  | "rejected"
+  | "awaiting_approval"
+  | "reserved"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "indeterminate";
+
+export interface ToolActivityItem {
+  invocation_id: string;
+  tool_id: string;
+  tool_name?: string | null;
+  tool_version?: string | null;
+  execution_mode?: ExecutionMode | null;
+  requested_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  status: ToolActivityStatus;
+  reason_code?: string | null;
+  approval_required?: boolean;
+  recovery_status?: string | null;
+}
+
+export interface ToolActivityHistory {
+  available: boolean;
+  items: ToolActivityItem[];
+  has_more: boolean;
 }
 
 export interface RunPromptPreview {

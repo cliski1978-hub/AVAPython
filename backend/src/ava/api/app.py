@@ -422,6 +422,10 @@ def create_app(
         context_preparation_service=app.state.run_context_preparation_service,
         lifecycle=app.state.run_lifecycle_service,
         approval_cancellation=lambda run_id: app.state.approval_service.cancel_for_run(run_id),
+        invocation_reservations=application_persistence.invocation_reservation_repository,
+        tool_name_resolver=lambda tool_id: (
+            definition.name if (definition := app.state.tool_registry.get(tool_id)) is not None else None
+        ),
     )
     app.state.run_recovery_service = RunRecoveryService(
         run_repository=application_persistence.run_repository,

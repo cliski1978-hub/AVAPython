@@ -8,7 +8,7 @@
 import type { ContextWindowPreview, RunEvent, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
 
 import { ApiClient } from "./client";
-export type { ContextWindowPreview, ExecutionMode, RunEvent, RunExecutionOverride, RunInspectionResponse, RunListItem, RunRequest, RunResponse } from "@ava/contracts";
+export type { ContextWindowPreview, ExecutionMode, RunEvent, RunExecutionOverride, RunInspectionResponse, RunListItem, RunRequest, RunResponse, ToolActivityHistory, ToolActivityItem, ToolActivityStatus } from "@ava/contracts";
 
 export async function previewContextWindow(client: ApiClient, request: Pick<RunRequest, "prompt" | "conversation_id" | "execution" | "execution_mode">): Promise<ContextWindowPreview> {
   const response = await client.request("/runs/context-preview", { method: "POST", body: JSON.stringify(request) });

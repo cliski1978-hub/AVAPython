@@ -10,6 +10,7 @@ from ava.contracts.events import RunEvent
 from ava.contracts.execution import ExecutionMode, RunExecutionSelection
 from ava.contracts.json_types import JsonValue
 from ava.contracts.responses import RunStatus
+from ava.contracts.tool_activity import ToolActivityHistory
 from ava.contracts.version import CONTRACT_VERSION
 
 
@@ -94,4 +95,5 @@ class RunInspection(BaseModel):
     assistant_message: str | None = None
     snapshot: RunInspectionSnapshot | None = None
     events: list[RunEvent] = Field(default_factory=list)
+    tool_activity: ToolActivityHistory = Field(default_factory=ToolActivityHistory)
     contract_version: str = Field(default=CONTRACT_VERSION, frozen=True)

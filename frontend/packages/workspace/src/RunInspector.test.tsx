@@ -2,9 +2,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import type { ApiClient } from "@ava/api-client";
+import { ApiError, type ApiClient, type RunInspectionResponse } from "@ava/api-client";
 import { getConversationPromptPreview, getRunInspection, listConversationRuns, previewContextWindow } from "@ava/api-client";
-import { RunInspector } from "./RunInspector";
+import { RunInspector, type RunInspectorTab } from "./RunInspector";
 
 vi.mock("@ava/api-client", async (load) => {
   const actual = await load<typeof import("@ava/api-client")>();
@@ -16,7 +16,7 @@ const run = (id: string, conversationId: string) => ({
   run_id: id, conversation_id: conversationId, status: "completed" as const, contract_version: "v1" as const,
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:02Z",
 });
-const inspection = (id: string, prompt: string, userText: string, compaction = false) => ({
+const inspection = (id: string, prompt: string, userText: string, compaction = false, activity: NonNullable<RunInspectionResponse["tool_activity"]> = { available: true, items: [], has_more: false }) => ({
   run_id: id, conversation_id: id.startsWith("run-conversation-") ? id.slice(4) : "conversation-a", status: "completed" as const,
   execution_mode: "plan" as const,
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:02Z",
@@ -34,7 +34,7 @@ const inspection = (id: string, prompt: string, userText: string, compaction = f
       estimated_before_tokens: 4200, estimated_after_tokens: 1800, trigger_percent: 80, target_percent: 60,
     } : null,
   },
-  assistant_message: "answer", events: [],
+  assistant_message: "answer", events: [], tool_activity: activity,
 });
 
 function deferred<T>() {
@@ -136,7 +136,7 @@ describe("RunInspector", () => {
     vi.mocked(getRunInspection).mockResolvedValue(inspection("run-a", "System prompt A", "Question A"));
     const onClose = vi.fn();
     function Harness() {
-      const [selectedTab, setSelectedTab] = useState<"Prompts" | "Request" | "Response" | "Run" | "Events">("Prompts");
+      const [selectedTab, setSelectedTab] = useState<RunInspectorTab>("Prompts");
       return <RunInspector client={client} conversationId="conversation-a" onClose={onClose} selectedTab={selectedTab} onTabChange={setSelectedTab} />;
     }
     render(<Harness />);
@@ -153,6 +153,64 @@ describe("RunInspector", () => {
     render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Run" onTabChange={() => undefined} />);
     expect(await screen.findByText("Execution mode")).toBeTruthy();
     expect(screen.getByText("plan")).toBeTruthy();
+  });
+
+  it("renders safe tool activity states without showing arguments or result payloads", async () => {
+    vi.mocked(listConversationRuns).mockResolvedValue([run("run-a", "conversation-a")]);
+    vi.mocked(getRunInspection).mockResolvedValue(inspection("run-a", "System prompt A", "Question A", false, {
+      available: true,
+      has_more: false,
+      items: [
+        { invocation_id: "inv-awaiting", tool_id: "workspace.read_file", tool_version: "2", execution_mode: "agent", status: "awaiting_approval", approval_required: true, requested_at: "2026-01-01T00:00:00Z" },
+        { invocation_id: "inv-requested", tool_id: "workspace.read_file", status: "requested" },
+        { invocation_id: "inv-rejected", tool_id: "workspace.write_file", status: "rejected", reason_code: "tool_disabled" },
+        { invocation_id: "inv-reserved", tool_id: "workspace.read_file", status: "reserved" },
+        { invocation_id: "inv-executing", tool_id: "workspace.read_file", status: "executing" },
+        { invocation_id: "inv-completed", tool_id: "workspace.read_file", status: "completed" },
+        { invocation_id: "inv-cancelled", tool_id: "workspace.read_file", status: "cancelled" },
+        { invocation_id: "inv-failed", tool_id: "workspace.write_file", tool_version: "1", execution_mode: "agent", status: "failed", reason_code: "tool_execution_failed" },
+        { invocation_id: "inv-uncertain", tool_id: "workspace.read_file", tool_version: "2", execution_mode: "plan", status: "indeterminate", recovery_status: "reconciled" },
+      ],
+    }));
+    render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Tool Activity" onTabChange={() => undefined} />);
+
+    expect(await screen.findByText("Awaiting approval")).toBeTruthy();
+    expect(screen.getByText("Required; execution has not been established.")).toBeTruthy();
+    for (const status of ["Requested", "Rejected", "Reserved", "Executing", "Completed", "Cancelled"]) {
+      expect(screen.getByLabelText(`Tool status: ${status}`)).toBeTruthy();
+    }
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.getByText("Indeterminate")).toBeTruthy();
+    expect(screen.getByText("reconciled")).toBeTruthy();
+    expect(screen.queryByText(/arguments|result payload/i)).toBeNull();
+    expect(screen.getByLabelText("Tool status: Indeterminate")).toBeTruthy();
+    expect(getRunInspection).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the explicit unavailable tool-history state", async () => {
+    vi.mocked(listConversationRuns).mockResolvedValue([run("run-a", "conversation-a")]);
+    vi.mocked(getRunInspection).mockResolvedValue(inspection("run-a", "System prompt A", "Question A", false, { available: false, items: [], has_more: false }));
+    render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Tool Activity" onTabChange={() => undefined} />);
+    expect(await screen.findByText("Tool Activity could not be loaded for this run.")).toBeTruthy();
+  });
+
+  it("explains unauthorized Run inspection without rendering stale data", async () => {
+    vi.mocked(listConversationRuns).mockResolvedValue([run("run-a", "conversation-a")]);
+    vi.mocked(getRunInspection).mockRejectedValue(new ApiError("forbidden", 403, {}));
+    render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Tool Activity" onTabChange={() => undefined} />);
+    expect(await screen.findByText("You are not authorized to inspect this run.")).toBeTruthy();
+    expect(screen.queryByText("No tool activity recorded for this Run.")).toBeNull();
+  });
+
+  it("marks the latest-history limit in the view", async () => {
+    vi.mocked(listConversationRuns).mockResolvedValue([run("run-a", "conversation-a")]);
+    vi.mocked(getRunInspection).mockResolvedValue(inspection("run-a", "System prompt A", "Question A", false, {
+      available: true,
+      has_more: true,
+      items: [{ invocation_id: "inv-101", tool_id: "workspace.read_file", status: "requested" }],
+    }));
+    render(<RunInspector client={client} conversationId="conversation-a" onClose={() => undefined} selectedTab="Tool Activity" onTabChange={() => undefined} />);
+    expect(await screen.findByText("Showing the 100 most recent invocations.")).toBeTruthy();
   });
 
   it("shows the exact rolling summary and coverage in the Run Inspector", async () => {

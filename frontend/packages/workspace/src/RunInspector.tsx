@@ -1,14 +1,14 @@
 import { attachmentContextPresentation, attachmentContextSummary, type AttachmentContextItem } from "@ava/agent-ui";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@ava/ui-core";
-import { getConversationPromptPreview, getRunInspection, listConversationRuns, type ApiClient, type ContextWindowPreview, type RunInspectionResponse, type RunListItem, type RunPromptPreview } from "@ava/api-client";
+import { ApiError, getConversationPromptPreview, getRunInspection, listConversationRuns, type ApiClient, type ContextWindowPreview, type RunInspectionResponse, type RunListItem, type RunPromptPreview, type ToolActivityItem, type ToolActivityStatus } from "@ava/api-client";
 
 type InspectionState = { status: "idle" } | ({ runId: string; conversationId: string | null } & (
   { status: "loading" } | { status: "success"; data: RunInspectionResponse } | { status: "error"; message: string }
 ));
 
-export type RunInspectorTab = "Prompts" | "Request" | "Response" | "Run" | "Events";
-const tabs: RunInspectorTab[] = ["Prompts", "Request", "Response", "Run", "Events"];
+export type RunInspectorTab = "Prompts" | "Request" | "Response" | "Run" | "Events" | "Tool Activity";
+const tabs: RunInspectorTab[] = ["Prompts", "Request", "Response", "Run", "Events", "Tool Activity"];
 
 function json(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? "Unavailable";
@@ -25,6 +25,62 @@ function TextBlock({ title, value, copyLabel = title }: { title: string; value: 
   return <section className="mb-4 min-w-0">
     <div className="mb-1 flex items-center justify-between gap-2"><h3 className="m-0 text-xs font-semibold text-foreground">{title}</h3><CopyButton value={value} label={copyLabel} /></div>
     <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground">{value}</pre>
+  </section>;
+}
+
+const activityStatusLabels: Record<ToolActivityStatus, string> = {
+  requested: "Requested",
+  rejected: "Rejected",
+  awaiting_approval: "Awaiting approval",
+  reserved: "Reserved",
+  executing: "Executing",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  indeterminate: "Indeterminate",
+};
+
+function activityStatusClass(status: ToolActivityStatus): string {
+  if (status === "rejected" || status === "failed") return "border-destructive/40 text-destructive";
+  if (status === "indeterminate") return "border-2 border-primary text-primary";
+  if (status === "awaiting_approval" || status === "executing") return "border-primary/40 text-primary";
+  if (status === "cancelled" || status === "requested" || status === "reserved") return "border-border text-muted-foreground";
+  return "border-border text-foreground";
+}
+
+function activityTimestamp(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleString();
+}
+
+function ToolActivity({ inspection }: { inspection: RunInspectionResponse }) {
+  const history = inspection.tool_activity;
+  if (!history || !Array.isArray(history.items)) return <p role="status" className="text-sm text-muted-foreground">Tool Activity is unavailable from this backend.</p>;
+  if (!history.available) return <p role="status" className="text-sm text-muted-foreground">Tool Activity could not be loaded for this run.</p>;
+  if (history.items.length === 0) return <p className="text-sm text-muted-foreground">No tool activity recorded for this Run.</p>;
+  return <section aria-label="Tool Activity" className="space-y-2">
+    <h3 className="m-0 text-sm font-semibold">Tool Activity</h3>
+    {history.has_more && <p role="status" className="m-0 text-xs text-muted-foreground">Showing the 100 most recent invocations.</p>}
+    {history.items.map((item: ToolActivityItem) => <article key={item.invocation_id} className="rounded-md border border-border bg-background p-3 text-xs">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <strong className="break-all">{item.tool_name ?? item.tool_id}{item.tool_version ? ` · v${item.tool_version}` : ""}</strong>
+        <span aria-label={`Tool status: ${activityStatusLabels[item.status]}`} className={`rounded-full border px-2 py-0.5 font-medium ${activityStatusClass(item.status)}`}>
+          {activityStatusLabels[item.status]}
+        </span>
+      </header>
+      <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+        <dt>Invocation</dt><dd className="m-0 break-all">{item.invocation_id}</dd>
+        <dt>Tool ID</dt><dd className="m-0 break-all">{item.tool_id}</dd>
+        {item.execution_mode && <><dt>Execution mode</dt><dd className="m-0">{item.execution_mode}</dd></>}
+        {activityTimestamp(item.requested_at) && <><dt>Requested</dt><dd className="m-0">{activityTimestamp(item.requested_at)}</dd></>}
+        {activityTimestamp(item.started_at) && <><dt>Started</dt><dd className="m-0">{activityTimestamp(item.started_at)}</dd></>}
+        {activityTimestamp(item.completed_at) && <><dt>Completed</dt><dd className="m-0">{activityTimestamp(item.completed_at)}</dd></>}
+        {item.approval_required && <><dt>Approval</dt><dd className="m-0">Required; execution has not been established.</dd></>}
+        {item.reason_code && <><dt>Outcome code</dt><dd className="m-0 break-all">{item.reason_code}</dd></>}
+        {item.recovery_status && <><dt>Recovery</dt><dd className="m-0">{item.recovery_status}</dd></>}
+      </dl>
+    </article>)}
   </section>;
 }
 
@@ -149,8 +205,13 @@ export function RunInspector({ client, conversationId, activeRunId, draftPrompt 
       try {
         const result = await getRunInspection(client, selectedRunId);
         if (!cancelled && query === queryGeneration) { setInspectionState({ ...identity, status: "success", data: result }); setError(null); }
-      } catch {
-        if (!cancelled && query === queryGeneration) setInspectionState({ ...identity, status: "error", message: "Run inspection could not be loaded." });
+      } catch (error) {
+        if (!cancelled && query === queryGeneration) {
+          const message = error instanceof ApiError && (error.status === 401 || error.status === 403)
+            ? "You are not authorized to inspect this run."
+            : "Run inspection could not be loaded.";
+          setInspectionState({ ...identity, status: "error", message });
+        }
       } finally { inFlight = false; }
     };
     retryInspection.current = () => { void refresh(); };
@@ -196,6 +257,7 @@ export function RunInspector({ client, conversationId, activeRunId, draftPrompt 
         <TextBlock title="Execution Resolution Sources" value={json(snapshot?.execution_resolution ?? {})} />
       </>;
       case "Events": return <div className="space-y-3">{currentInspection.events.length === 0 ? <p className="text-sm text-muted-foreground">No run events yet.</p> : currentInspection.events.map((event) => <article className="rounded-md border border-border p-2" key={event.event_id}><header className="flex justify-between gap-2 text-xs"><strong>{event.sequence ?? "—"} · {event.event_type}</strong><time>{event.timestamp}</time></header><p className="mb-1 mt-1 break-all font-mono text-[10px] text-muted-foreground">{event.event_id}</p><TextBlock title="Payload" value={json(event.payload)} copyLabel="event payload" /></article>)}</div>;
+      case "Tool Activity": return <ToolActivity inspection={currentInspection} />;
     }
   })();
 

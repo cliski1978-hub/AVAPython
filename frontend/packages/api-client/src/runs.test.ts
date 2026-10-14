@@ -6,6 +6,7 @@ import {
   cancelRun,
   getRun,
   getRunEvents,
+  getRunInspection,
   startRun,
   streamRun,
   RunStreamProtocolError,
@@ -164,6 +165,28 @@ describe("getRunEvents", () => {
     expect(url).toBe("http://localhost:8000/runs/run-001/events");
     expect(result).toEqual(events);
     expect(result[0].event_type).toBe("run_started");
+  });
+});
+
+describe("getRunInspection tool activity", () => {
+  it("retrieves the safe activity projection through the existing inspection endpoint", async () => {
+    const response = {
+      run_id: "run-001",
+      status: "completed",
+      created_at: "2026-10-14T00:00:00Z",
+      updated_at: "2026-10-14T00:00:01Z",
+      events: [],
+      tool_activity: {
+        available: true,
+        has_more: false,
+        items: [{ invocation_id: "inv-001", tool_id: "workspace.read_file", status: "indeterminate", execution_mode: "agent" }],
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    const result = await getRunInspection(makeClient(fetchMock), "run-001");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8000/runs/run-001/inspection");
+    expect(result.tool_activity?.items[0].status).toBe("indeterminate");
   });
 });
 
