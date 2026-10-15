@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIAL — implementation and focused local checks are complete; native Windows/Linux and frontend CI are pending.** This report follows the accepted Phase 6.14A checkpoint `20146e5e9ca5d94312073400825adc27a368a258` and the Phase 6 production integration addendum. The locked canonical development plan was not edited.
+**PARTIAL — implementation and targeted local Linux checks are complete; native Windows and frontend CI are pending.** This report follows the accepted Phase 6.14A checkpoint `20146e5e9ca5d94312073400825adc27a368a258` and the Phase 6 production integration addendum. The locked canonical development plan was not edited.
 
 ## Implemented
 
@@ -17,18 +17,18 @@
 
 ## Local verification
 
-- Phase 6.14B API, ownership, folder, migration, relational repository, prompt-domain/API, approval, and Project CRUD tests: **137 passed**.
+- Phase 6.14B API, ownership, folder, migration, relational repository, prompt-domain/API, approval, Project CRUD, and architecture migration assertions: **139 passed**.
 - The unrelated Project execution-defaults API test was deselected because it stalls during TestClient app startup locally; it also stalls on the accepted 6.14A baseline.
 - Ruff: **passed**.
 - Mypy: **passed across 305 backend source files**.
 - `git diff --check`: **passed**.
-- The full local backend suite could not be certified in this environment: TestClient-based API tests stall during app startup, including `tests/test_project_api.py::test_project_execution_defaults_api_preserves_omitted_fields_and_clears_explicit_null`; that Project test also stalls on the accepted 6.14A baseline. Focused Phase 6.14B tests use the existing `/home/bizon/AvaUi/backend/.venv` and complete successfully.
-- Frontend tests and type checks were not run locally because this worktree has no installed JavaScript dependencies and network access prevents fetching them. The existing GitHub Actions workflow now runs them.
+- The unrelated Project execution-defaults API test was intentionally deselected after it stalled during TestClient startup locally; the same test stalls on the accepted 6.14A baseline. The targeted Phase 6.14B suite completes with the existing `/home/bizon/AvaUi/backend/.venv`.
+- Frontend tests and type checks were not run locally because this worktree has no installed JavaScript dependencies and network access prevents fetching them. The existing desktop workflow is checking them.
 
 ## Native CI certification
 
-Pending. Update this section with the actual GitHub Actions run URL and the Linux, Windows, frontend test, and type-check results before changing the phase status from PARTIAL.
+The required Linux validation ran locally and passed. The push also started the existing Actions matrix on Linux and native Windows. Its first Linux attempt found two stale architecture-test expectations for the new Phase 6.14B schema; both assertions now pass locally and the follow-up Actions run is pending. Native Windows and frontend checks remain in progress. Run: [Phase 6.11 filesystem security](https://github.com/cliski1978-hub/AVAPython/actions/runs/38746879685); [Desktop E2E and frontend checks](https://github.com/cliski1978-hub/AVAPython/actions/runs/38746879740).
 
 ## Acceptance boundary
 
-Phase 6.14B is not certified until the Windows and Linux security jobs and frontend checks pass. Keep production tool dispatch disabled. Do not begin 6.14C in this handoff.
+Phase 6.14B remains PARTIAL until native Windows compatibility and frontend checks complete. Linux acceptance is covered by the passing local targeted suite; GitHub Linux jobs are informational under the owner-approved validation policy. Keep production tool dispatch disabled. Do not begin 6.14C in this handoff.

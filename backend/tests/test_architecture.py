@@ -1768,12 +1768,14 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
     ``messages``, ``documents`` (Step 4.7), ``document_revisions``
     (Step 4.13.C's immutable revision history), and ``attachments`` +
     ``idx_attachments_owner`` (Step 4.14.C's attachment metadata), and
-    Phase 6.8's approval records and Phase 6.13's durable tool invocation
-    lifecycle. Unimplemented later-phase vocabulary may not
+    Phase 6.8's approval records, Phase 6.13's durable tool invocation
+    lifecycle, and Phase 6.14B's approval audit and ownership metadata.
+    Unimplemented later-phase vocabulary may not
     leak into the schema, and schema text may live only
     in the migrations package. ``attachment`` became legitimate with Step
-    4.14.C, so its schema vocabulary is no longer forbidden. Later audit,
-    model-invocation, and qualification concepts remain excluded.
+    4.14.C, so its schema vocabulary is no longer forbidden. Audit tables
+    beyond Phase 6.14B approval history, model-invocation, and qualification
+    concepts remain excluded.
     """
     migration_dir = PERSISTENCE_DIR / "migrations" / "versions"
     created: list[str] = []
@@ -1786,6 +1788,7 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
     created = sorted(set(created) - {"IF", "project_files_new"})
     assert created == [
         "application_execution_defaults",
+        "approval_audit_events",
         "approval_records",
         "approval_records_pending_run",
         "approval_records_pending_workspace",
@@ -1807,6 +1810,8 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "idx_runs_cancellation_requested",
         "idx_runs_conversation",
         "idx_runs_source_user_message",
+        "ix_approval_audit_events_approval",
+        "ix_conversations_owner_activity",
         "ix_core_prompt_assignments_prompt_order",
         "ix_core_prompt_assignments_scope_order",
         "ix_runs_owner_conversation_created",
@@ -1831,7 +1836,7 @@ def test_persistence_schema_contains_only_implemented_phase_tables() -> None:
         "workspace_access_configurations",
         "workspace_access_grants",
     ]
-    forbidden = ("audit", "model_invocation", "qualification")
+    forbidden = ("model_invocation", "qualification")
     for path in _iter_python_files(PERSISTENCE_DIR / "migrations"):
         text = path.read_text(encoding="utf-8")
         for word in forbidden:
@@ -2048,7 +2053,8 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
     adds model configurations (v0005), Phase 5.7 adds runtime
     configurations (v0006), and Phase 5.8 adds application execution
     defaults (v0007), Phase 5.19 adds durable run relationship ids (v0008),
-    and Phase 6.13 adds durable tool invocation reservations (v0028).
+    Phase 6.13 adds durable tool invocation reservations (v0028), and Phase
+    6.14B adds authenticated approval audit and ownership metadata (v0030).
     """
     version_files = sorted(
         path.name
@@ -2085,6 +2091,7 @@ def test_migration_versions_include_all_completed_phase_five_domains() -> None:
         "v0027_run_execution_mode.py",
         "v0028_tool_invocation_reservations.py",
         "v0029_trusted_execution_authority.py",
+        "v0030_authenticated_approval_ownership.py",
     ], (
         "unexpected migration version files; found versions: "
         + ", ".join(version_files)
