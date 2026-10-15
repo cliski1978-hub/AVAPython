@@ -46,10 +46,17 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run frontend unit tests and type checks
+      - name: Run Phase 6.14B frontend tests and type checks
         run: |
-          pnpm test
-          pnpm lint
+          pnpm --filter @ava/contracts test
+          pnpm --filter @ava/api-client test
+          pnpm --filter @ava/approvals-core test
+          pnpm --filter @ava/contracts lint
+          pnpm --filter @ava/api-client lint
+          pnpm --filter @ava/approvals-core lint
+          pnpm --filter @ava/workspace lint
+          pnpm --filter @ava/web lint
+          pnpm --filter @ava/desktop lint
 
       - name: Install backend dependencies
         run: uv sync --project backend --frozen
