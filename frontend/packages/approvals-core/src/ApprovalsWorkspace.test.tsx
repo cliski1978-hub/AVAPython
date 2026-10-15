@@ -168,7 +168,7 @@ describe("ApprovalsWorkspace", () => {
 
   it("does not render unauthorized fields or overwrite the newest queue with a stale response", async () => {
     let resolveOld: ((value: typeof snapshot) => void) | undefined;
-    const oldSource = source({ load: vi.fn(() => new Promise((resolve) => { resolveOld = resolve; })) });
+    const oldSource = source({ load: vi.fn(() => new Promise<ApprovalQueueSnapshot>((resolve) => { resolveOld = resolve; })) });
     const currentItem = { ...pending, approvalId: "approval:current", toolName: "Current Tool", workspaceLabel: undefined, workspaceRoot: "workspace-secret-root", credentials: "token-secret" };
     const newSource = source({ load: vi.fn().mockResolvedValue({ pending: [currentItem], history: [] }) });
     const { rerender } = render(<ApprovalsWorkspace dataSource={oldSource} />);
