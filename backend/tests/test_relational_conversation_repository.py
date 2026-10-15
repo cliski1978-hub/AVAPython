@@ -72,9 +72,21 @@ def test_owner_scoped_reads_preserve_legacy_ownerless_records_as_inaccessible(
 def test_list_uses_canonical_activity_order(
     repository: tuple[RelationalConversationRepository, SqliteDatabase],
 ) -> None:
-    conversation_repository, _ = repository
+    conversation_repository, database = repository
     for conversation_id in ("a", "b", "c"):
         conversation_repository.create(conversation_id, title=f"T-{conversation_id}")
+    # Assign distinct activity timestamps so the ordering assertion does not
+    # depend on the host clock's resolution or SQLite's timestamp tie order.
+    with database.connect() as connection:
+        for conversation_id, updated_at in (
+            ("a", "2026-01-01T00:00:00+00:00"),
+            ("b", "2026-01-02T00:00:00+00:00"),
+            ("c", "2026-01-03T00:00:00+00:00"),
+        ):
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                (updated_at, conversation_id),
+            )
     assert [r.conversation_id for r in conversation_repository.list()] == ["c", "b", "a"]
 
 

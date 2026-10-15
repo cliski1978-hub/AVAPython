@@ -37,7 +37,7 @@ describe("ApprovalsWorkspace", () => {
     expect((await screen.findAllByText("File Writer")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Authorized project").length).toBeGreaterThan(0);
-    expect(screen.getByText("Invocation 1")).toBeTruthy();
+    expect(screen.getByText(/Invocation 1/)).toBeTruthy();
     expect(screen.getByText("The file will be replaced if it exists.")).toBeTruthy();
     expect(screen.getByText(/^Expires /)).toBeTruthy();
   });
@@ -114,8 +114,9 @@ describe("ApprovalsWorkspace", () => {
     const item = { ...pending, expiresAt };
     render(<ApprovalsWorkspace dataSource={source({ load: vi.fn().mockResolvedValue({ pending: [item], history: [] }) })} />);
     expect((await screen.findByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
+    });
   });
 
   it("prevents duplicate submissions while a backend decision is pending", async () => {
