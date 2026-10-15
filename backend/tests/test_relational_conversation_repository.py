@@ -48,6 +48,27 @@ def test_get_unknown_conversation_is_none(repository: tuple[RelationalConversati
     assert conversation_repository.get("ghost") is None
 
 
+def test_owner_scoped_reads_preserve_legacy_ownerless_records_as_inaccessible(
+    repository: tuple[RelationalConversationRepository, SqliteDatabase],
+) -> None:
+    conversation_repository, _ = repository
+    conversation_repository.create("legacy", title="Old conversation")
+    conversation_repository.create(
+        "alice", title="Private conversation", owner_principal_ref="principal-a", owner_tenant_ref="tenant-a"
+    )
+    conversation_repository.create(
+        "bob", title="Other tenant", owner_principal_ref="principal-b", owner_tenant_ref="tenant-b"
+    )
+
+    assert conversation_repository.get_for_owner("legacy", "principal-a", "tenant-a") is None
+    owned = conversation_repository.get_for_owner("alice", "principal-a", "tenant-a")
+    assert owned is not None and owned.conversation_id == "alice"
+    assert conversation_repository.get_for_owner("alice", "principal-a", "tenant-b") is None
+    assert [item.conversation_id for item in conversation_repository.list_for_owner("principal-a", "tenant-a")] == [
+        "alice"
+    ]
+
+
 def test_list_uses_canonical_activity_order(
     repository: tuple[RelationalConversationRepository, SqliteDatabase],
 ) -> None:

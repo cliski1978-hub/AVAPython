@@ -42,6 +42,8 @@ class ConversationStore(ConversationRepository):
         project_id: str | None = None,
         folder_id: str | None = None,
         is_title_custom: bool = False,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
     ) -> ConversationRecord:
         """Create a new conversation record.
 
@@ -66,6 +68,8 @@ class ConversationStore(ConversationRepository):
             project_id=project_id,
             folder_id=folder_id,
             is_title_custom=is_title_custom,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
         )
         self._conversations[conversation_id] = record
         return record

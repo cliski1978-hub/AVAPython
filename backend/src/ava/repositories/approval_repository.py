@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from ava.contracts.approvals import ApprovalRecord, ApprovalStatus
+from ava.contracts.approvals import ApprovalAuditEvent, ApprovalRecord, ApprovalStatus
 
 
 class ApprovalConflictError(ValueError):
@@ -21,6 +21,12 @@ class ApprovalRepository(ABC):
 
     @abstractmethod
     def list_pending(self, *, limit: int = 100) -> list[ApprovalRecord]: ...
+
+    @abstractmethod
+    def list_recent(self, *, limit: int = 100) -> list[ApprovalRecord]: ...
+
+    @abstractmethod
+    def list_audit_events(self, approval_id: str) -> list[ApprovalAuditEvent]: ...
 
     @abstractmethod
     def list_pending_for_run(self, run_id: str) -> list[ApprovalRecord]: ...

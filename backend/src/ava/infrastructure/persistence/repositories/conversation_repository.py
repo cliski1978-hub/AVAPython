@@ -22,7 +22,8 @@ from ava.repositories.conversation_repository import (
 )
 
 _CONVERSATION_COLUMNS = (
-    "conversation_id, title, created_at, updated_at, is_pinned, is_archived, folder_id, project_id, is_title_custom"
+    "conversation_id, title, created_at, updated_at, is_pinned, is_archived, folder_id, project_id, is_title_custom, "
+    "owner_principal_ref, owner_tenant_ref"
 )
 _CONVERSATION_ORDER = "is_pinned DESC, updated_at DESC, created_at DESC, conversation_id ASC"
 
@@ -45,14 +46,16 @@ class RelationalConversationRepository(ConversationRepository):
         project_id: str | None = None,
         folder_id: str | None = None,
         is_title_custom: bool = False,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
     ) -> ConversationRecord:
         now = datetime.now(UTC)
         try:
             with self._database.transaction() as connection:
                 connection.execute(
                     "INSERT INTO conversations (conversation_id, title, created_at, updated_at, "
-                    "project_id, folder_id, is_title_custom) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "project_id, folder_id, is_title_custom, owner_principal_ref, owner_tenant_ref) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         conversation_id,
                         title,
@@ -61,6 +64,8 @@ class RelationalConversationRepository(ConversationRepository):
                         project_id,
                         folder_id,
                         int(is_title_custom),
+                        owner_principal_ref,
+                        owner_tenant_ref,
                     ),
                 )
         except sqlite3.Error as exc:
@@ -73,6 +78,8 @@ class RelationalConversationRepository(ConversationRepository):
             project_id=project_id,
             folder_id=folder_id,
             is_title_custom=is_title_custom,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
         )
 
     def get(self, conversation_id: str) -> ConversationRecord | None:
@@ -80,6 +87,17 @@ class RelationalConversationRepository(ConversationRepository):
             row = connection.execute(
                 f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
+            ).fetchone()
+        return row_to_conversation_record(row) if row is not None else None
+
+    def get_for_owner(
+        self, conversation_id: str, principal_ref: str, tenant_ref: str | None
+    ) -> ConversationRecord | None:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                f"SELECT {_CONVERSATION_COLUMNS} FROM conversations "
+                "WHERE conversation_id = ? AND owner_principal_ref = ? AND owner_tenant_ref IS ?",
+                (conversation_id, principal_ref, tenant_ref),
             ).fetchone()
         return row_to_conversation_record(row) if row is not None else None
 
@@ -100,6 +118,29 @@ class RelationalConversationRepository(ConversationRepository):
                 ).fetchall()
         return [row_to_conversation_record(row) for row in rows]
 
+    def list_for_owner(
+        self, principal_ref: str, tenant_ref: str | None, search: str | None = None
+    ) -> Collection[ConversationRecord]:
+        normalized = normalize_conversation_search(search)
+        with self._database.connect() as connection:
+            if normalized is None:
+                rows = connection.execute(
+                    f"SELECT {_CONVERSATION_COLUMNS} FROM conversations "
+                    "WHERE owner_principal_ref = ? AND owner_tenant_ref IS ? "
+                    f"ORDER BY {_CONVERSATION_ORDER}",
+                    (principal_ref, tenant_ref),
+                ).fetchall()
+            else:
+                escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                rows = connection.execute(
+                    f"SELECT {_CONVERSATION_COLUMNS} FROM conversations "
+                    "WHERE owner_principal_ref = ? AND owner_tenant_ref IS ? "
+                    "AND LOWER(title) LIKE LOWER(?) ESCAPE '\\' "
+                    f"ORDER BY {_CONVERSATION_ORDER}",
+                    (principal_ref, tenant_ref, f"%{escaped}%"),
+                ).fetchall()
+        return [row_to_conversation_record(row) for row in rows]
+
     def list_by_project(self, project_id: str) -> Collection[ConversationRecord]:
         """Query one Project's conversations using canonical conversation order."""
         with self._database.connect() as connection:
@@ -107,6 +148,18 @@ class RelationalConversationRepository(ConversationRepository):
                 f"SELECT {_CONVERSATION_COLUMNS} FROM conversations WHERE project_id = ? "
                 f"ORDER BY {_CONVERSATION_ORDER}",
                 (project_id,),
+            ).fetchall()
+        return [row_to_conversation_record(row) for row in rows]
+
+    def list_by_project_for_owner(
+        self, project_id: str, principal_ref: str, tenant_ref: str | None
+    ) -> Collection[ConversationRecord]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                f"SELECT {_CONVERSATION_COLUMNS} FROM conversations "
+                "WHERE project_id = ? AND owner_principal_ref = ? AND owner_tenant_ref IS ? "
+                f"ORDER BY {_CONVERSATION_ORDER}",
+                (project_id, principal_ref, tenant_ref),
             ).fetchall()
         return [row_to_conversation_record(row) for row in rows]
 

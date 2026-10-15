@@ -7,3 +7,4 @@ export {
   type WorkspaceTabsProps,
   type WorkspaceId,
 } from "./WorkspaceTabs";
+export { createApprovalDataSource } from "./approvalDataSource";

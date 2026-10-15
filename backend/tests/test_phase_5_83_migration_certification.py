@@ -67,6 +67,7 @@ EXPECTED_MIGRATIONS = [
     "run execution mode",
     "durable tool invocation reservations",
     "trusted Run ownership and Workspace grants",
+    "authenticated approval audit and conversation ownership",
 ]
 
 
@@ -88,9 +89,9 @@ def _run_through(database: SqliteDatabase, version: int) -> None:
     assert MigrationRunner(database, _registry_through(version)).migrate() == list(range(1, version + 1))
 
 
-def test_migration_registry_is_a_contiguous_documented_history_through_29() -> None:
+def test_migration_registry_is_a_contiguous_documented_history_through_30() -> None:
     migrations = list(default_registry())
-    assert [migration.version for migration in migrations] == list(range(1, 30))
+    assert [migration.version for migration in migrations] == list(range(1, 31))
     assert [migration.name for migration in migrations] == EXPECTED_MIGRATIONS
 
 
@@ -98,8 +99,8 @@ def test_fresh_install_and_current_phase_five_constraints_are_valid() -> None:
     database, path = _new_db()
     try:
         runner = MigrationRunner(database, default_registry())
-        assert runner.migrate() == list(range(1, 30))
-        assert runner.current_version() == 29
+        assert runner.migrate() == list(range(1, 31))
+        assert runner.current_version() == 30
         with database.connect() as connection:
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -224,7 +225,7 @@ def test_pre_project_file_database_upgrade_preserves_existing_project() -> None:
         current = SqliteDatabase(str(path), auto_migrate=False)
         try:
             assert MigrationRunner(current, default_registry()).migrate() == [
-                18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+                18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
             ]
             with current.connect() as connection:
                 row = connection.execute(
@@ -300,7 +301,7 @@ def test_pre_folder_project_database_upgrade_preserves_legacy_conversation_graph
 
         upgraded = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(10, 30))
+            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(10, 31))
             with upgraded.connect() as connection:
                 conversation = connection.execute(
                     "SELECT conversation_id,title,created_at,updated_at,is_pinned,is_archived,folder_id,project_id "
@@ -388,7 +389,7 @@ def test_pre_core_assignment_and_project_file_boundaries_upgrade_without_fabrica
         database.dispose()
         current = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(current, default_registry()).migrate() == list(range(16, 30))
+            assert MigrationRunner(current, default_registry()).migrate() == list(range(16, 31))
             with current.connect() as connection:
                 row = connection.execute("SELECT * FROM core_prompts WHERE id='prompt-old'").fetchone()
                 assert (
@@ -461,6 +462,7 @@ def test_pre_core_assignment_and_project_file_boundaries_upgrade_without_fabrica
                 27,
                 28,
                 29,
+                30,
             ]
             with current.connect() as connection:
                 project = connection.execute("SELECT * FROM projects WHERE id='legacy-p'").fetchone()
@@ -578,7 +580,7 @@ def test_real_app_persistence_composition_reads_upgraded_database_and_is_idempot
         second_startup = create_relational_repositories(str(path))
         try:
             second_runner = MigrationRunner(second_startup.database, default_registry())
-            assert second_runner.current_version() == 29
+            assert second_runner.current_version() == 30
             assert second_runner.migrate() == []
             with second_startup.database.connect() as connection:
                 assert metadata_before == [
@@ -670,7 +672,7 @@ def test_largeish_unicode_duplicate_name_graph_keeps_ids_and_ordering_fields() -
         database.dispose()
         upgraded = SqliteDatabase(str(path), auto_migrate=False)
         try:
-            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(15, 30))
+            assert MigrationRunner(upgraded, default_registry()).migrate() == list(range(15, 31))
             with upgraded.connect() as connection:
                 assert before_ids == [
                     row[0]

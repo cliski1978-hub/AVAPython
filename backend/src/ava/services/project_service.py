@@ -47,6 +47,8 @@ class ProjectService:
         name: str,
         description: str | None = None,
         instructions: str | None = None,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
     ) -> ProjectRecord:
         normalized_name = self._normalize_name(name)
         now = datetime.now(UTC)
@@ -58,6 +60,8 @@ class ProjectService:
             is_archived=False,
             created_at=now,
             updated_at=now,
+            owner_principal_ref=owner_principal_ref,
+            owner_tenant_ref=owner_tenant_ref,
         )
         try:
             return self._projects.create(project)
@@ -73,6 +77,18 @@ class ProjectService:
     def list_projects(self) -> list[ProjectRecord]:
         """Return all Projects, including archived ones, in repository order."""
         return list(self._projects.list())
+
+    def list_projects_for_owner(self, principal_ref: str, tenant_ref: str | None) -> list[ProjectRecord]:
+        return [
+            item for item in self._projects.list()
+            if item.owner_principal_ref == principal_ref and item.owner_tenant_ref == tenant_ref
+        ]
+
+    def is_owned_by(self, project_id: str, principal_ref: str, tenant_ref: str | None) -> bool:
+        project = self._projects.get(project_id)
+        return project is not None and (
+            project.owner_principal_ref == principal_ref and project.owner_tenant_ref == tenant_ref
+        )
 
     def update_project(self, project_id: str, request: UpdateProjectRequest) -> ProjectRecord:
         current = self.get_project(project_id)

@@ -38,12 +38,16 @@ def test_project_record_has_the_canonical_fields_and_defaults() -> None:
         "instructions",
         "is_archived",
         "execution_defaults",
+        "owner_principal_ref",
+        "owner_tenant_ref",
     ]
     assert project.description is None
     assert project.instructions is None
     assert project.is_archived is False
     assert project.execution_defaults.runtime_key is None
     assert project.execution_defaults.model_id is None
+    assert project.owner_principal_ref is None
+    assert project.owner_tenant_ref is None
     assert project.created_at is created_at
     assert project.updated_at is updated_at
 

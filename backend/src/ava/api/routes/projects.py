@@ -5,9 +5,10 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ava.api.principal import require_project_owner, require_verified_principal
 from ava.contracts.conversations import ConversationListResponse, ConversationResponse, CreateConversationRequest
 from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.project_files import ProjectFileListResponse, ProjectFileResponse
@@ -20,6 +21,7 @@ from ava.contracts.projects import (
     UpdateProjectExecutionDefaultsRequest,
     UpdateProjectRequest,
 )
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.models.model_registry import ModelDisabledError, UnknownModelError
 from ava.repositories.project import ProjectRecord
 from ava.repositories.project_file import ProjectFileRecord
@@ -42,7 +44,7 @@ from ava.services.project_service import (
     ProjectService,
 )
 
-router = APIRouter(tags=["projects"])
+router = APIRouter(tags=["projects"], dependencies=[Depends(require_project_owner)])
 
 
 def _project_file_response(record: ProjectFileRecord) -> ProjectFileResponse:
@@ -300,7 +302,10 @@ async def update_project_execution_defaults(
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=201)
-async def create_project(request: Request, body: CreateProjectRequest) -> ProjectResponse | JSONResponse:
+async def create_project(
+    request: Request, body: CreateProjectRequest,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> ProjectResponse | JSONResponse:
     service: ProjectService = request.app.state.project_service
     try:
         return _response(
@@ -308,6 +313,8 @@ async def create_project(request: Request, body: CreateProjectRequest) -> Projec
                 name=body.name,
                 description=body.description,
                 instructions=body.instructions,
+                owner_principal_ref=principal.principal_ref,
+                owner_tenant_ref=principal.tenant_ref,
             )
         )
     except DuplicateProjectIdentityError:
@@ -315,20 +322,31 @@ async def create_project(request: Request, body: CreateProjectRequest) -> Projec
 
 
 @router.get("/projects", response_model=ProjectListResponse)
-async def list_projects(request: Request) -> ProjectListResponse:
+async def list_projects(
+    request: Request, principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)]
+) -> ProjectListResponse:
     service: ProjectService = request.app.state.project_service
-    return ProjectListResponse(projects=[_response(item) for item in service.list_projects()])
+    return ProjectListResponse(
+        projects=[
+            _response(item)
+            for item in service.list_projects_for_owner(principal.principal_ref, principal.tenant_ref)
+        ]
+    )
 
 
 @router.get(
     "/projects/{project_id}/conversations",
     response_model=ConversationListResponse,
     responses={404: {"model": ErrorResponse}},
+    dependencies=[Depends(require_verified_principal)],
 )
-async def list_project_conversations(request: Request, project_id: str) -> ConversationListResponse | JSONResponse:
+async def list_project_conversations(
+    request: Request, project_id: str,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> ConversationListResponse | JSONResponse:
     service: ConversationService = request.app.state.conversation_service
     try:
-        return service.list_project_conversations(project_id)
+        return service.list_project_conversations_for_owner(project_id, principal.principal_ref, principal.tenant_ref)
     except ProjectNotFoundError:
         return _not_found(project_id)
 
@@ -338,13 +356,18 @@ async def list_project_conversations(request: Request, project_id: str) -> Conve
     response_model=ConversationResponse,
     status_code=201,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    dependencies=[Depends(require_verified_principal)],
 )
 async def create_project_conversation(
-    request: Request, project_id: str, body: CreateConversationRequest
+    request: Request, project_id: str, body: CreateConversationRequest,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
 ) -> ConversationResponse | JSONResponse:
     service: ConversationService = request.app.state.conversation_service
     try:
-        return service.create_conversation_in_project(project_id, title=body.title)
+        return service.create_conversation_in_project(
+            project_id, title=body.title,
+            owner_principal_ref=principal.principal_ref, owner_tenant_ref=principal.tenant_ref,
+        )
     except ProjectNotFoundError:
         return _not_found(project_id)
     except DuplicateConversationError as exc:
@@ -414,9 +437,23 @@ async def set_project_archived(
 async def delete_project(
     request: Request,
     project_id: str,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
     delete_conversations: Annotated[bool, Query()] = False,
 ) -> Response | JSONResponse:
     service: ProjectService = request.app.state.project_service
+    conversation_service: ConversationService = request.app.state.conversation_service
+    access = getattr(request.app.state, "conversation_access", None)
+    try:
+        conversations = conversation_service.list_project_conversations(project_id).conversations
+        if access is None or any(
+            access.can_access(principal.principal_ref, principal.tenant_ref, item.conversation_id) is not True
+            for item in conversations
+        ):
+            return _not_found(project_id)
+    except Exception:
+        # Without complete project and conversation ownership evidence, do not
+        # mutate linked context or cascade a destructive delete.
+        return _not_found(project_id)
     try:
         deleted_conversation_ids = service.delete_project(project_id, delete_conversations=delete_conversations)
     except ProjectNotFoundError:

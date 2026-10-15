@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ava.api.principal import HttpPrincipalResolverPort, UnavailableHttpPrincipalResolver
+from ava.api.routes.approvals import router as approvals_router
 from ava.api.routes.attachments import router as attachments_router
 from ava.api.routes.capabilities import router as capabilities_router
 from ava.api.routes.conversation_folders import router as conversation_folders_router
@@ -40,16 +41,16 @@ from ava.api.routes.tool_features import router as tool_features_router
 from ava.api.routes.workspace_access import router as workspace_access_router
 from ava.api.routes.workspaces import router as workspaces_router
 from ava.configuration.settings import Settings, get_settings
+from ava.contracts.approvals import ApprovalDecisionAuthorityPort
 from ava.contracts.errors import ErrorCategory, ErrorResponse
 from ava.contracts.security_identity import (
     ConversationAccessPort,
-    DenyConversationAccess,
     DenyPrincipalValidity,
     PrincipalValidityPort,
 )
 from ava.contracts.tool_features import ToolFeatureAdministrationPort
 from ava.contracts.workspace_access import WorkspaceAdministrationPort
-from ava.contracts.workspace_grants import DenyWorkspaceGrantAdministration, WorkspaceGrantAdministrationPort
+from ava.contracts.workspace_grants import WorkspaceGrantAdministrationPort
 from ava.core.application import Application, ApplicationConfig
 from ava.execution.hosting import ModelHostingRequirement
 from ava.infrastructure.composition import (
@@ -78,6 +79,10 @@ from ava.infrastructure.composition import (
     create_workspace_registry,
     create_workspace_resolver,
 )
+from ava.infrastructure.workspace_admin_policy import (
+    ConfiguredWorkspaceGrantAdministration,
+    WorkspaceAdminApprovalDecisionAuthority,
+)
 from ava.models import ModelBindingResolver, ModelProviderResolver
 from ava.runtimes import RuntimeResolver
 from ava.services.approval_service import ApprovalService
@@ -86,6 +91,7 @@ from ava.services.attachment_service import AttachmentService
 from ava.services.capability_service import CapabilityService
 from ava.services.context_compaction_service import ContextCompactionService
 from ava.services.context_construction_service import ContextConstructionService
+from ava.services.conversation_access_service import RepositoryConversationAccess
 from ava.services.conversation_attachment_context_service import ConversationAttachmentContextService
 from ava.services.conversation_folder_service import ConversationFolderService
 from ava.services.conversation_service import ConversationService
@@ -153,6 +159,7 @@ def create_app(
     principal_validity: PrincipalValidityPort | None = None,
     conversation_access: ConversationAccessPort | None = None,
     workspace_grant_administration: WorkspaceGrantAdministrationPort | None = None,
+    approval_decision_authority: ApprovalDecisionAuthorityPort | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -203,7 +210,7 @@ def create_app(
     app.state.attachment_max_size_bytes = settings.attachment_max_size_bytes
     app.state.http_principal_resolver = http_principal_resolver or UnavailableHttpPrincipalResolver()
     app.state.principal_validity = principal_validity or DenyPrincipalValidity()
-    app.state.conversation_access = conversation_access or DenyConversationAccess()
+    app.state.conversation_access = conversation_access
 
     app.state.application = core_application
     # Descriptive catalog only. No production handlers or tool API exist yet.
@@ -258,11 +265,18 @@ def create_app(
     # instances the Settings API writes to.
     application_persistence = create_application_persistence(settings)
     app.state.persistence = application_persistence
+    app.state.conversation_access = conversation_access or RepositoryConversationAccess(
+        application_persistence.conversation_repository
+    )
     app.state.run_access_service = RunAccessService(application_persistence.run_repository)
+    configured_workspace_admin = (
+        workspace_grant_administration or ConfiguredWorkspaceGrantAdministration.from_environment()
+    )
+    app.state.workspace_grant_administration = configured_workspace_admin
     app.state.workspace_grant_service = WorkspaceGrantService(
         grants=application_persistence.workspace_grant_repository,
         workspaces=application_persistence.workspace_access_repository,
-        administration=workspace_grant_administration or DenyWorkspaceGrantAdministration(),
+        administration=configured_workspace_admin,
     )
     project_execution_defaults_resolver = ProjectExecutionDefaultsResolver(
         conversations=application_persistence.conversation_repository,
@@ -329,6 +343,8 @@ def create_app(
         workspaces=workspace_resolver,
         execution_authority=execution_authority,
         registry=app.state.tool_registry,
+        decision_authority=approval_decision_authority
+        or WorkspaceAdminApprovalDecisionAuthority(configured_workspace_admin),
     )
     app.state.tool_execution_service = ToolExecutionService(
         runs=application_persistence.run_repository,
@@ -571,6 +587,7 @@ def create_app(
     app.include_router(runtimes_router)
     app.include_router(workspaces_router)
     app.include_router(workspace_access_router)
+    app.include_router(approvals_router)
 
     app.add_middleware(
         CORSMiddleware,

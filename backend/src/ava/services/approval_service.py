@@ -19,6 +19,7 @@ from ava.contracts.approvals import (
     DenyApprovalDecisionAuthority,
 )
 from ava.contracts.responses import RunStatus
+from ava.contracts.security_identity import PrincipalActorType, VerifiedPrincipal
 from ava.contracts.tool_policy import ToolPolicyDecision, ToolPolicyDecisionType, ToolPolicyRequest
 from ava.contracts.tools import ToolOperationBinding, ToolRequest
 from ava.repositories.approval_repository import ApprovalConflictError, ApprovalRepository
@@ -152,12 +153,14 @@ class ApprovalService:
                 return winner
             raise
 
-    def get_for_current_human(self, approval_id: str) -> ApprovalRecord:
+    def get_for_current_human(
+        self, approval_id: str, *, principal: VerifiedPrincipal | None = None
+    ) -> ApprovalRecord:
         record = self._repository.get(approval_id)
         if record is None:
             raise ApprovalUnavailableError("Approval was not found.")
         try:
-            self._resolve_human_authority(record)
+            self._resolve_human_authority(record, principal)
         except ApprovalUnavailableError as exc:
             raise ApprovalUnavailableError("Approval was not found.") from exc
         if record.status == ApprovalStatus.PENDING:
@@ -165,13 +168,15 @@ class ApprovalService:
             record = self._repository.get(approval_id) or record
         return self._expire_if_due(record)
 
-    def list_pending_for_current_human(self, *, limit: int = 100) -> list[ApprovalRecord]:
+    def list_pending_for_current_human(
+        self, *, limit: int = 100, principal: VerifiedPrincipal | None = None
+    ) -> list[ApprovalRecord]:
         if not 1 <= limit <= 500:
             raise ValueError("approval listing limit must be between 1 and 500")
         visible = []
         for record in self._repository.list_pending(limit=limit):
             try:
-                self._resolve_human_authority(record)
+                self._resolve_human_authority(record, principal)
             except ApprovalUnavailableError:
                 continue
             self._revalidate_pending(record)
@@ -181,12 +186,52 @@ class ApprovalService:
                 visible.append(current)
         return visible
 
+    def list_for_current_human(
+        self, *, limit: int = 100, principal: VerifiedPrincipal
+    ) -> list[ApprovalRecord]:
+        """Return pending and historical records only within current human scope."""
+        visible: list[ApprovalRecord] = []
+        for record in self._repository.list_recent(limit=limit):
+            try:
+                self._resolve_human_authority(record, principal)
+            except ApprovalUnavailableError:
+                continue
+            if record.status == ApprovalStatus.PENDING:
+                self._revalidate_pending(record)
+                current = self._repository.get(record.approval_id) or record
+                current = self._expire_if_due(current)
+                if current.status != ApprovalStatus.PENDING:
+                    try:
+                        self._resolve_human_authority(current, principal)
+                    except ApprovalUnavailableError:
+                        continue
+                visible.append(current)
+            else:
+                visible.append(record)
+        return visible
+
+    def decide_for_current_human(
+        self, approval_id: str, decision: ApprovalDecision, *, principal: VerifiedPrincipal
+    ) -> ApprovalRecord:
+        """Resolve the current server-owned invocation; never accept it from HTTP."""
+        record = self._repository.get(approval_id)
+        if record is None:
+            raise ApprovalUnavailableError("Approval was not found.")
+        trusted_request = self._current_request(record)
+        if trusted_request is None:
+            self._resolve_human_authority(record, principal)
+            if record.status == ApprovalStatus.PENDING:
+                self._invalidate_pending(record, ApprovalReason.ELIGIBILITY_UNAVAILABLE)
+            raise ApprovalUnavailableError("Current invocation eligibility cannot be re-established.")
+        return self.decide(approval_id, decision, current_request=trusted_request, principal=principal)
+
     def decide(
         self,
         approval_id: str,
         decision: ApprovalDecision,
         *,
         current_request: ToolRequest,
+        principal: VerifiedPrincipal | None = None,
     ) -> ApprovalRecord:
         decision = ApprovalDecision.model_validate(decision.model_dump())
         record = self._repository.get(approval_id)
@@ -195,7 +240,7 @@ class ApprovalService:
         record = self._expire_if_due(record)
         if record.status == ApprovalStatus.EXPIRED:
             raise ApprovalExpiredError("Approval has expired.")
-        self._resolve_human_authority(record)
+        self._resolve_human_authority(record, principal)
         if record.status != ApprovalStatus.PENDING:
             return self._repeat_or_conflict(record, decision.decision)
         trusted_request = self._current_request(record)
@@ -209,7 +254,7 @@ class ApprovalService:
         except ApprovalUnavailableError:
             self._invalidate_pending(record, self._ineligibility_reason(record))
             raise
-        authority = self._resolve_human_authority(record)
+        authority = self._resolve_human_authority(record, principal)
         now = self._clock()
         metadata = ApprovalDecisionMetadata(
             decision=decision.decision,
@@ -393,9 +438,11 @@ class ApprovalService:
             workspace=workspace,
         )
 
-    def _resolve_human_authority(self, record: ApprovalRecord) -> ApprovalHumanAuthority:
+    def _resolve_human_authority(
+        self, record: ApprovalRecord, principal: VerifiedPrincipal | None = None
+    ) -> ApprovalHumanAuthority:
         try:
-            authority = self._decision_authority.resolve_for(record)
+            authority = self._decision_authority.resolve_for(record, principal)
         except Exception as exc:
             raise ApprovalUnavailableError("Authenticated human approval authority is unavailable.") from exc
         if (
@@ -404,6 +451,13 @@ class ApprovalService:
             or record.workspace_id not in authority.workspace_ids
             or not authority.principal_ref
             or not authority.authority_revision_ref
+            or (
+                principal is not None
+                and (
+                    principal.actor_type != PrincipalActorType.HUMAN
+                    or authority.principal_ref != principal.principal_ref
+                )
+            )
         ):
             raise ApprovalUnavailableError("Authenticated human approval authority is unavailable.")
         return authority

@@ -17,3 +17,5 @@ class ConversationFolderRecord:
     name: str
     created_at: datetime
     updated_at: datetime
+    owner_principal_ref: str | None = None
+    owner_tenant_ref: str | None = None

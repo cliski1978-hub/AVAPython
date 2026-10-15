@@ -57,9 +57,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from hashlib import sha256
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
 import pytest
 
@@ -190,6 +190,9 @@ class _SuiteConversationAccess:
 # longer permit anonymous traffic. The real factory stays default-deny; this
 # wrapper exists only in pytest's process and never changes production behavior.
 _suite_resolver = _SuitePrincipalResolver()
+# Global CORE prompt mutation tests run as this explicit test-only administrator.
+# Security regression tests remove the value to exercise the production default-deny path.
+os.environ["AVA_CORE_PROMPT_ADMIN_PRINCIPAL_REFS"] = _suite_resolver.principal.principal_ref
 _production_create_app = _ava_app_module.create_app
 
 

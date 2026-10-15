@@ -110,16 +110,20 @@ def dump_run_inspection_snapshot(snapshot: RunInspectionSnapshot) -> str:
 
 
 def row_to_conversation_folder_record(row: sqlite3.Row) -> ConversationFolderRecord:
+    columns = set(row.keys())
     return ConversationFolderRecord(
         id=row["id"],
         name=row["name"],
         created_at=parse_utc(row["created_at"]),
         updated_at=parse_utc(row["updated_at"]),
+        owner_principal_ref=row["owner_principal_ref"] if "owner_principal_ref" in columns else None,
+        owner_tenant_ref=row["owner_tenant_ref"] if "owner_tenant_ref" in columns else None,
     )
 
 
 def row_to_project_record(row: sqlite3.Row) -> ProjectRecord:
     """Map a ``projects`` row back to an AVA Project snapshot."""
+    columns = set(row.keys())
     return ProjectRecord(
         id=row["id"],
         name=row["name"],
@@ -131,6 +135,8 @@ def row_to_project_record(row: sqlite3.Row) -> ProjectRecord:
         execution_defaults=ProjectExecutionDefaults(
             runtime_key=row["default_runtime_key"], model_id=row["default_model_id"]
         ),
+        owner_principal_ref=row["owner_principal_ref"] if "owner_principal_ref" in columns else None,
+        owner_tenant_ref=row["owner_tenant_ref"] if "owner_tenant_ref" in columns else None,
     )
 
 
@@ -209,6 +215,8 @@ def row_to_conversation_record(row: sqlite3.Row) -> ConversationRecord:
         folder_id=row["folder_id"] if "folder_id" in columns else None,
         project_id=row["project_id"] if "project_id" in columns else None,
         is_title_custom=bool(row["is_title_custom"]) if "is_title_custom" in columns else False,
+        owner_principal_ref=row["owner_principal_ref"] if "owner_principal_ref" in columns else None,
+        owner_tenant_ref=row["owner_tenant_ref"] if "owner_tenant_ref" in columns else None,
     )
 
 
