@@ -367,6 +367,9 @@ importers:
       '@ava/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@ava/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@ava/approvals-core':
         specifier: workspace:*
         version: link:../approvals-core
