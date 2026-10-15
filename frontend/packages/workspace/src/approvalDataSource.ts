@@ -26,14 +26,17 @@ function mapItem(item: ApprovalReviewItem): ApprovalDetail {
     risk: "medium",
     reason: item.safe_summary,
     policyWarnings: [],
-    decisionAt: item.decision_at ?? undefined,
-    decisionLabel: item.decision_label ?? undefined,
   };
 }
 
 function asHistory(item: ApprovalReviewItem): ApprovalHistoryItem {
   if (item.status === "pending") throw new Error("A pending approval cannot be returned as history.");
-  return mapItem(item) as ApprovalHistoryItem;
+  return {
+    ...mapItem(item),
+    status: item.status,
+    decisionAt: item.decision_at ?? undefined,
+    decisionLabel: item.decision_label ?? undefined,
+  };
 }
 
 function mapError(error: unknown): ApprovalDataError {
