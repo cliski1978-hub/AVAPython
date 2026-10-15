@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApprovalDataError, type ApprovalDataSource, type ApprovalDetail, type ApprovalHistoryItem, type ApprovalQueueSnapshot } from "./contracts";
 import { ApprovalsWorkspace } from "./ApprovalsWorkspace";
 
@@ -21,6 +21,8 @@ const source = (overrides: Partial<ApprovalDataSource> = {}): ApprovalDataSource
 });
 
 describe("ApprovalsWorkspace", () => {
+  afterEach(cleanup);
+
   it("shows explicit unavailable state and does not invent or persist records without an adapter", () => {
     render(<ApprovalsWorkspace />);
     expect(screen.getByText("Approval service unavailable")).toBeTruthy();
