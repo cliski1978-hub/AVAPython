@@ -11,9 +11,12 @@ message identifiers are always service-generated; clients never supply them.
 Retrieval endpoints return snapshots, not streams.
 """
 
-from fastapi import APIRouter, Query, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ava.api.principal import require_conversation_owner, require_verified_principal
 from ava.contracts.conversations import (
     ConversationListResponse,
     ConversationMessagesResponse,
@@ -31,6 +34,7 @@ from ava.contracts.conversations import (
     UpdateConversationRequest,
 )
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.services.conversation_folder_service import (
     ConversationFolderNotFoundError,
     ConversationFolderService,
@@ -46,7 +50,7 @@ from ava.services.conversation_service import (
 )
 from ava.services.project_service import ProjectNotFoundError
 
-router = APIRouter(tags=["conversations"])
+router = APIRouter(tags=["conversations"], dependencies=[Depends(require_conversation_owner)])
 
 
 @router.delete(
@@ -86,7 +90,11 @@ async def delete_conversation(request: Request, conversation_id: str) -> Respons
     status_code=201,
     responses={409: {"model": ErrorResponse}},
 )
-async def create_conversation(request: Request, body: CreateConversationRequest) -> ConversationResponse | JSONResponse:
+async def create_conversation(
+    request: Request,
+    body: CreateConversationRequest,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> ConversationResponse | JSONResponse:
     """Create an AVA conversation.
 
     Ava generates the conversation identifier in the service layer; the route
@@ -95,7 +103,10 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
     """
     service: ConversationService = request.app.state.conversation_service
     try:
-        return service.create_conversation(title=body.title, folder_id=body.folder_id)
+        return service.create_conversation(
+            title=body.title, folder_id=body.folder_id,
+            owner_principal_ref=principal.principal_ref, owner_tenant_ref=principal.tenant_ref,
+        )
     except DuplicateConversationError as exc:
         return _duplicate_error("conversation_id_conflict", exc)
     except ConversationFolderNotFoundForCreationError:
@@ -120,10 +131,14 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
-async def list_conversations(request: Request, search: str | None = Query(default=None)) -> ConversationListResponse:
+async def list_conversations(
+    request: Request,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+    search: str | None = Query(default=None),
+) -> ConversationListResponse:
     """Return AVA conversations in stable order, optionally matching titles."""
     service: ConversationService = request.app.state.conversation_service
-    return service.list_conversations(search=search)
+    return service.list_conversations_for_owner(principal.principal_ref, principal.tenant_ref, search=search)
 
 
 # ============================================================

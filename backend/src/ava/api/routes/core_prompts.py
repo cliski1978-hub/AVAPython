@@ -1,8 +1,11 @@
 """Public CRUD and enabled-state routes for CORE prompt definitions."""
 
-from fastapi import APIRouter, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
+from ava.api.principal import require_core_prompt_admin, require_verified_principal
 from ava.contracts.core_prompts import (
     CorePromptAssignmentListResponse,
     CorePromptAssignmentResponse,
@@ -18,6 +21,7 @@ from ava.contracts.core_prompts import (
     UpdateCorePromptRequest,
 )
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.repositories.core_prompt import CorePromptRecord
 from ava.repositories.core_prompt_assignment import CorePromptAssignmentRecord, CorePromptScopeType
 from ava.services.core_prompt_assignment_service import CorePromptAssignmentError, CorePromptAssignmentService
@@ -32,7 +36,7 @@ from ava.services.effective_prompt_resolver import (
     PromptResolutionError,
 )
 
-router = APIRouter(tags=["core prompts"])
+router = APIRouter(tags=["core prompts"], dependencies=[Depends(require_verified_principal)])
 
 
 def _response(record: CorePromptRecord) -> CorePromptResponse:
@@ -116,8 +120,20 @@ def _resolution_error(exc: PromptResolutionError) -> JSONResponse:
 
 @router.post("/core-prompts/resolve", response_model=EffectivePromptSetResponse)
 async def resolve_core_prompts(
-    request: Request, body: ResolveCorePromptsRequest
+    request: Request,
+    body: ResolveCorePromptsRequest,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
 ) -> EffectivePromptSetResponse | JSONResponse:
+    if body.conversation_id is not None:
+        access = getattr(request.app.state, "conversation_access", None)
+        try:
+            allowed = access is not None and access.can_access(
+                principal.principal_ref, principal.tenant_ref, body.conversation_id
+            ) is True
+        except Exception:
+            allowed = False
+        if not allowed:
+            return _resolution_error(PromptResolutionError("conversation_not_found", "Conversation was not found."))
     resolver: EffectivePromptResolver = request.app.state.effective_prompt_resolver
     try:
         result = resolver.resolve(
@@ -142,7 +158,10 @@ async def resolve_core_prompts(
     )
 
 
-@router.post("/core-prompts", response_model=CorePromptResponse, status_code=201)
+@router.post(
+    "/core-prompts", response_model=CorePromptResponse, status_code=201,
+    dependencies=[Depends(require_core_prompt_admin)],
+)
 async def create_core_prompt(request: Request, body: CreateCorePromptRequest) -> CorePromptResponse | JSONResponse:
     service: CorePromptService = request.app.state.core_prompt_service
     try:
@@ -174,6 +193,7 @@ async def get_core_prompt(request: Request, core_prompt_id: str) -> CorePromptRe
     "/core-prompts/{core_prompt_id}",
     response_model=CorePromptResponse,
     responses={404: {"model": ErrorResponse}},
+    dependencies=[Depends(require_core_prompt_admin)],
 )
 async def update_core_prompt(
     request: Request, core_prompt_id: str, body: UpdateCorePromptRequest
@@ -189,6 +209,7 @@ async def update_core_prompt(
     "/core-prompts/{core_prompt_id}/enabled",
     response_model=CorePromptResponse,
     responses={404: {"model": ErrorResponse}},
+    dependencies=[Depends(require_core_prompt_admin)],
 )
 async def set_core_prompt_enabled(
     request: Request, core_prompt_id: str, body: SetCorePromptEnabledRequest
@@ -206,6 +227,7 @@ async def set_core_prompt_enabled(
     response_class=Response,
     response_model=None,
     responses={404: {"model": ErrorResponse}},
+    dependencies=[Depends(require_core_prompt_admin)],
 )
 async def delete_core_prompt(request: Request, core_prompt_id: str) -> Response | JSONResponse:
     service: CorePromptService = request.app.state.core_prompt_service
@@ -216,7 +238,11 @@ async def delete_core_prompt(request: Request, core_prompt_id: str) -> Response 
     return Response(status_code=204)
 
 
-@router.get("/core-prompts/{core_prompt_id}/assignments", response_model=CorePromptAssignmentListResponse)
+@router.get(
+    "/core-prompts/{core_prompt_id}/assignments",
+    response_model=CorePromptAssignmentListResponse,
+    dependencies=[Depends(require_core_prompt_admin)],
+)
 async def list_core_prompt_assignments(
     request: Request, core_prompt_id: str
 ) -> CorePromptAssignmentListResponse | JSONResponse:
@@ -230,7 +256,10 @@ async def list_core_prompt_assignments(
     )
 
 
-@router.put("/core-prompts/{core_prompt_id}/assignments", response_model=CorePromptAssignmentResponse)
+@router.put(
+    "/core-prompts/{core_prompt_id}/assignments", response_model=CorePromptAssignmentResponse,
+    dependencies=[Depends(require_core_prompt_admin)],
+)
 async def set_core_prompt_assignment(
     request: Request, core_prompt_id: str, body: SetCorePromptAssignmentRequest
 ) -> CorePromptAssignmentResponse | JSONResponse:
@@ -242,7 +271,11 @@ async def set_core_prompt_assignment(
     return _assignment_response(core_prompt_id, body.scope_type, body.scope_id, record)
 
 
-@router.get("/core-prompt-assignments", response_model=CorePromptAssignmentListResponse)
+@router.get(
+    "/core-prompt-assignments",
+    response_model=CorePromptAssignmentListResponse,
+    dependencies=[Depends(require_core_prompt_admin)],
+)
 async def list_assignments_for_scope(
     request: Request, scope_type: CorePromptScopeType, scope_id: str | None = None
 ) -> CorePromptAssignmentListResponse | JSONResponse:

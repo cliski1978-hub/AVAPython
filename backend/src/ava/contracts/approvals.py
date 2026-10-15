@@ -7,6 +7,7 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.contracts.tools import ToolIdentifier, ToolOperationBinding, ToolReference, ToolRequest
 
 ApprovalSummary = Annotated[str, StringConstraints(strict=True, min_length=1, max_length=240)]
@@ -36,6 +37,15 @@ class ApprovalReason(StrEnum):
 class ApprovalDecisionValue(StrEnum):
     APPROVE = "approve"
     DENY = "deny"
+
+
+class ApprovalAuditEventType(StrEnum):
+    REQUESTED = "requested"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    INVALIDATED = "invalidated"
 
 
 class ApprovalRequest(BaseModel):
@@ -113,6 +123,58 @@ class ApprovalRecord(BaseModel):
             raise ValueError("non-human resolution requires a reason and no decision metadata")
 
 
+class ApprovalAuditEvent(BaseModel):
+    """Immutable redacted audit fact for one approval lifecycle transition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    event_id: ToolReference
+    approval_id: ToolReference
+    sequence: int = Field(ge=1, strict=True)
+    event_type: ApprovalAuditEventType
+    status: ApprovalStatus
+    actor_principal_ref: ToolReference | None = None
+    authority_revision_ref: ToolReference | None = None
+    occurred_at: datetime
+
+    def model_post_init(self, __context: object) -> None:
+        if self.occurred_at.tzinfo is None:
+            raise ValueError("approval audit timestamps must be timezone-aware")
+
+
+class ApprovalReviewItem(BaseModel):
+    """Disclosure-safe projection; operation arguments and digests stay server-side."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    approval_id: ToolReference
+    run_id: ToolReference
+    invocation_id: ToolReference
+    tool_id: ToolIdentifier
+    tool_version: ToolReference
+    status: ApprovalStatus
+    requested_at: datetime
+    expires_at: datetime
+    safe_summary: ApprovalSummary
+    decision_at: datetime | None = None
+    decision_label: Literal["Authenticated reviewer"] | None = None
+    workspace_label: str | None = Field(default=None, max_length=128)
+    can_decide: bool
+
+    def model_post_init(self, __context: object) -> None:
+        if self.requested_at.tzinfo is None or self.expires_at.tzinfo is None:
+            raise ValueError("approval review timestamps must be timezone-aware")
+        if self.decision_at is not None and self.decision_at.tzinfo is None:
+            raise ValueError("approval decision timestamp must be timezone-aware")
+        if self.status != ApprovalStatus.PENDING and self.can_decide:
+            raise ValueError("terminal approval cannot be actionable")
+
+
+class ApprovalQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    pending: tuple[ApprovalReviewItem, ...]
+    history: tuple[ApprovalReviewItem, ...]
+    contract_version: Literal["v1"] = "v1"
+
+
 @dataclass(frozen=True)
 class ApprovalHumanAuthority:
     """Trusted identity and current approval scope supplied by server auth."""
@@ -124,7 +186,9 @@ class ApprovalHumanAuthority:
 
 
 class ApprovalDecisionAuthorityPort(Protocol):
-    def resolve_for(self, approval: ApprovalRecord) -> ApprovalHumanAuthority | None:
+    def resolve_for(
+        self, approval: ApprovalRecord, principal: VerifiedPrincipal | None = None
+    ) -> ApprovalHumanAuthority | None:
         """Resolve the authenticated human and current scope; never accept client identity."""
         ...
 
@@ -136,5 +200,8 @@ class ApprovalInvocationResolverPort(Protocol):
 
 
 class DenyApprovalDecisionAuthority:
-    def resolve_for(self, approval: ApprovalRecord) -> ApprovalHumanAuthority | None:
+    def resolve_for(
+        self, approval: ApprovalRecord, principal: VerifiedPrincipal | None = None
+    ) -> ApprovalHumanAuthority | None:
+        del approval, principal
         return None

@@ -18,8 +18,17 @@ class RelationalConversationFolderRepository(ConversationFolderRepository):
         try:
             with self._database.transaction() as connection:
                 connection.execute(
-                    "INSERT INTO conversation_folders (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                    (folder.id, folder.name, to_utc_iso(folder.created_at), to_utc_iso(folder.updated_at)),
+                    "INSERT INTO conversation_folders "
+                    "(id, name, created_at, updated_at, owner_principal_ref, owner_tenant_ref) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        folder.id,
+                        folder.name,
+                        to_utc_iso(folder.created_at),
+                        to_utc_iso(folder.updated_at),
+                        folder.owner_principal_ref,
+                        folder.owner_tenant_ref,
+                    ),
                 )
         except sqlite3.Error as exc:
             raise translate_database_error(exc, entity="Conversation folder", key=folder.id) from exc
@@ -28,13 +37,18 @@ class RelationalConversationFolderRepository(ConversationFolderRepository):
     def get(self, folder_id: str) -> ConversationFolderRecord | None:
         with self._database.connect() as connection:
             row = connection.execute(
-                "SELECT id, name, created_at, updated_at FROM conversation_folders WHERE id = ?", (folder_id,)
+                "SELECT id, name, created_at, updated_at, owner_principal_ref, owner_tenant_ref "
+                "FROM conversation_folders WHERE id = ?",
+                (folder_id,),
             ).fetchone()
         return row_to_conversation_folder_record(row) if row is not None else None
 
     def list(self) -> list[ConversationFolderRecord]:
         with self._database.connect() as connection:
-            rows = connection.execute("SELECT id, name, created_at, updated_at FROM conversation_folders").fetchall()
+            rows = connection.execute(
+                "SELECT id, name, created_at, updated_at, owner_principal_ref, owner_tenant_ref "
+                "FROM conversation_folders"
+            ).fetchall()
         # Python casefold ordering keeps Unicode behavior identical to memory storage.
         return sorted(
             (row_to_conversation_folder_record(row) for row in rows),
@@ -50,7 +64,9 @@ class RelationalConversationFolderRepository(ConversationFolderRepository):
             if cursor.rowcount == 0:
                 return None
             row = connection.execute(
-                "SELECT id, name, created_at, updated_at FROM conversation_folders WHERE id = ?", (folder_id,)
+                "SELECT id, name, created_at, updated_at, owner_principal_ref, owner_tenant_ref "
+                "FROM conversation_folders WHERE id = ?",
+                (folder_id,),
             ).fetchone()
         return row_to_conversation_folder_record(row) if row is not None else None
 

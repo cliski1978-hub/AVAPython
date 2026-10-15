@@ -63,6 +63,8 @@ class ConversationRecord:
     folder_id: str | None = None
     project_id: str | None = None
     is_title_custom: bool = False
+    owner_principal_ref: str | None = None
+    owner_tenant_ref: str | None = None
 
 
 def normalize_conversation_search(search: str | None) -> str | None:
@@ -114,6 +116,8 @@ class ConversationRepository(ABC):
         project_id: str | None = None,
         folder_id: str | None = None,
         is_title_custom: bool = False,
+        owner_principal_ref: str | None = None,
+        owner_tenant_ref: str | None = None,
     ) -> ConversationRecord:
         """Create a new conversation record.
 
@@ -138,6 +142,33 @@ class ConversationRepository(ABC):
         this default preserves compatibility for small test adapters.
         """
         return [record for record in self.list() if record.project_id == project_id]
+
+    def get_for_owner(
+        self, conversation_id: str, principal_ref: str, tenant_ref: str | None
+    ) -> ConversationRecord | None:
+        """Return a conversation only when its durable owner matches exactly."""
+        record = self.get(conversation_id)
+        if record is None or record.owner_principal_ref != principal_ref or record.owner_tenant_ref != tenant_ref:
+            return None
+        return record
+
+    def list_for_owner(
+        self, principal_ref: str, tenant_ref: str | None, search: str | None = None
+    ) -> Collection[ConversationRecord]:
+        """Return only conversations owned by this verified principal and tenant."""
+        return [
+            record for record in self.list(search)
+            if record.owner_principal_ref == principal_ref and record.owner_tenant_ref == tenant_ref
+        ]
+
+    def list_by_project_for_owner(
+        self, project_id: str, principal_ref: str, tenant_ref: str | None
+    ) -> Collection[ConversationRecord]:
+        """Return Project conversations restricted to one durable owner."""
+        return [
+            record for record in self.list_by_project(project_id)
+            if record.owner_principal_ref == principal_ref and record.owner_tenant_ref == tenant_ref
+        ]
 
     @abstractmethod
     def get(self, conversation_id: str) -> ConversationRecord | None:

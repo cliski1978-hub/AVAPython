@@ -38,3 +38,5 @@ class ProjectRecord:
     instructions: str | None = None
     is_archived: bool = False
     execution_defaults: ProjectExecutionDefaults = field(default_factory=ProjectExecutionDefaults)
+    owner_principal_ref: str | None = None
+    owner_tenant_ref: str | None = None

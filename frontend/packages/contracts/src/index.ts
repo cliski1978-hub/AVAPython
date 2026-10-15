@@ -1,4 +1,5 @@
 export * from "./attachments";
+export * from "./approvals";
 export * from "./capabilities";
 export * from "./conversations";
 export * from "./core-prompts";

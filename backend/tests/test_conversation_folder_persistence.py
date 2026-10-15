@@ -1,6 +1,7 @@
 """Phase 5.54 folder persistence, assignment, and delete integrity tests."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from ava.infrastructure.composition import create_application_persistence
 from ava.infrastructure.persistence.database import PersistenceError, SqliteDatabase
 from ava.infrastructure.persistence.migrations.runner import MigrationRunner
 from ava.infrastructure.persistence.migrations.versions import default_registry
+from ava.repositories.conversation_folder import ConversationFolderRecord
 from ava.repositories.conversation_folder_repository import ConversationFolderRepository
 from ava.repositories.message_repository import MessageRecord
 from ava.services.conversation_folder_service import (
@@ -89,6 +91,25 @@ def test_folder_crud_assignment_and_folder_delete_preserve_conversations(provide
         assert persistence.message_repository.get("c1", child.message_id) == child
         with pytest.raises(ConversationFolderNotFoundError):
             service.set_conversation_folder("c1", created.id)
+    finally:
+        persistence.dispose()
+
+
+def test_relational_folder_owner_is_durable_and_legacy_folders_remain_unowned(tmp_path: Path) -> None:
+    persistence = create_application_persistence(
+        Settings(persistence_provider="relational", persistence_database_url=str(tmp_path / "owners.sqlite3"))
+    )
+    try:
+        repository = persistence.conversation_folder_repository
+        created_at = datetime.now(UTC)
+        owned = ConversationFolderRecord(
+            "owned-folder", "Private", created_at, created_at, "principal-a", "tenant-a"
+        )
+        repository.create(owned)
+        assert repository.get(owned.id) == owned
+        legacy = ConversationFolderRecord("legacy-folder", "Legacy", created_at, created_at)
+        repository.create(legacy)
+        assert repository.get(legacy.id) == legacy
     finally:
         persistence.dispose()
 
@@ -222,7 +243,7 @@ def test_legacy_v10_database_migrates_without_reset(tmp_path: Path) -> None:
             version = connection.execute(
                 "SELECT version FROM ava_schema_migrations ORDER BY version DESC LIMIT 1"
             ).fetchone()[0]
-            assert folder_id is None and project_id is None and version == 25
+            assert folder_id is None and project_id is None and version == 30
             assert connection.execute("SELECT 1 FROM conversation_folders").fetchone() is None
     finally:
         migrated.dispose()

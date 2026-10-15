@@ -16,3 +16,4 @@ export * from "./workspaces";
 export * from "./settings";
 export * from "./tool-features";
 export * from "./workspace-access";
+export * from "./approvals";

@@ -32,6 +32,8 @@ def test_folder_record_is_a_minimal_stable_identity_snapshot() -> None:
         "name",
         "created_at",
         "updated_at",
+        "owner_principal_ref",
+        "owner_tenant_ref",
     ]
     assert (folder.id, folder.name, folder.created_at, folder.updated_at) == (
         "folder-1",

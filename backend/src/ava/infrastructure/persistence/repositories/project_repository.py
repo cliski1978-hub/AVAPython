@@ -22,7 +22,8 @@ class RelationalProjectRepository(ProjectRepository):
                 connection.execute(
                     "INSERT INTO projects "
                     "(id, name, description, instructions, is_archived, created_at, updated_at, "
-                    "default_runtime_key, default_model_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "default_runtime_key, default_model_id, owner_principal_ref, owner_tenant_ref) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         project.id,
                         project.name,
@@ -33,6 +34,8 @@ class RelationalProjectRepository(ProjectRepository):
                         to_utc_iso(project.updated_at),
                         project.execution_defaults.runtime_key,
                         project.execution_defaults.model_id,
+                        project.owner_principal_ref,
+                        project.owner_tenant_ref,
                     ),
                 )
         except sqlite3.Error as exc:
@@ -43,7 +46,7 @@ class RelationalProjectRepository(ProjectRepository):
         with self._database.connect() as connection:
             row = connection.execute(
                 "SELECT id, name, description, instructions, is_archived, created_at, updated_at, "
-                "default_runtime_key, default_model_id "
+                "default_runtime_key, default_model_id, owner_principal_ref, owner_tenant_ref "
                 "FROM projects WHERE id = ?",
                 (project_id,),
             ).fetchone()
@@ -53,7 +56,7 @@ class RelationalProjectRepository(ProjectRepository):
         with self._database.connect() as connection:
             rows = connection.execute(
                 "SELECT id, name, description, instructions, is_archived, created_at, updated_at, "
-                "default_runtime_key, default_model_id FROM projects"
+                "default_runtime_key, default_model_id, owner_principal_ref, owner_tenant_ref FROM projects"
             ).fetchall()
         return sorted(
             (row_to_project_record(row) for row in rows),
@@ -65,7 +68,8 @@ class RelationalProjectRepository(ProjectRepository):
             with self._database.transaction() as connection:
                 cursor = connection.execute(
                     "UPDATE projects SET name = ?, description = ?, instructions = ?, is_archived = ?, "
-                    "created_at = ?, updated_at = ?, default_runtime_key = ?, default_model_id = ? WHERE id = ?",
+                    "created_at = ?, updated_at = ?, default_runtime_key = ?, default_model_id = ?, "
+                    "owner_principal_ref = ?, owner_tenant_ref = ? WHERE id = ?",
                     (
                         project.name,
                         project.description,
@@ -75,6 +79,8 @@ class RelationalProjectRepository(ProjectRepository):
                         to_utc_iso(project.updated_at),
                         project.execution_defaults.runtime_key,
                         project.execution_defaults.model_id,
+                        project.owner_principal_ref,
+                        project.owner_tenant_ref,
                         project.id,
                     ),
                 )

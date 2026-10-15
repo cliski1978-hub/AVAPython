@@ -27,15 +27,17 @@ from collections.abc import Iterator
 from typing import Annotated, BinaryIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ava.api.principal import require_attachment_owner, require_conversation_owner, require_verified_principal
 from ava.contracts.attachments import (
     AttachmentListResponse,
     AttachmentOwnerType,
     AttachmentResponse,
 )
 from ava.contracts.errors import ErrorCategory, ErrorResponse
+from ava.contracts.security_identity import VerifiedPrincipal
 from ava.repositories.attachment_repository import (
     AttachmentRecord,
     DuplicateConversationAttachmentNameError,
@@ -46,7 +48,14 @@ from ava.services.attachment_service import (
     AttachmentStorageError,
 )
 
-router = APIRouter(tags=["attachments"])
+router = APIRouter(
+    tags=["attachments"],
+    dependencies=[
+        Depends(require_verified_principal),
+        Depends(require_conversation_owner),
+        Depends(require_attachment_owner),
+    ],
+)
 
 
 # ============================================================
@@ -63,6 +72,7 @@ router = APIRouter(tags=["attachments"])
 async def create_attachment(
     request: Request,
     file: Annotated[UploadFile, File()],
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
     owner_type: Annotated[AttachmentOwnerType | None, Form()] = None,
     owner_id: Annotated[str | None, Form()] = None,
 ) -> AttachmentResponse | JSONResponse:
@@ -76,6 +86,10 @@ async def create_attachment(
     """
     if (owner_type is None) != (owner_id is None):
         return _invalid_owner_pair()
+    if owner_type is not None and owner_id is not None and not _authorized_attachment_owner(
+        request, principal, owner_type, owner_id
+    ):
+        return _unknown_attachment(owner_id)
     if (
         owner_type is AttachmentOwnerType.CONVERSATION
         and owner_id is not None
@@ -197,6 +211,7 @@ async def list_attachments(
     request: Request,
     owner_type: AttachmentOwnerType,
     owner_id: str,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
 ) -> AttachmentListResponse | JSONResponse:
     """Return one owner's attachments in stable insertion order.
 
@@ -204,11 +219,8 @@ async def list_attachments(
     and unassociated attachments are never listed here. Missing parameters
     are rejected by FastAPI with ``422``.
     """
-    if (
-        owner_type is AttachmentOwnerType.CONVERSATION
-        and request.app.state.conversation_service.get_conversation(owner_id) is None
-    ):
-        return _unknown_conversation(owner_id)
+    if not _authorized_attachment_owner(request, principal, owner_type, owner_id):
+        return _unknown_attachment(owner_id)
     service: AttachmentService = request.app.state.attachment_service
     records = service.list_attachments(owner_type, owner_id)
     return AttachmentListResponse(
@@ -233,7 +245,11 @@ async def list_attachments(
     response_model=AttachmentResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_attachment(request: Request, attachment_id: str) -> AttachmentResponse | JSONResponse:
+async def get_attachment(
+    request: Request,
+    attachment_id: str,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> AttachmentResponse | JSONResponse:
     """Return attachment metadata, or ``404`` if unknown.
 
     Metadata only: the content store is never touched, so known
@@ -242,6 +258,8 @@ async def get_attachment(request: Request, attachment_id: str) -> AttachmentResp
     service: AttachmentService = request.app.state.attachment_service
     record = service.get_attachment(attachment_id)
     if record is None:
+        return _unknown_attachment(attachment_id)
+    if not _authorized_attachment_owner(request, principal, record.owner_type, record.owner_id):
         return _unknown_attachment(attachment_id)
     return _attachment_to_response(record)
 
@@ -261,7 +279,11 @@ async def get_attachment(request: Request, attachment_id: str) -> AttachmentResp
     response_model=None,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def get_attachment_content(request: Request, attachment_id: str) -> StreamingResponse | JSONResponse:
+async def get_attachment_content(
+    request: Request,
+    attachment_id: str,
+    principal: Annotated[VerifiedPrincipal, Depends(require_verified_principal)],
+) -> StreamingResponse | JSONResponse:
     """Stream an available attachment's bytes untouched.
 
     Only ``available`` attachments expose content: ``pending``/``failed``
@@ -271,6 +293,11 @@ async def get_attachment_content(request: Request, attachment_id: str) -> Stream
     is downloaded, never inline-executed.
     """
     service: AttachmentService = request.app.state.attachment_service
+    record = service.get_attachment(attachment_id)
+    if record is None:
+        return _unknown_attachment(attachment_id)
+    if not _authorized_attachment_owner(request, principal, record.owner_type, record.owner_id):
+        return _unknown_attachment(attachment_id)
     try:
         ref = service.open_attachment_content(attachment_id)
     except AttachmentStateError:
@@ -311,6 +338,38 @@ def _attachment_to_response(record: AttachmentRecord) -> AttachmentResponse:
         status=record.status,
         created_at=record.created_at,
     )
+
+
+def _authorized_attachment_owner(
+    request: Request,
+    principal: VerifiedPrincipal,
+    owner_type: AttachmentOwnerType | None,
+    owner_id: str | None,
+) -> bool:
+    if owner_type is None or owner_id is None:
+        return False
+    conversation_id: str | None
+    if owner_type == AttachmentOwnerType.CONVERSATION:
+        conversation_id = owner_id
+    elif owner_type == AttachmentOwnerType.MESSAGE:
+        persistence = getattr(request.app.state, "persistence", None)
+        message_repository = getattr(persistence, "message_repository", None)
+        message = message_repository.get(owner_id) if message_repository is not None else None
+        message_conversation_id = getattr(message, "conversation_id", None)
+        conversation_id = message_conversation_id if isinstance(message_conversation_id, str) else None
+    else:
+        # This phase has no document-owner identity boundary; denying is safer
+        # than treating authenticated status alone as document ownership.
+        return False
+    if conversation_id is None:
+        return False
+    access = getattr(request.app.state, "conversation_access", None)
+    try:
+        return access is not None and access.can_access(
+            principal.principal_ref, principal.tenant_ref, str(conversation_id)
+        ) is True
+    except Exception:
+        return False
 
 
 def _safe_file_name(file_name: str) -> str:

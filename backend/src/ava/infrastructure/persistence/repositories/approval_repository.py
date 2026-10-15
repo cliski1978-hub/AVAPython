@@ -1,8 +1,10 @@
 """SQLite adapter for the AVA approval repository port."""
 
 import sqlite3
+from datetime import UTC, datetime
+from uuid import uuid4
 
-from ava.contracts.approvals import ApprovalRecord, ApprovalStatus
+from ava.contracts.approvals import ApprovalAuditEvent, ApprovalAuditEventType, ApprovalRecord, ApprovalStatus
 from ava.infrastructure.persistence.database import SqliteDatabase
 from ava.repositories.approval_repository import ApprovalConflictError, ApprovalRepository
 
@@ -33,6 +35,7 @@ class RelationalApprovalRepository(ApprovalRepository):
                         record.model_dump_json(),
                     ),
                 )
+                self._append_audit(connection, record, ApprovalAuditEventType.REQUESTED, 1)
         except sqlite3.IntegrityError as exc:
             raise ApprovalConflictError("An approval already exists for this invocation.") from exc
         return record
@@ -56,6 +59,31 @@ class RelationalApprovalRepository(ApprovalRepository):
                 (limit,),
             ).fetchall()
         return [self._decode_row(row) for row in rows]
+
+    def list_recent(self, *, limit: int = 100) -> list[ApprovalRecord]:
+        if not 1 <= limit <= 500:
+            raise ValueError("approval listing limit must be between 1 and 500")
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM approval_records ORDER BY requested_at DESC, approval_id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
+    def list_audit_events(self, approval_id: str) -> list[ApprovalAuditEvent]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM approval_audit_events WHERE approval_id = ? ORDER BY sequence", (approval_id,)
+            ).fetchall()
+        return [
+            ApprovalAuditEvent(
+                event_id=row["event_id"], approval_id=row["approval_id"], sequence=int(row["sequence"]),
+                event_type=ApprovalAuditEventType(row["event_type"]), status=ApprovalStatus(row["status"]),
+                actor_principal_ref=row["actor_principal_ref"],
+                authority_revision_ref=row["authority_revision_ref"],
+                occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            )
+            for row in rows
+        ]
 
     def list_pending_for_run(self, run_id: str) -> list[ApprovalRecord]:
         return self._list_pending_by("run_id", run_id)
@@ -89,7 +117,30 @@ class RelationalApprovalRepository(ApprovalRepository):
                 "UPDATE approval_records SET status = ?, record_json = ? WHERE approval_id = ? AND status = ?",
                 (replacement.status.value, replacement.model_dump_json(), approval_id, expected.value),
             )
+            if cursor.rowcount == 1:
+                sequence = int(connection.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM approval_audit_events WHERE approval_id = ?",
+                    (approval_id,),
+                ).fetchone()[0])
+                self._append_audit(
+                    connection, replacement, ApprovalAuditEventType(replacement.status.value), sequence
+                )
             return replacement if cursor.rowcount == 1 else None
+
+    @staticmethod
+    def _append_audit(connection: sqlite3.Connection, record: ApprovalRecord,
+                      event_type: ApprovalAuditEventType, sequence: int) -> None:
+        metadata = record.decision_metadata
+        occurred_at = metadata.decided_at if metadata is not None else datetime.now(UTC)
+        connection.execute(
+            "INSERT INTO approval_audit_events "
+            "(event_id, approval_id, sequence, event_type, status, actor_principal_ref, "
+            "authority_revision_ref, occurred_at, safe_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (uuid4().hex, record.approval_id, sequence, event_type.value, record.status.value,
+             metadata.principal_ref if metadata is not None else None,
+             metadata.authority_revision_ref if metadata is not None else None,
+             occurred_at.isoformat()),
+        )
 
     @staticmethod
     def _decode_row(row: sqlite3.Row) -> ApprovalRecord:

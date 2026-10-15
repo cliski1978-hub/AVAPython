@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -136,7 +137,8 @@ class _DecisionAuthority:
     def __init__(self, allowed: bool = True) -> None:
         self.allowed = allowed
 
-    def resolve_for(self, approval: object) -> ApprovalHumanAuthority | None:
+    def resolve_for(self, approval: object, principal: object | None = None) -> ApprovalHumanAuthority | None:
+        del principal
         if not self.allowed:
             return None
         return ApprovalHumanAuthority(
@@ -444,6 +446,10 @@ def test_repository_compare_and_set_allows_only_one_terminal_resolution(tmp_path
             )
         )
     assert sum(result is not None for result in results) == 1
+    audit = fixture.repository.list_audit_events(record.approval_id)
+    assert [event.sequence for event in audit] == [1, 2]
+    assert [event.event_type.value for event in audit][0] == "requested"
+    assert audit[1].status in {ApprovalStatus.CANCELLED, ApprovalStatus.INVALIDATED}
 
 
 def test_sqlite_repository_survives_restart_and_corruption_fails_closed(tmp_path: Path) -> None:
@@ -463,6 +469,15 @@ def test_sqlite_repository_survives_restart_and_corruption_fails_closed(tmp_path
     historical = restarted_service.get_for_current_human(record.approval_id)
     assert historical.status == ApprovalStatus.INVALIDATED
     assert historical.resolution_reason == ApprovalReason.ELIGIBILITY_UNAVAILABLE
+    audit = reopened_repository.list_audit_events(record.approval_id)
+    assert [event.event_type.value for event in audit] == ["requested", "invalidated"]
+    assert [event.sequence for event in audit] == [1, 2]
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"), reopened.connect() as connection:
+        connection.execute(
+            "UPDATE approval_audit_events SET status = 'approved' WHERE approval_id = ?", (record.approval_id,)
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"), reopened.connect() as connection:
+        connection.execute("DELETE FROM approval_audit_events WHERE approval_id = ?", (record.approval_id,))
     with reopened.transaction() as connection:
         connection.execute(
             "UPDATE approval_records SET record_json = '{broken' WHERE approval_id = ?", (record.approval_id,)

@@ -122,7 +122,10 @@ class ConversationService:
         self._project_repository = project_repository
         self._folder_repository = folder_repository
 
-    def create_conversation(self, title: str | None = None, *, folder_id: str | None = None) -> ConversationResponse:
+    def create_conversation(
+        self, title: str | None = None, *, folder_id: str | None = None,
+        owner_principal_ref: str | None = None, owner_tenant_ref: str | None = None,
+    ) -> ConversationResponse:
         """Create a new conversation, returning its response contract.
 
         Args:
@@ -138,11 +141,22 @@ class ConversationService:
         if folder_id is not None:
             if self._folder_repository is None:
                 raise RuntimeError("Folder conversation creation is not configured")
-            if self._folder_repository.get(folder_id) is None:
+            folder = self._folder_repository.get(folder_id)
+            if (
+                folder is None
+                or folder.owner_principal_ref != owner_principal_ref
+                or folder.owner_tenant_ref != owner_tenant_ref
+            ):
                 raise ConversationFolderNotFoundForCreationError(folder_id)
-        return self._create_conversation(title=title, project_id=None, folder_id=folder_id)
+        return self._create_conversation(
+            title=title, project_id=None, folder_id=folder_id,
+            owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref,
+        )
 
-    def create_conversation_in_project(self, project_id: str, title: str | None = None) -> ConversationResponse:
+    def create_conversation_in_project(
+        self, project_id: str, title: str | None = None, *,
+        owner_principal_ref: str | None = None, owner_tenant_ref: str | None = None,
+    ) -> ConversationResponse:
         """Create a conversation with Project membership in its first durable write.
 
         Archived Projects remain readable and writable: Project archive is
@@ -150,12 +164,19 @@ class ConversationService:
         """
         if self._project_repository is None:
             raise RuntimeError("Project conversation creation is not configured")
-        if self._project_repository.get(project_id) is None:
+        project = self._project_repository.get(project_id)
+        if project is None or (
+            project.owner_principal_ref != owner_principal_ref or project.owner_tenant_ref != owner_tenant_ref
+        ):
             raise ProjectNotFoundError(project_id)
-        return self._create_conversation(title=title, project_id=project_id, folder_id=None)
+        return self._create_conversation(
+            title=title, project_id=project_id, folder_id=None,
+            owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref,
+        )
 
     def _create_conversation(
-        self, *, title: str | None, project_id: str | None, folder_id: str | None
+        self, *, title: str | None, project_id: str | None, folder_id: str | None,
+        owner_principal_ref: str | None = None, owner_tenant_ref: str | None = None,
     ) -> ConversationResponse:
         """Share normal identity, title, timestamp, and persistence semantics."""
         resolved_title = (title or "").strip() or DEFAULT_CONVERSATION_TITLE
@@ -165,27 +186,35 @@ class ConversationService:
             if folder_id is not None:
                 if is_title_custom:
                     record = self._conversation_repository.create(
-                        conversation_id, title=resolved_title, folder_id=folder_id, is_title_custom=True
+                        conversation_id, title=resolved_title, folder_id=folder_id, is_title_custom=True,
+                        owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref,
                     )
                 else:
                     record = self._conversation_repository.create(
-                        conversation_id, title=resolved_title, folder_id=folder_id
+                        conversation_id, title=resolved_title, folder_id=folder_id,
+                        owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref
                     )
             elif project_id is not None:
                 if is_title_custom:
                     record = self._conversation_repository.create(
-                        conversation_id, title=resolved_title, project_id=project_id, is_title_custom=True
+                        conversation_id, title=resolved_title, project_id=project_id, is_title_custom=True,
+                        owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref
                     )
                 else:
                     record = self._conversation_repository.create(
-                        conversation_id, title=resolved_title, project_id=project_id
+                        conversation_id, title=resolved_title, project_id=project_id,
+                        owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref
                     )
             elif is_title_custom:
                 record = self._conversation_repository.create(
-                    conversation_id, title=resolved_title, is_title_custom=True
+                    conversation_id, title=resolved_title, is_title_custom=True,
+                    owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref
                 )
             else:
-                record = self._conversation_repository.create(conversation_id, title=resolved_title)
+                record = self._conversation_repository.create(
+                    conversation_id, title=resolved_title,
+                    owner_principal_ref=owner_principal_ref, owner_tenant_ref=owner_tenant_ref,
+                )
         except ValueError as exc:
             raise DuplicateConversationError(f"Conversation already exists: {exc}") from exc
         return _conversation_to_response(record)
@@ -202,6 +231,12 @@ class ConversationService:
         records = self._conversation_repository.list(search)
         return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
 
+    def list_conversations_for_owner(
+        self, principal_ref: str, tenant_ref: str | None, search: str | None = None
+    ) -> ConversationListResponse:
+        records = self._conversation_repository.list_for_owner(principal_ref, tenant_ref, search)
+        return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
+
     def list_project_conversations(self, project_id: str) -> ConversationListResponse:
         """Validate a Project, then return all of its conversations in canonical order."""
         if self._project_repository is None:
@@ -209,6 +244,16 @@ class ConversationService:
         if self._project_repository.get(project_id) is None:
             raise ProjectNotFoundError(project_id)
         records = self._conversation_repository.list_by_project(project_id)
+        return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
+
+    def list_project_conversations_for_owner(
+        self, project_id: str, principal_ref: str, tenant_ref: str | None
+    ) -> ConversationListResponse:
+        if self._project_repository is None:
+            raise RuntimeError("Project conversation listing is not configured")
+        if self._project_repository.get(project_id) is None:
+            raise ProjectNotFoundError(project_id)
+        records = self._conversation_repository.list_by_project_for_owner(project_id, principal_ref, tenant_ref)
         return ConversationListResponse(conversations=[_conversation_to_response(record) for record in records])
 
     def update_title(self, conversation_id: str, title: str) -> ConversationResponse | None:

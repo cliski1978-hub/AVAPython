@@ -82,6 +82,20 @@ def test_project_repository_create_get_list_update_and_not_found(provider: str, 
         persistence.dispose()
 
 
+def test_project_owner_principal_and_tenant_persist_relationally(tmp_path: Path) -> None:
+    persistence = create_application_persistence(
+        Settings(persistence_provider="relational", persistence_database_url=str(tmp_path / "owner.sqlite3"))
+    )
+    try:
+        project = replace(
+            _project("owned", "Private"), owner_principal_ref="principal-a", owner_tenant_ref="tenant-a"
+        )
+        assert persistence.project_repository.create(project) == project
+        assert persistence.project_repository.get(project.id) == project
+    finally:
+        persistence.dispose()
+
+
 def test_memory_and_sqlite_project_repository_parity(tmp_path: Path) -> None:
     settings = [
         Settings(persistence_provider="memory"),
@@ -186,6 +200,8 @@ def test_sqlite_project_create_and_update_survive_restart(tmp_path: Path) -> Non
                 1,
                 created.created_at.isoformat(),
                 created.updated_at.isoformat(),
+                None,
+                None,
                 None,
                 None,
             )
@@ -300,7 +316,7 @@ def test_v0012_migrates_legacy_v0011_data_and_repeated_startup_is_safe(tmp_path:
             assert persistence.conversation_repository.get("conversation-old") is not None
             assert persistence.conversation_folder_repository.get("folder-old") is not None
             migrated = MigrationRunner(persistence.database, default_registry())  # type: ignore[arg-type]
-            assert migrated.current_version() == 25
+            assert migrated.current_version() == 30
             assert migrated.migrate() == []
             with persistence.database.connect() as connection:  # type: ignore[union-attr]
                 conversation_row = connection.execute(
@@ -323,6 +339,8 @@ def test_v0012_migrates_legacy_v0011_data_and_repeated_startup_is_safe(tmp_path:
                     "updated_at",
                     "default_runtime_key",
                     "default_model_id",
+                    "owner_principal_ref",
+                    "owner_tenant_ref",
                 ]
                 assert columns["is_archived"]["type"] == "INTEGER"
                 assert columns["is_archived"]["notnull"] == 1

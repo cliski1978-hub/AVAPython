@@ -14,3 +14,8 @@ read `docs/agents/triage-labels.md`.
 
 Use a single-context layout. Before exploring the codebase,
 read `docs/agents/domain.md`.
+
+### Development validation
+
+Before planning validation or CI for AVA work, follow
+`docs/agents/development-validation.md`.
